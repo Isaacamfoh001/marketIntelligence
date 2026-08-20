@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { getPrisma } from "@/lib/prisma";
 import { type ExpectedFrequency, type IngestionStatus } from "@/generated/prisma/enums";
 import { observationFreshness, type Cadence } from "@/lib/freshness";
@@ -191,13 +192,21 @@ export default async function DataCentrePage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
-          Data Centre
-        </h1>
-        <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-          Data source health, ingestion history, and manual import tools.
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
+            Data Centre
+          </h1>
+          <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+            Data source health, ingestion history, and manual import tools.
+          </p>
+        </div>
+        <Link
+          href="/data-centre/import"
+          className="shrink-0 rounded bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
+        >
+          Import Market Data
+        </Link>
       </div>
 
       <section>

@@ -39,6 +39,22 @@ describe("computeReturn — 1D", () => {
     const result = computeReturn(series([["2026-08-14", 2.50], ["2026-08-17", 2.60]]), "1D");
     expect(result!.pct).toBeCloseTo(4.0, 5);
   });
+
+  it("still computes 1D across a long-weekend/holiday gap of exactly the documented tolerance (5 days)", () => {
+    const result = computeReturn(series([["2026-08-12", 2.50], ["2026-08-17", 2.60]]), "1D");
+    expect(result).not.toBeNull();
+  });
+
+  it("refuses to label a multi-week gap as 1D — returns null rather than a misleading percentage", () => {
+    // ~7.5 months apart, e.g. a thinly-traded security's only two rows on record.
+    const result = computeReturn(series([["2026-01-02", 0.70], ["2026-08-17", 0.75]]), "1D");
+    expect(result).toBeNull();
+  });
+
+  it("returns null just past the documented gap tolerance (6 days)", () => {
+    const result = computeReturn(series([["2026-08-11", 2.50], ["2026-08-17", 2.60]]), "1D");
+    expect(result).toBeNull();
+  });
 });
 
 describe("computeReturn — 1M/YTD/1Y: latest observation on or before the target date", () => {

@@ -28,6 +28,21 @@ export interface ReturnResult {
   comparisonValue: number;
 }
 
+/**
+ * Maximum calendar-day gap between "current" and "prior" for a change to
+ * still honestly be labeled 1D. A normal weekend is a 3-day gap
+ * (Fri→Mon); a single public holiday attached to a weekend can stretch
+ * that to 4. 5 days gives one day of margin beyond that without opening
+ * the door to mislabeling a genuinely stale/sparse series (e.g. a
+ * security that only traded twice, a month apart) as a "1D" move — see
+ * M6.1 §22. Not a trading-calendar lookup (no Ghana holiday calendar
+ * exists yet, per CLAUDE.md §27) — a fixed, documented, generously-sized
+ * tolerance instead.
+ */
+export const MAX_1D_GAP_CALENDAR_DAYS = 5;
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
 /** Assumes `series` is sorted ascending by date (callers pass DB query results, which already are). */
 function latestOnOrBefore(series: DatedValue[], targetDate: Date): DatedValue | null {
   let result: DatedValue | null = null;
@@ -68,6 +83,9 @@ function shiftDate(date: Date, window: ReturnWindow): Date {
  * 1D is defined as "vs the immediately prior stored observation" (the
  * previous trading day actually on record), not "vs exactly 24 hours
  * ago" — a calendar-day lookback would wrongly go stale over a weekend.
+ * If that prior observation is more than MAX_1D_GAP_CALENDAR_DAYS away,
+ * the "1D" label would be dishonest (a multi-week gap dressed up as a
+ * daily move), so it returns null instead of computing a number.
  */
 export function computeReturn(series: DatedValue[], window: ReturnWindow): ReturnResult | null {
   if (series.length === 0) return null;
@@ -77,6 +95,8 @@ export function computeReturn(series: DatedValue[], window: ReturnWindow): Retur
     if (series.length < 2) return null;
     const prior = series[series.length - 2];
     if (prior.value === 0) return null;
+    const gapDays = (current.date.getTime() - prior.date.getTime()) / DAY_MS;
+    if (gapDays > MAX_1D_GAP_CALENDAR_DAYS) return null;
     return {
       pct: ((current.value - prior.value) / prior.value) * 100,
       currentDate: current.date.toISOString().slice(0, 10),

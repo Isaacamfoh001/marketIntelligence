@@ -81,7 +81,7 @@ async function main() {
     console.log("");
     console.log(`Rejected rows (${result.errors.length}, showing up to 10):`);
     for (const err of result.errors.slice(0, 10)) {
-      console.log(`  ${JSON.stringify(err.row)}: ${err.errors.join("; ")}`);
+      console.log(`  Row ${err.rowNumber}: ${err.errors.join("; ")}`);
     }
   }
 

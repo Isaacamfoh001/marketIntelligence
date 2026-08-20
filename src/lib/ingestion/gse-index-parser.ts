@@ -58,7 +58,7 @@ export function extractGseIndexRows(file: ParsedFile): RawGseIndexRow[] {
 
 export interface GseIndexValidationResult {
   valid: NormalisedGseIndexRow[];
-  invalid: { row: RawGseIndexRow; errors: string[] }[];
+  invalid: { row: RawGseIndexRow; errors: string[]; rowNumber: number }[];
 }
 
 function optionalDecimal(raw: string | undefined, field: string, errors: string[]): string | null {
@@ -75,9 +75,10 @@ function optionalDecimal(raw: string | undefined, field: string, errors: string[
 
 export function validateGseIndexRows(rows: RawGseIndexRow[]): GseIndexValidationResult {
   const valid: NormalisedGseIndexRow[] = [];
-  const invalid: { row: RawGseIndexRow; errors: string[] }[] = [];
+  const invalid: { row: RawGseIndexRow; errors: string[]; rowNumber: number }[] = [];
 
-  for (const row of rows) {
+  rows.forEach((row, index) => {
+    const rowNumber = index + 2;
     const errors: string[] = [];
 
     const dateResult = parseGseFileDate(row.trading_date ?? "", "trading_date");
@@ -94,8 +95,8 @@ export function validateGseIndexRows(rows: RawGseIndexRow[]): GseIndexValidation
     }
 
     if (errors.length > 0) {
-      invalid.push({ row, errors });
-      continue;
+      invalid.push({ row, errors, rowNumber });
+      return;
     }
 
     valid.push({
@@ -106,7 +107,7 @@ export function validateGseIndexRows(rows: RawGseIndexRow[]): GseIndexValidation
       totalVolume,
       totalValueTradedGhs,
     });
-  }
+  });
 
   return { valid, invalid };
 }

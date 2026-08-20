@@ -139,6 +139,19 @@ describe("extractGseSecurityRows + validateGseSecurityRows", () => {
     expect(result.valid[0].priceChange).toBe("-0.05");
   });
 
+  it("reports a 1-based rowNumber accounting for the header row, so 'row 2' is the first data row", () => {
+    const text = csv(
+      [
+        ["2026-08-17", "MTNGH", "", "", "", "2.50", "", "", "", "", "", "", ""],
+        ["2026-08-17", "GCB", "", "", "", "not-a-price", "", "", "", "", "", "", ""],
+      ],
+      CANONICAL_HEADERS,
+    );
+    const rows = extractGseSecurityRows(parseCsv(text));
+    const result = validateGseSecurityRows(rows);
+    expect(result.invalid[0].rowNumber).toBe(3);
+  });
+
   it("classifies an ETF row from an explicit security_type column", () => {
     const text = csv(
       [["2026-08-17", "GLD", "", "", "", "10.00", "", "", "", "", "", "", "ETF"]],

@@ -135,8 +135,12 @@ export interface GseIndexImportResult {
   updated: number;
   earliestTradingDate: string | null;
   latestTradingDate: string | null;
-  errors: { row: RawGseIndexRow; errors: string[] }[];
+  errors: { row: RawGseIndexRow; errors: string[]; rowNumber: number }[];
+  /** First PREVIEW_SAMPLE_SIZE accepted rows — for a UI preview table, never the full set. */
+  sampleValid: NormalisedGseIndexRow[];
 }
+
+export const PREVIEW_SAMPLE_SIZE = 50;
 
 function latestDate(rows: { tradingDate: Date }[]): string | null {
   const max = rows.reduce<Date | null>((acc, r) => (!acc || r.tradingDate > acc ? r.tradingDate : acc), null);
@@ -152,7 +156,7 @@ function earliestDate(rows: { tradingDate: Date }[]): string | null {
 export async function importGseMarketSummary(
   filename: string,
   buffer: Buffer,
-  opts: { commit: boolean } = { commit: false },
+  opts: { commit: boolean; triggeredBy?: string } = { commit: false },
 ): Promise<GseIndexImportResult> {
   if (!opts.commit) {
     try {
@@ -172,6 +176,7 @@ export async function importGseMarketSummary(
         earliestTradingDate: earliestDate(validation.valid),
         latestTradingDate: latestDate(validation.valid),
         errors: validation.invalid,
+        sampleValid: validation.valid.slice(0, PREVIEW_SAMPLE_SIZE),
       };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -187,14 +192,15 @@ export async function importGseMarketSummary(
         updated: 0,
         earliestTradingDate: null,
         latestTradingDate: null,
-        errors: [{ row: {}, errors: [message] }],
+        errors: [{ row: {}, errors: [message], rowNumber: 0 }],
+        sampleValid: [],
       };
     }
   }
 
   const dataSource = await ensureDataSource();
   const indexes = await ensureIndexes();
-  const { runId } = await startRun({ dataSourceId: dataSource.id, triggeredBy: "cli", artifactName: filename });
+  const { runId } = await startRun({ dataSourceId: dataSource.id, triggeredBy: opts.triggeredBy ?? "cli", artifactName: filename });
 
   try {
     const parsedFile = await parseImportFile(filename, buffer);
@@ -227,6 +233,7 @@ export async function importGseMarketSummary(
       earliestTradingDate: earliestDate(validation.valid),
       latestTradingDate: latestDate(validation.valid),
       errors: validation.invalid,
+      sampleValid: validation.valid.slice(0, PREVIEW_SAMPLE_SIZE),
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -244,6 +251,7 @@ export async function importGseMarketSummary(
       earliestTradingDate: null,
       latestTradingDate: null,
       errors: [],
+      sampleValid: [],
     };
   }
 }

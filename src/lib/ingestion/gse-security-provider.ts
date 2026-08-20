@@ -235,9 +235,13 @@ export interface GseSecurityImportResult {
   tickers: string[];
   earliestTradingDate: string | null;
   latestTradingDate: string | null;
-  errors: { row: RawGseSecurityRow; errors: string[] }[];
+  errors: { row: RawGseSecurityRow; errors: string[]; rowNumber: number }[];
   conflicts: SecurityPriceConflict[];
+  /** First PREVIEW_SAMPLE_SIZE accepted rows — for a UI preview table, never the full set (a file can have thousands of rows). */
+  sampleValid: NormalisedGseSecurityRow[];
 }
+
+export const PREVIEW_SAMPLE_SIZE = 50;
 
 function latestDate(rows: { tradingDate: Date }[]): string | null {
   const max = rows.reduce<Date | null>((acc, r) => (!acc || r.tradingDate > acc ? r.tradingDate : acc), null);
@@ -266,7 +270,7 @@ export async function importGseSecurityPrices(
   filename: string,
   buffer: Buffer,
   kind: SecurityImportKind,
-  opts: { commit: boolean } = { commit: false },
+  opts: { commit: boolean; triggeredBy?: string } = { commit: false },
 ): Promise<GseSecurityImportResult> {
   if (!opts.commit) {
     try {
@@ -289,6 +293,7 @@ export async function importGseSecurityPrices(
         latestTradingDate: latestDate(validation.valid),
         errors: validation.invalid,
         conflicts: [],
+        sampleValid: validation.valid.slice(0, PREVIEW_SAMPLE_SIZE),
       };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -305,8 +310,9 @@ export async function importGseSecurityPrices(
         tickers: [],
         earliestTradingDate: null,
         latestTradingDate: null,
-        errors: [{ row: {}, errors: [message] }],
+        errors: [{ row: {}, errors: [message], rowNumber: 0 }],
         conflicts: [],
+        sampleValid: [],
       };
     }
   }
@@ -314,7 +320,7 @@ export async function importGseSecurityPrices(
   const [dailySource, backfillSource] = await Promise.all([ensureDataSource("daily"), ensureDataSource("backfill")]);
   const activeSource = kind === "daily" ? dailySource : backfillSource;
 
-  const { runId } = await startRun({ dataSourceId: activeSource.id, triggeredBy: "cli", artifactName: filename });
+  const { runId } = await startRun({ dataSourceId: activeSource.id, triggeredBy: opts.triggeredBy ?? "cli", artifactName: filename });
 
   try {
     const parsedFile = await parseImportFile(filename, buffer);
@@ -359,6 +365,7 @@ export async function importGseSecurityPrices(
       latestTradingDate: latestDate(validation.valid),
       errors: validation.invalid,
       conflicts,
+      sampleValid: validation.valid.slice(0, PREVIEW_SAMPLE_SIZE),
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -378,6 +385,7 @@ export async function importGseSecurityPrices(
       latestTradingDate: null,
       errors: [],
       conflicts: [],
+      sampleValid: [],
     };
   }
 }

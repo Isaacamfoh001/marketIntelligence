@@ -106,7 +106,7 @@ export function extractGseSecurityRows(file: ParsedFile): RawGseSecurityRow[] {
 
 export interface GseSecurityValidationResult {
   valid: NormalisedGseSecurityRow[];
-  invalid: { row: RawGseSecurityRow; errors: string[] }[];
+  invalid: { row: RawGseSecurityRow; errors: string[]; rowNumber: number }[];
 }
 
 const TICKER_RE = /^[A-Z0-9.]{1,15}$/;
@@ -131,9 +131,11 @@ function optionalCount(raw: string | undefined, field: string, errors: string[])
 
 export function validateGseSecurityRows(rows: RawGseSecurityRow[]): GseSecurityValidationResult {
   const valid: NormalisedGseSecurityRow[] = [];
-  const invalid: { row: RawGseSecurityRow; errors: string[] }[] = [];
+  const invalid: { row: RawGseSecurityRow; errors: string[]; rowNumber: number }[] = [];
 
-  for (const row of rows) {
+  rows.forEach((row, index) => {
+    // +2: 1-based, and the header row itself occupies line 1 of the file.
+    const rowNumber = index + 2;
     const errors: string[] = [];
 
     const dateResult = parseGseFileDate(row.trading_date ?? "", "trading_date");
@@ -180,8 +182,8 @@ export function validateGseSecurityRows(rows: RawGseSecurityRow[]): GseSecurityV
     }
 
     if (errors.length > 0) {
-      invalid.push({ row, errors });
-      continue;
+      invalid.push({ row, errors, rowNumber });
+      return;
     }
 
     const companyName = (row.company_name ?? "").trim();
@@ -203,7 +205,7 @@ export function validateGseSecurityRows(rows: RawGseSecurityRow[]): GseSecurityV
       sharesTraded,
       valueTraded,
     });
-  }
+  });
 
   return { valid, invalid };
 }
