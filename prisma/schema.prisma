@@ -106,14 +106,15 @@ model DataSource {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  ingestionRuns           IngestionRun[]
-  macroSeries             MacroSeries[]
-  exchangeRates           ExchangeRate[]
-  treasuryRates           TreasuryRate[]
-  policyDecisions         PolicyDecision[]
-  marketIndexObservations MarketIndexObservation[]
-  marketSummaries         MarketSummary[]
-  securityPrices          SecurityPrice[]
+  ingestionRuns                IngestionRun[]
+  macroSeries                  MacroSeries[]
+  exchangeRates                ExchangeRate[]
+  treasuryRates                TreasuryRate[]
+  policyDecisions              PolicyDecision[]
+  marketIndexObservations      MarketIndexObservation[]
+  marketSummaries              MarketSummary[]
+  securityPrices               SecurityPrice[]
+  companyFinancialObservations CompanyFinancialObservation[]
 
   @@index([provider])
   @@index([active])
@@ -146,13 +147,14 @@ model IngestionRun {
 
   dataSource DataSource @relation(fields: [dataSourceId], references: [id], onDelete: Restrict)
 
-  macroObservations       MacroObservation[]
-  exchangeRates           ExchangeRate[]
-  treasuryRates           TreasuryRate[]
-  policyDecisions         PolicyDecision[]
-  marketIndexObservations MarketIndexObservation[]
-  marketSummaries         MarketSummary[]
-  securityPrices          SecurityPrice[]
+  macroObservations            MacroObservation[]
+  exchangeRates                ExchangeRate[]
+  treasuryRates                TreasuryRate[]
+  policyDecisions              PolicyDecision[]
+  marketIndexObservations      MarketIndexObservation[]
+  marketSummaries              MarketSummary[]
+  securityPrices               SecurityPrice[]
+  companyFinancialObservations CompanyFinancialObservation[]
 
   @@index([dataSourceId])
   @@index([status])
@@ -489,9 +491,19 @@ model MarketSummary {
 /// A listed issuer. Kept separate from Security so one company's multiple
 /// traded instruments (e.g. an ordinary share and a preference share)
 /// share one issuer identity rather than duplicating company metadata.
+/// `ticker` duplicates Security.ticker's identity deliberately: Security
+/// represents a traded *instrument* (M6's domain), while Company is the
+/// *issuer* that M7's financial statements attach to. The two must be
+/// resolvable independently — financials should be importable for a
+/// company even before any GSE price data exists for it — so Company
+/// cannot rely solely on a join through Security to know its own ticker.
+/// Kept in sync at creation time (see gse-security-provider.ts and
+/// financials-provider.ts); both ultimately point at the same Company row
+/// once both exist.
 model Company {
   id       String  @id @default(cuid())
   name     String
+  ticker   String? @unique
   sector   String?
   exchange String  @default("Ghana Stock Exchange")
   currency String  @default("GHS")
@@ -500,9 +512,136 @@ model Company {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  securities Security[]
+  securities       Security[]
+  financialPeriods FinancialPeriod[]
 
   @@index([active])
+}
+
+// ---------------------------------------------------------------------------
+// Company Financials (M7)
+// ---------------------------------------------------------------------------
+
+enum FinancialPeriodType {
+  ANNUAL
+  HALF_YEAR
+  QUARTERLY
+}
+
+/// Whether a statement covers the group (consolidated) or the parent
+/// entity alone (separate) — never mixed silently across periods
+/// (CLAUDE.md: comparability must be explicit, not assumed).
+enum StatementScope {
+  CONSOLIDATED
+  SEPARATE
+}
+
+/// Canonical storage unit for a FinancialMetric's normalized `value`.
+/// GHS_THOUSANDS/GHS_MILLIONS appear only as *input* scale indicators on
+/// an import row (see financials-parser.ts) — every stored, normalized
+/// value is always in one of GHS / PERCENT / PER_SHARE_GHS / COUNT, never
+/// left scaled, so charts and ratios never have to guess a statement's
+/// reporting unit.
+enum MetricUnit {
+  GHS
+  GHS_THOUSANDS
+  GHS_MILLIONS
+  PERCENT
+  PER_SHARE_GHS
+  COUNT
+}
+
+/// A single reporting period for one company. Deliberately NOT
+/// nullable on fiscalQuarter: Postgres treats multiple NULLs in a unique
+/// index as distinct, which would silently allow duplicate ANNUAL rows
+/// for the same company/year/scope. Convention instead: ANNUAL -> 0,
+/// HALF_YEAR -> 1 (H1) or 2 (H2), QUARTERLY -> 1-4.
+///
+/// H1 2026 and FY 2025 are never the same kind of row (CLAUDE.md /
+/// PROJECT.md: never compare interim to annual as though equivalent) —
+/// periodType is part of identity, not just a label.
+model FinancialPeriod {
+  id                String              @id @default(cuid())
+  companyId         String
+  periodType        FinancialPeriodType
+  fiscalYear        Int
+  fiscalQuarter     Int                 @default(0)
+  startDate         DateTime            @db.Date
+  endDate           DateTime            @db.Date
+  reportingCurrency String              @default("GHS")
+  statementScope    StatementScope      @default(CONSOLIDATED)
+  audited           Boolean?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company      Company                       @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  observations CompanyFinancialObservation[]
+
+  @@unique([companyId, periodType, fiscalYear, fiscalQuarter, statementScope])
+  @@index([companyId])
+  @@index([fiscalYear])
+}
+
+/// Metadata for one canonical metric code (e.g. "REVENUE"). `unit` is the
+/// metric's own canonical storage unit — always what `value` on every
+/// observation of this metric is expressed in, regardless of what unit
+/// the original statement reported it in.
+model FinancialMetric {
+  id       String     @id @default(cuid())
+  code     String     @unique
+  name     String
+  unit     MetricUnit
+  category String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  observations CompanyFinancialObservation[]
+
+  @@index([category])
+}
+
+/// A single normalized metric value for one financial period.
+///
+/// `value` is always normalized into the metric's canonical unit (see
+/// FinancialMetric.unit) — e.g. a statement reporting "Revenue 12,450"
+/// with unit GHS_MILLIONS is stored as value = 12,450,000,000, never as
+/// the raw 12,450 (CLAUDE.md: a critical financial-correctness
+/// requirement — never silently drop a statement's reporting scale).
+/// `reportedValue`/`reportedUnit` preserve exactly what the statement
+/// said, so a user can always trace the normalization back to source.
+///
+/// Uniqueness on (financialPeriodId, metricId) is the full "company +
+/// period + metric + statement scope" key from CLAUDE.md/M7 §20:
+/// financialPeriodId already encodes company, period, and scope via
+/// FinancialPeriod's own unique constraint.
+model CompanyFinancialObservation {
+  id                String @id @default(cuid())
+  financialPeriodId String
+  metricId          String
+
+  value         Decimal  @db.Decimal(20, 4)
+  reportedValue Decimal? @db.Decimal(20, 4)
+  reportedUnit  String?
+
+  sourceId       String
+  ingestionRunId String
+  retrievedAt    DateTime @default(now())
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  financialPeriod FinancialPeriod @relation(fields: [financialPeriodId], references: [id], onDelete: Restrict)
+  metric          FinancialMetric @relation(fields: [metricId], references: [id], onDelete: Restrict)
+  source          DataSource      @relation(fields: [sourceId], references: [id], onDelete: Restrict)
+  ingestionRun    IngestionRun    @relation(fields: [ingestionRunId], references: [id], onDelete: Restrict)
+
+  @@unique([financialPeriodId, metricId])
+  @@index([financialPeriodId])
+  @@index([metricId])
+  @@index([sourceId])
+  @@index([ingestionRunId])
 }
 
 /// A specific traded instrument. `ticker` is the GSE share code (e.g.

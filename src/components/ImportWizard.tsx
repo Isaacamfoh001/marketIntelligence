@@ -6,8 +6,10 @@ import { previewGseImportAction, commitGseImportAction, type ImportActionResult 
 import { GSE_IMPORT_TEMPLATES, buildCsvTemplate, MAX_UPLOAD_BYTES, hasAcceptedExtension, type GseDatasetType } from "@/lib/gse-import-templates";
 import type { NormalisedGseSecurityRow } from "@/lib/ingestion/gse-security-parser";
 import type { NormalisedGseIndexRow } from "@/lib/ingestion/gse-index-parser";
+import type { NormalisedFinancialRow } from "@/lib/ingestion/financials-parser";
+import { formatPeriodLabel } from "@/lib/financial-period-label";
 
-const DATASET_TYPES: GseDatasetType[] = ["security-daily", "market-summary", "security-backfill"];
+const DATASET_TYPES: GseDatasetType[] = ["security-daily", "market-summary", "company-financials", "security-backfill"];
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -52,6 +54,99 @@ function SummaryStat({ label, value }: { label: string; value: React.ReactNode }
       <div className="mt-1 text-lg font-semibold text-zinc-900 dark:text-zinc-100">{value}</div>
     </div>
   );
+}
+
+// ---------------------------------------------------------------------------
+// One result type per dataset (security/index/financials) carries the same
+// core fields under different names — normalized here once so the rest of
+// the component never repeats a 3-way `??` chain.
+// ---------------------------------------------------------------------------
+
+interface RowError {
+  row: unknown;
+  errors: string[];
+  rowNumber: number;
+}
+
+interface ResultSummary {
+  recordsRead: number;
+  recordsAccepted: number;
+  recordsRejected: number;
+  inserted: number;
+  updated: number;
+  conflicts: number;
+  restatements: number;
+  status: string;
+  runId: string | null;
+  /** The 4th summary-stat card — varies by dataset (a count for securities/financials, a date range for market summary). */
+  fourthStatLabel: string;
+  fourthStatValue: string | number;
+  /** Optional caption line below the stat grid (date range + ticker list for securities, company list for financials). */
+  captionLine: string | null;
+  errors: RowError[];
+  sourceLabel: string;
+}
+
+function summarize(result: ImportActionResult): ResultSummary | null {
+  if (result.security) {
+    const s = result.security;
+    const dateRange = `${s.earliestTradingDate ?? "—"} → ${s.latestTradingDate ?? "—"}`;
+    return {
+      recordsRead: s.recordsRead,
+      recordsAccepted: s.recordsAccepted,
+      recordsRejected: s.recordsRejected,
+      inserted: s.inserted,
+      updated: s.updated,
+      conflicts: s.conflicts.length,
+      restatements: 0,
+      status: s.status,
+      runId: s.runId,
+      fourthStatLabel: "Securities detected",
+      fourthStatValue: s.tickers.length,
+      captionLine: s.tickers.length > 0 ? `Trading date range: ${dateRange} · ${s.tickers.join(", ")}` : `Trading date range: ${dateRange}`,
+      errors: s.errors,
+      sourceLabel: `Ghana Stock Exchange — ${s.kind === "backfill" ? "Market Report Backfill" : "Daily Shares & ETFs"}`,
+    };
+  }
+  if (result.index) {
+    const i = result.index;
+    return {
+      recordsRead: i.recordsRead,
+      recordsAccepted: i.recordsAccepted,
+      recordsRejected: i.recordsRejected,
+      inserted: i.inserted,
+      updated: i.updated,
+      conflicts: 0,
+      restatements: 0,
+      status: i.status,
+      runId: i.runId,
+      fourthStatLabel: "Trading date range",
+      fourthStatValue: `${i.earliestTradingDate ?? "—"} → ${i.latestTradingDate ?? "—"}`,
+      captionLine: null,
+      errors: i.errors,
+      sourceLabel: "Ghana Stock Exchange — Daily Market Summary",
+    };
+  }
+  if (result.financials) {
+    const f = result.financials;
+    return {
+      recordsRead: f.recordsRead,
+      recordsAccepted: f.recordsAccepted,
+      recordsRejected: f.recordsRejected,
+      inserted: f.inserted,
+      updated: f.updated,
+      conflicts: 0,
+      restatements: f.restatements.length,
+      status: f.status,
+      runId: f.runId,
+      fourthStatLabel: "Companies detected",
+      fourthStatValue: f.tickers.length,
+      captionLine: f.tickers.length > 0 ? f.tickers.join(", ") : null,
+      errors: f.errors,
+      sourceLabel: "Ghana Stock Exchange — Listed Company Financial Statements",
+    };
+  }
+  return null;
 }
 
 function SecurityPreviewTable({ rows }: { rows: NormalisedGseSecurityRow[] }) {
@@ -116,9 +211,42 @@ function IndexPreviewTable({ rows }: { rows: NormalisedGseIndexRow[] }) {
   );
 }
 
+function FinancialsPreviewTable({ rows }: { rows: NormalisedFinancialRow[] }) {
+  return (
+    <div className="overflow-x-auto rounded border border-zinc-200 dark:border-zinc-800">
+      <table className="w-full min-w-[720px] text-left text-sm">
+        <thead>
+          <tr className="border-b border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900/60">
+            <th className="px-3 py-2 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Company</th>
+            <th className="px-3 py-2 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Period</th>
+            <th className="px-3 py-2 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Metric</th>
+            <th className="px-3 py-2 text-right text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Value</th>
+            <th className="px-3 py-2 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Unit</th>
+            <th className="px-3 py-2 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r, i) => (
+            <tr key={i} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/50">
+              <td className="whitespace-nowrap px-3 py-2 font-medium text-zinc-900 dark:text-zinc-100">{r.ticker}</td>
+              <td className="whitespace-nowrap px-3 py-2 text-zinc-600 dark:text-zinc-400">
+                {formatPeriodLabel(r)} · {r.statementScope === "CONSOLIDATED" ? "Group" : "Separate"}
+              </td>
+              <td className="whitespace-nowrap px-3 py-2 text-zinc-600 dark:text-zinc-400">{r.metricCode}</td>
+              <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums text-zinc-900 dark:text-zinc-100">{r.value}</td>
+              <td className="whitespace-nowrap px-3 py-2 text-zinc-600 dark:text-zinc-400">{r.unit}</td>
+              <td className="whitespace-nowrap px-3 py-2 text-emerald-600 dark:text-emerald-400">✓ Valid</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 const MAX_REJECTED_SHOWN = 20;
 
-function RejectedRowsList({ errors }: { errors: { row: unknown; errors: string[]; rowNumber: number }[] }) {
+function RejectedRowsList({ errors }: { errors: RowError[] }) {
   if (errors.length === 0) return null;
   return (
     <div>
@@ -214,9 +342,8 @@ export function ImportWizard() {
   // Result screen (after a commit attempt) replaces the rest of the wizard.
   // ---------------------------------------------------------------------
   if (commitResult) {
-    const security = commitResult.security;
-    const index = commitResult.index;
-    const isSuccess = commitResult.ok && !commitResult.error && (security?.status === "SUCCESS" || index?.status === "SUCCESS");
+    const summary = summarize(commitResult);
+    const isSuccess = commitResult.ok && !commitResult.error && summary?.status === "SUCCESS";
 
     return (
       <div className="space-y-4">
@@ -225,32 +352,32 @@ export function ImportWizard() {
           {commitResult.error && <div className="mt-1">{commitResult.error}</div>}
         </Banner>
 
-        {(security || index) && (
+        {summary && (
           <div className="rounded border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
             <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-              <SummaryStat label="Rows read" value={security?.recordsRead ?? index?.recordsRead ?? 0} />
-              <SummaryStat label="Accepted" value={security?.recordsAccepted ?? index?.recordsAccepted ?? 0} />
-              <SummaryStat label="Rejected" value={security?.recordsRejected ?? index?.recordsRejected ?? 0} />
-              <SummaryStat label="Inserted" value={security?.inserted ?? index?.inserted ?? 0} />
-              <SummaryStat label="Updated" value={security?.updated ?? index?.updated ?? 0} />
-              <SummaryStat label="Conflicts" value={security?.conflicts.length ?? 0} />
-              <SummaryStat
-                label="Date range"
-                value={
-                  (security?.earliestTradingDate ?? index?.earliestTradingDate)
-                    ? `${security?.earliestTradingDate ?? index?.earliestTradingDate} → ${security?.latestTradingDate ?? index?.latestTradingDate}`
-                    : "—"
-                }
-              />
-              <SummaryStat label="Run status" value={security?.status ?? index?.status ?? "—"} />
+              <SummaryStat label="Rows read" value={summary.recordsRead} />
+              <SummaryStat label="Accepted" value={summary.recordsAccepted} />
+              <SummaryStat label="Rejected" value={summary.recordsRejected} />
+              <SummaryStat label="Inserted" value={summary.inserted} />
+              <SummaryStat label="Updated" value={summary.updated} />
+              <SummaryStat label="Conflicts" value={summary.conflicts} />
+              <SummaryStat label={summary.fourthStatLabel} value={summary.fourthStatValue} />
+              <SummaryStat label="Run status" value={summary.status} />
             </div>
             <p className="mt-4 text-xs text-zinc-400 dark:text-zinc-500">
-              DataSource: Ghana Stock Exchange — {spec.label} · Run ID: {security?.runId ?? index?.runId ?? "—"} · Imported {new Date().toLocaleString("en-GB")}
+              DataSource: {summary.sourceLabel} · Run ID: {summary.runId ?? "—"} · Imported {new Date().toLocaleString("en-GB")}
             </p>
-            {security && security.conflicts.length > 0 && (
+            {summary.conflicts > 0 && (
               <div className="mt-3">
                 <Banner tone="warning">
-                  {security.conflicts.length} conflict{security.conflicts.length === 1 ? "" : "s"} retained existing higher-priority values (not overwritten).
+                  {summary.conflicts} conflict{summary.conflicts === 1 ? "" : "s"} retained existing higher-priority values (not overwritten).
+                </Banner>
+              </div>
+            )}
+            {summary.restatements > 0 && (
+              <div className="mt-3">
+                <Banner tone="warning">
+                  {summary.restatements} value{summary.restatements === 1 ? "" : "s"} restated from a previous import — provenance moved to this run.
                 </Banner>
               </div>
             )}
@@ -258,8 +385,8 @@ export function ImportWizard() {
         )}
 
         <div className="flex flex-wrap gap-2">
-          <Link href="/equities" className="rounded bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300">
-            View Equities
+          <Link href={datasetType === "company-financials" ? "/companies" : "/equities"} className="rounded bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300">
+            {datasetType === "company-financials" ? "View Companies" : "View Equities"}
           </Link>
           <Link href="/data-centre" className="rounded border border-zinc-200 px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-800">
             View Data Centre
@@ -279,15 +406,14 @@ export function ImportWizard() {
   // ---------------------------------------------------------------------
   // Selection + preview flow
   // ---------------------------------------------------------------------
-  const previewSecurity = previewResult?.security;
-  const previewIndex = previewResult?.index;
-  const canConfirm = previewResult?.ok && !previewResult.error && ((previewSecurity?.recordsAccepted ?? previewIndex?.recordsAccepted ?? 0) > 0);
+  const previewSummary = previewResult ? summarize(previewResult) : null;
+  const canConfirm = previewResult?.ok && !previewResult.error && (previewSummary?.recordsAccepted ?? 0) > 0;
 
   return (
     <div className="space-y-6">
       <div>
         <p className="mb-2 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">1. Choose dataset</p>
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
           {DATASET_TYPES.map((type) => {
             const t = GSE_IMPORT_TEMPLATES[type];
             const selected = datasetType === type;
@@ -395,75 +521,62 @@ export function ImportWizard() {
         <div className="space-y-4 border-t border-zinc-200 pt-4 dark:border-zinc-800">
           <p className="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">3. Preview</p>
 
-          {previewResult.error ? (
-            <Banner tone="error">{previewResult.error}</Banner>
+          {previewResult.error || !previewSummary ? (
+            <Banner tone="error">{previewResult.error ?? "Preview failed."}</Banner>
           ) : (
             <>
               <div className="rounded border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
                 <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-                  <SummaryStat label="Rows detected" value={previewSecurity?.recordsRead ?? previewIndex?.recordsRead ?? 0} />
-                  <SummaryStat
-                    label="Accepted"
-                    value={<span className="text-emerald-600 dark:text-emerald-400">{previewSecurity?.recordsAccepted ?? previewIndex?.recordsAccepted ?? 0}</span>}
-                  />
+                  <SummaryStat label="Rows detected" value={previewSummary.recordsRead} />
+                  <SummaryStat label="Accepted" value={<span className="text-emerald-600 dark:text-emerald-400">{previewSummary.recordsAccepted}</span>} />
                   <SummaryStat
                     label="Rejected"
-                    value={
-                      <span className={(previewSecurity?.recordsRejected ?? previewIndex?.recordsRejected ?? 0) > 0 ? "text-red-600 dark:text-red-400" : ""}>
-                        {previewSecurity?.recordsRejected ?? previewIndex?.recordsRejected ?? 0}
-                      </span>
-                    }
+                    value={<span className={previewSummary.recordsRejected > 0 ? "text-red-600 dark:text-red-400" : ""}>{previewSummary.recordsRejected}</span>}
                   />
-                  <SummaryStat
-                    label={previewSecurity ? "Securities detected" : "Trading date range"}
-                    value={
-                      previewSecurity
-                        ? previewSecurity.tickers.length
-                        : `${previewIndex?.earliestTradingDate ?? "—"} → ${previewIndex?.latestTradingDate ?? "—"}`
-                    }
-                  />
+                  <SummaryStat label={previewSummary.fourthStatLabel} value={previewSummary.fourthStatValue} />
                 </div>
-                {previewSecurity && (
-                  <p className="mt-3 text-xs text-zinc-500 dark:text-zinc-400">
-                    Trading date range: {previewSecurity.earliestTradingDate ?? "—"} → {previewSecurity.latestTradingDate ?? "—"}
-                    {previewSecurity.tickers.length > 0 && ` · ${previewSecurity.tickers.join(", ")}`}
-                  </p>
-                )}
+                {previewSummary.captionLine && <p className="mt-3 text-xs text-zinc-500 dark:text-zinc-400">{previewSummary.captionLine}</p>}
               </div>
 
-              {previewSecurity && previewSecurity.sampleValid.length > 0 && (
+              {previewResult.security && previewResult.security.sampleValid.length > 0 && (
                 <div>
                   <p className="mb-2 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-                    Sample rows (showing {previewSecurity.sampleValid.length} of {previewSecurity.recordsAccepted} accepted)
+                    Sample rows (showing {previewResult.security.sampleValid.length} of {previewSummary.recordsAccepted} accepted)
                   </p>
-                  <SecurityPreviewTable rows={previewSecurity.sampleValid} />
+                  <SecurityPreviewTable rows={previewResult.security.sampleValid} />
                 </div>
               )}
-              {previewIndex && previewIndex.sampleValid.length > 0 && (
+              {previewResult.index && previewResult.index.sampleValid.length > 0 && (
                 <div>
                   <p className="mb-2 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-                    Sample rows (showing {previewIndex.sampleValid.length} of {previewIndex.recordsAccepted} accepted)
+                    Sample rows (showing {previewResult.index.sampleValid.length} of {previewSummary.recordsAccepted} accepted)
                   </p>
-                  <IndexPreviewTable rows={previewIndex.sampleValid} />
+                  <IndexPreviewTable rows={previewResult.index.sampleValid} />
+                </div>
+              )}
+              {previewResult.financials && previewResult.financials.sampleValid.length > 0 && (
+                <div>
+                  <p className="mb-2 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                    Sample rows (showing {previewResult.financials.sampleValid.length} of {previewSummary.recordsAccepted} accepted)
+                  </p>
+                  <FinancialsPreviewTable rows={previewResult.financials.sampleValid} />
                 </div>
               )}
 
-              <RejectedRowsList errors={previewSecurity?.errors ?? previewIndex?.errors ?? []} />
+              <RejectedRowsList errors={previewSummary.errors} />
 
               <div className="rounded border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
                 <p className="text-sm text-zinc-700 dark:text-zinc-300">
                   <span className="font-medium text-emerald-600 dark:text-emerald-400">
-                    {previewSecurity?.recordsAccepted ?? previewIndex?.recordsAccepted ?? 0} valid record
-                    {(previewSecurity?.recordsAccepted ?? previewIndex?.recordsAccepted ?? 0) === 1 ? "" : "s"}
+                    {previewSummary.recordsAccepted} valid record{previewSummary.recordsAccepted === 1 ? "" : "s"}
                   </span>{" "}
                   will be imported.{" "}
-                  {(previewSecurity?.recordsRejected ?? previewIndex?.recordsRejected ?? 0) > 0 && (
+                  {previewSummary.recordsRejected > 0 && (
                     <span className="font-medium text-red-600 dark:text-red-400">
-                      {previewSecurity?.recordsRejected ?? previewIndex?.recordsRejected} invalid row
-                      {(previewSecurity?.recordsRejected ?? previewIndex?.recordsRejected) === 1 ? "" : "s"}
+                      {previewSummary.recordsRejected} invalid row{previewSummary.recordsRejected === 1 ? "" : "s"}
                     </span>
                   )}
-                  {(previewSecurity?.recordsRejected ?? previewIndex?.recordsRejected ?? 0) > 0 && " will be skipped."}
+                  {previewSummary.recordsRejected > 0 && " will be skipped."}
                 </p>
                 <button
                   type="button"

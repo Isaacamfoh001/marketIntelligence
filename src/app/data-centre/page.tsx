@@ -4,6 +4,7 @@ import { type ExpectedFrequency, type IngestionStatus } from "@/generated/prisma
 import { observationFreshness, type Cadence } from "@/lib/freshness";
 import { ensureGseSecurityDataSources } from "@/lib/ingestion/gse-security-provider";
 import { ensureGseIndexDataSource } from "@/lib/ingestion/gse-index-provider";
+import { ensureFinancialsDataSource } from "@/lib/ingestion/financials-provider";
 
 // Database-backed page: must reflect the latest ingestion state on every
 // request, not the state at build time.
@@ -17,7 +18,7 @@ async function getDataSourcesWithRuns() {
   // Registering them here — metadata only, no run, no observation — lets
   // Data Centre show them as NOT_CONFIGURED/awaiting-first-import from day
   // one, rather than being invisible until the first real file is loaded.
-  await Promise.all([ensureGseSecurityDataSources(), ensureGseIndexDataSource()]);
+  await Promise.all([ensureGseSecurityDataSources(), ensureGseIndexDataSource(), ensureFinancialsDataSource()]);
 
   const sources = await prisma.dataSource.findMany({
     orderBy: [{ provider: "asc" }, { name: "asc" }],
@@ -45,7 +46,7 @@ async function getDataSourcesWithRuns() {
   // ingested anything even after a real successful run.
   const withLatestObservation = await Promise.all(
     sources.map(async (src) => {
-      const [macroLatest, fxLatest, treasuryLatest, policyLatest, indexLatest, summaryLatest, securityPriceLatest] = await Promise.all([
+      const [macroLatest, fxLatest, treasuryLatest, policyLatest, indexLatest, summaryLatest, securityPriceLatest, financialLatest] = await Promise.all([
         prisma.macroObservation.findFirst({
           where: { ingestionRun: { dataSourceId: src.id } },
           orderBy: { observationDate: "desc" },
@@ -86,6 +87,13 @@ async function getDataSourcesWithRuns() {
           orderBy: { tradingDate: "desc" },
           select: { tradingDate: true },
         }),
+        // A CompanyFinancialObservation has no date of its own — its
+        // "observation date" is its FinancialPeriod's endDate.
+        prisma.companyFinancialObservation.findFirst({
+          where: { ingestionRun: { dataSourceId: src.id } },
+          orderBy: { financialPeriod: { endDate: "desc" } },
+          select: { financialPeriod: { select: { endDate: true } } },
+        }),
       ]);
       const dates = [
         macroLatest?.observationDate,
@@ -95,6 +103,7 @@ async function getDataSourcesWithRuns() {
         indexLatest?.observationDate,
         summaryLatest?.tradingDate,
         securityPriceLatest?.tradingDate,
+        financialLatest?.financialPeriod.endDate,
       ].filter((d): d is Date => d != null);
       const latestObservationDate = dates.length > 0 ? dates.reduce((a, b) => (b > a ? b : a)) : null;
       return { ...src, latestObservationDate };

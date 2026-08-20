@@ -20,7 +20,8 @@
     "ingest:gss-inflation-latest": "node --import tsx scripts/ingest-gss-inflation-latest.ts",
     "ingest:gss-gdp": "node --import tsx scripts/ingest-gss-gdp.ts",
     "import:gse-securities": "node --import tsx scripts/import-gse-security-prices.ts",
-    "import:gse-market-summary": "node --import tsx scripts/import-gse-market-summary.ts"
+    "import:gse-market-summary": "node --import tsx scripts/import-gse-market-summary.ts",
+    "import:company-financials": "node --import tsx scripts/import-company-financials.ts"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.9.1",

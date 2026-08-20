@@ -32,6 +32,7 @@ import { getPrisma } from "../prisma";
 import { parseImportFile } from "./file-parse";
 import { extractGseSecurityRows, validateGseSecurityRows, type NormalisedGseSecurityRow, type RawGseSecurityRow } from "./gse-security-parser";
 import { startRun, completeRun, failRun } from "./ingestion-service";
+import { KNOWN_COMPANY_NAMES, KNOWN_COMPANY_SECTORS } from "../gse-known-companies";
 
 export type SecurityImportKind = "daily" | "backfill";
 
@@ -42,23 +43,6 @@ const BACKFILL_SOURCE_NAME = "Ghana Stock Exchange — Market Report Backfill";
 // closest-to-publication source; Market Report Backfill exists to extend
 // history or cross-validate and never silently overrides it.
 const SOURCE_PRIORITY: Record<SecurityImportKind, number> = { daily: 2, backfill: 1 };
-
-// Public reference metadata (real, well-known GSE-listed company names for
-// the initial representative universe named in PROJECT.md §11 / CLAUDE.md
-// §7) — used only as a fallback display name when an import file doesn't
-// supply company_name itself. Never used as a source of price/volume data.
-const KNOWN_COMPANY_NAMES: Record<string, string> = {
-  MTNGH: "MTN Ghana",
-  GCB: "GCB Bank PLC",
-  GOIL: "GOIL PLC",
-  CAL: "CalBank PLC",
-  SCB: "Standard Chartered Bank Ghana PLC",
-  EGH: "Ecobank Ghana PLC",
-  TOTAL: "TotalEnergies Marketing Ghana PLC",
-  BOPP: "Benso Oil Palm Plantation PLC",
-  SIC: "SIC Insurance Company PLC",
-  ETI: "Ecobank Transnational Incorporated",
-};
 
 // ---------------------------------------------------------------------------
 // DataSource bootstrap
@@ -110,8 +94,20 @@ async function ensureSecurity(
     return existing.id;
   }
 
-  const name = companyName ?? KNOWN_COMPANY_NAMES[ticker] ?? ticker;
-  const company = await db.company.create({ data: { name } });
+  // A Company may already exist for this ticker (e.g. created by an M7
+  // company-financials import before any GSE price data existed for it)
+  // — link to it rather than colliding with Company.ticker's unique
+  // constraint by attempting to create a duplicate.
+  const existingCompany = await db.company.findUnique({ where: { ticker } });
+  const company =
+    existingCompany ??
+    (await db.company.create({
+      data: {
+        name: companyName ?? KNOWN_COMPANY_NAMES[ticker] ?? ticker,
+        ticker,
+        sector: KNOWN_COMPANY_SECTORS[ticker] ?? null,
+      },
+    }));
   const security = await db.security.create({
     data: {
       companyId: company.id,

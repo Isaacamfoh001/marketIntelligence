@@ -13,6 +13,7 @@
 
 import { importGseSecurityPrices, type GseSecurityImportResult } from "@/lib/ingestion/gse-security-provider";
 import { importGseMarketSummary, type GseIndexImportResult } from "@/lib/ingestion/gse-index-provider";
+import { importCompanyFinancials, type FinancialsImportResult } from "@/lib/ingestion/financials-provider";
 import {
   MAX_UPLOAD_BYTES,
   hasAcceptedExtension,
@@ -27,6 +28,7 @@ export interface ImportActionResult {
   filename?: string;
   security?: GseSecurityImportResult;
   index?: GseIndexImportResult;
+  financials?: FinancialsImportResult;
 }
 
 async function extractFile(formData: FormData): Promise<{ filename: string; buffer: Buffer } | { error: string }> {
@@ -47,7 +49,7 @@ async function extractFile(formData: FormData): Promise<{ filename: string; buff
 
 function readDatasetType(formData: FormData): GseDatasetType | null {
   const value = formData.get("datasetType");
-  if (value === "security-daily" || value === "security-backfill" || value === "market-summary") return value;
+  if (value === "security-daily" || value === "security-backfill" || value === "market-summary" || value === "company-financials") return value;
   return null;
 }
 
@@ -62,6 +64,11 @@ async function runImport(formData: FormData, commit: boolean): Promise<ImportAct
   if (datasetType === "market-summary") {
     const index = await importGseMarketSummary(filename, buffer, { commit, triggeredBy: "web" });
     return { ok: true, datasetType, filename, index };
+  }
+
+  if (datasetType === "company-financials") {
+    const financials = await importCompanyFinancials(filename, buffer, { commit, triggeredBy: "web" });
+    return { ok: true, datasetType, filename, financials };
   }
 
   const kind = datasetTypeToSecurityKind(datasetType);

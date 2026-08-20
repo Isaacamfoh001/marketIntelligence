@@ -9,7 +9,7 @@
 
 import type { SecurityImportKind } from "./ingestion/gse-security-provider";
 
-export type GseDatasetType = "security-daily" | "security-backfill" | "market-summary";
+export type GseDatasetType = "security-daily" | "security-backfill" | "market-summary" | "company-financials";
 
 export interface GseImportTemplate {
   type: GseDatasetType;
@@ -74,6 +74,16 @@ export const GSE_IMPORT_TEMPLATES: Record<GseDatasetType, GseImportTemplate> = {
     requiredNote: "plus at least one of GSE-CI or GSE-FSI on each row",
     optionalHeaders: ["GSE-CI", "GSE-FSI", "Market Capitalization", "Total Volume", "Total Value Traded"],
     templateFilename: "gse-market-summary-template.csv",
+  },
+  "company-financials": {
+    type: "company-financials",
+    label: "Company Financials",
+    description:
+      "Powers the Companies landing page and Company Explorer — Revenue/Operating Income, PAT, EPS, Total Assets/Equity, dividends, and ratios (ROE/ROA/P/E/P/B/Dividend Yield). Long format: one row per company/period/metric, from an official financial statement.",
+    requiredHeaders: ["Ticker", "Period Type", "Fiscal Year", "Period Start", "Period End", "Metric", "Value", "Unit"],
+    requiredNote: "Fiscal Period also required unless Period Type is ANNUAL (e.g. H1/H2, Q1-Q4)",
+    optionalHeaders: ["Fiscal Period", "Currency", "Audited", "Statement Scope"],
+    templateFilename: "company-financials-template.csv",
   },
 };
 
