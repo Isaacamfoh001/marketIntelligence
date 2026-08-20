@@ -8,7 +8,21 @@ import {
   formatObservationDate,
   bpsChange,
   TREASURY_INSTRUMENTS,
+  type PolicyDecisionRow,
 } from "@/lib/queries/market-data";
+
+function DecisionBadge({ type }: { type: PolicyDecisionRow["decisionType"] }) {
+  const styles: Record<string, string> = {
+    HOLD: "bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400",
+    CUT: "bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400",
+    HIKE: "bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400",
+  };
+  return (
+    <span className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium ${styles[type]}`}>
+      {type === "HOLD" ? "HELD" : type}
+    </span>
+  );
+}
 
 export const dynamic = "force-dynamic";
 
@@ -54,7 +68,7 @@ export default async function MacroRatesPage() {
   ]);
 
   const [fxLatest] = fx.latestTwo;
-  const [mprLatest, mprPrevious] = mpr.latestTwo;
+  const { latestDecision: mprLatestDecision, lastChange: mprLastChange } = mpr;
 
   const treasuryChartSeries = treasury
     .filter((t) => t.history.length > 0)
@@ -74,24 +88,30 @@ export default async function MacroRatesPage() {
         <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
           Monetary Policy
         </h2>
-        {mprLatest ? (
+        {mprLatestDecision ? (
           <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
             <SectionCard>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-3 gap-4">
                 <StatBlock
-                  label="BoG Policy Rate"
-                  value={`${Number(mprLatest.value).toFixed(2)}%`}
-                  sub={`Effective ${formatObservationDate(mprLatest.observationDate)}`}
+                  label="Current MPR"
+                  value={`${Number(mprLatestDecision.resultingRate).toFixed(2)}%`}
+                  sub="as of latest decision"
                 />
                 <StatBlock
-                  label="Change"
-                  value={mprPrevious ? `${bpsChange(Number(mprLatest.value), Number(mprPrevious.value))} bps` : "—"}
-                  sub={mprPrevious ? `since ${formatObservationDate(mprPrevious.observationDate)}` : "no prior decision stored"}
+                  label="Latest MPC Decision"
+                  value={mprLatestDecision.decisionType === "HOLD" ? "HELD" : mprLatestDecision.decisionType}
+                  sub={formatObservationDate(mprLatestDecision.decisionDate)}
+                />
+                <StatBlock
+                  label="Last Rate Change"
+                  value={mprLastChange ? `${mprLastChange.decisionType} ${mprLastChange.changeBps != null ? `${mprLastChange.changeBps > 0 ? "+" : ""}${mprLastChange.changeBps}bps` : ""}` : "—"}
+                  sub={mprLastChange ? formatObservationDate(mprLastChange.decisionDate) : "no change on record"}
                 />
               </div>
               <p className="mt-4 text-[11px] text-zinc-400 dark:text-zinc-500">
-                Source: Bank of Ghana — Policy Rate Trends (Historical Policy Rate Decisions). Event-driven: one
-                observation per MPC decision, not a manufactured monthly series.
+                Rate history: Bank of Ghana — Policy Rate Trends (Historical Policy Rate Decisions). Meeting
+                confirmation beyond that table: Bank of Ghana — MPC Press Release archive. Event-driven: one
+                decision per MPC meeting, not a manufactured monthly series.
               </p>
             </SectionCard>
             <div className="lg:col-span-2">
@@ -109,18 +129,24 @@ export default async function MacroRatesPage() {
 
         {recentMpr.length > 0 && (
           <div className="mt-3 overflow-x-auto rounded border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
-            <table className="w-full min-w-[400px] text-left text-sm">
+            <table className="w-full min-w-[480px] text-left text-sm">
               <thead>
                 <tr className="border-b border-zinc-200 dark:border-zinc-800">
-                  <th className="px-4 py-2 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Effective Date</th>
+                  <th className="px-4 py-2 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Decision Date</th>
                   <th className="px-4 py-2 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Policy Rate</th>
+                  <th className="px-4 py-2 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Decision</th>
+                  <th className="px-4 py-2 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Change</th>
                 </tr>
               </thead>
               <tbody>
                 {recentMpr.map((row, i) => (
                   <tr key={i} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/50">
-                    <td className="px-4 py-2 text-zinc-600 dark:text-zinc-400">{formatObservationDate(row.observationDate)}</td>
-                    <td className="px-4 py-2 font-medium text-zinc-900 dark:text-zinc-100">{Number(row.value).toFixed(2)}%</td>
+                    <td className="whitespace-nowrap px-4 py-2 text-zinc-600 dark:text-zinc-400">{formatObservationDate(row.decisionDate)}</td>
+                    <td className="whitespace-nowrap px-4 py-2 font-medium text-zinc-900 dark:text-zinc-100">{Number(row.resultingRate).toFixed(2)}%</td>
+                    <td className="whitespace-nowrap px-4 py-2"><DecisionBadge type={row.decisionType} /></td>
+                    <td className="whitespace-nowrap px-4 py-2 text-zinc-600 dark:text-zinc-400">
+                      {row.changeBps == null ? "—" : `${row.changeBps > 0 ? "+" : ""}${row.changeBps} bps`}
+                    </td>
                   </tr>
                 ))}
               </tbody>

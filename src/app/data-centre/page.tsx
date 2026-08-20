@@ -24,7 +24,7 @@ async function getDataSourcesWithRuns() {
   // source count grows.
   const withLatestObservation = await Promise.all(
     sources.map(async (src) => {
-      const [macroLatest, fxLatest, treasuryLatest] = await Promise.all([
+      const [macroLatest, fxLatest, treasuryLatest, policyLatest] = await Promise.all([
         prisma.macroObservation.findFirst({
           where: { series: { sourceId: src.id } },
           orderBy: { observationDate: "desc" },
@@ -40,10 +40,18 @@ async function getDataSourcesWithRuns() {
           orderBy: { observationDate: "desc" },
           select: { observationDate: true },
         }),
+        prisma.policyDecision.findFirst({
+          where: { sourceId: src.id },
+          orderBy: { decisionDate: "desc" },
+          select: { decisionDate: true },
+        }),
       ]);
-      const dates = [macroLatest?.observationDate, fxLatest?.observationDate, treasuryLatest?.observationDate].filter(
-        (d): d is Date => d != null,
-      );
+      const dates = [
+        macroLatest?.observationDate,
+        fxLatest?.observationDate,
+        treasuryLatest?.observationDate,
+        policyLatest?.decisionDate,
+      ].filter((d): d is Date => d != null);
       const latestObservationDate = dates.length > 0 ? dates.reduce((a, b) => (b > a ? b : a)) : null;
       return { ...src, latestObservationDate };
     }),

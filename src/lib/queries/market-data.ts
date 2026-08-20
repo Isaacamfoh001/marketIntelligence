@@ -15,8 +15,6 @@ export const TREASURY_INSTRUMENTS = [
   { code: "364_DAY_BILL", label: "364-Day" },
 ] as const;
 
-const MPR_SERIES_CODE = "BOG_MPR";
-
 export interface ChartPoint {
   date: string;
   value: number;
@@ -135,47 +133,50 @@ export async function getRecentTreasuryRates(limit: number = 20): Promise<Recent
 
 // ---------------------------------------------------------------------------
 // Monetary Policy Rate
+//
+// Backed by PolicyDecision, not MacroObservation — see prisma/schema.prisma
+// for why. Distinguishes:
+//   - latestDecision: the most recent MPC decision of any kind (may be a HOLD)
+//   - lastChange: the most recent decision that actually changed the rate
+// A HOLD latestDecision must never be presented as though the rate moved.
 // ---------------------------------------------------------------------------
 
-export interface MprObservation {
-  observationDate: Date;
-  value: unknown;
+export interface PolicyDecisionRow {
+  decisionDate: Date;
+  resultingRate: unknown;
+  decisionType: "HIKE" | "CUT" | "HOLD";
+  changeBps: number | null;
 }
 
-export async function getMprSnapshot(): Promise<{ latestTwo: MprObservation[]; history: ChartPoint[] }> {
-  const prisma = getPrisma();
-  const series = await prisma.macroSeries.findUnique({ where: { code: MPR_SERIES_CODE } });
-  if (!series) return { latestTwo: [], history: [] };
+export interface MprSnapshot {
+  latestDecision: PolicyDecisionRow | null;
+  lastChange: PolicyDecisionRow | null;
+  history: ChartPoint[];
+}
 
-  const [latestTwo, history] = await Promise.all([
-    prisma.macroObservation.findMany({
-      where: { seriesId: series.id },
-      orderBy: { observationDate: "desc" },
-      take: 2,
-    }),
-    prisma.macroObservation.findMany({
-      where: { seriesId: series.id },
-      orderBy: { observationDate: "asc" },
-      select: { observationDate: true, value: true },
+export async function getMprSnapshot(): Promise<MprSnapshot> {
+  const prisma = getPrisma();
+
+  const [latestDecision, lastChange, history] = await Promise.all([
+    prisma.policyDecision.findFirst({ orderBy: { decisionDate: "desc" } }),
+    prisma.policyDecision.findFirst({ where: { decisionType: { not: "HOLD" } }, orderBy: { decisionDate: "desc" } }),
+    prisma.policyDecision.findMany({
+      orderBy: { decisionDate: "asc" },
+      select: { decisionDate: true, resultingRate: true },
     }),
   ]);
 
   return {
-    latestTwo,
-    history: history.map((row) => ({ date: row.observationDate.toISOString().slice(0, 10), value: Number(row.value) })),
+    latestDecision,
+    lastChange,
+    history: history.map((row) => ({ date: row.decisionDate.toISOString().slice(0, 10), value: Number(row.resultingRate) })),
   };
 }
 
-/** Recent MPC decisions, newest first. */
-export async function getRecentMprDecisions(limit: number = 15): Promise<MprObservation[]> {
+/** Recent MPC decisions, newest first — includes HOLDs. */
+export async function getRecentMprDecisions(limit: number = 15): Promise<PolicyDecisionRow[]> {
   const prisma = getPrisma();
-  const series = await prisma.macroSeries.findUnique({ where: { code: MPR_SERIES_CODE } });
-  if (!series) return [];
-  return prisma.macroObservation.findMany({
-    where: { seriesId: series.id },
-    orderBy: { observationDate: "desc" },
-    take: limit,
-  });
+  return prisma.policyDecision.findMany({ orderBy: { decisionDate: "desc" }, take: limit });
 }
 
 // ---------------------------------------------------------------------------

@@ -10,8 +10,12 @@ import {
   TREASURY_INSTRUMENTS,
   type FxObservation,
   type TreasuryObservation,
-  type MprObservation,
+  type PolicyDecisionRow,
 } from "@/lib/queries/market-data";
+
+function decisionLabel(type: PolicyDecisionRow["decisionType"]): string {
+  return type === "HOLD" ? "HELD" : type;
+}
 
 // Database-backed page: must reflect the latest ingestion state on every
 // request, not the state at build time.
@@ -168,19 +172,17 @@ function TreasuryMetricCard({ label, latest, previous }: { label: string; latest
   );
 }
 
-function MprMetricCard({ latest, previous }: { latest: MprObservation | undefined; previous: MprObservation | undefined }) {
-  if (!latest) return <MetricCard label="BoG Policy Rate" unit="%" />;
+function MprMetricCard({
+  latestDecision,
+  lastChange,
+}: {
+  latestDecision: PolicyDecisionRow | undefined;
+  lastChange: PolicyDecisionRow | undefined;
+}) {
+  if (!latestDecision) return <MetricCard label="BoG Policy Rate" unit="%" />;
 
-  const rate = Number(latest.value);
-  let changeLine = "·";
-  if (previous) {
-    const bps = bpsChange(rate, Number(previous.value));
-    changeLine = bps === 0
-      ? `Unchanged since ${formatObservationDate(latest.observationDate)}`
-      : `${bps > 0 ? "▲" : "▼"} ${Math.abs(bps)} bps since ${formatObservationDate(latest.observationDate)}`;
-  } else {
-    changeLine = `Effective ${formatObservationDate(latest.observationDate)}`;
-  }
+  const rate = Number(latestDecision.resultingRate);
+  const latestWasAChange = latestDecision.decisionType !== "HOLD";
 
   return (
     <div className="rounded border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
@@ -188,7 +190,15 @@ function MprMetricCard({ latest, previous }: { latest: MprObservation | undefine
         BoG Policy Rate
       </div>
       <div className="mt-2 text-2xl font-semibold text-zinc-900 dark:text-zinc-100">{rate.toFixed(2)}%</div>
-      <div className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">{changeLine}</div>
+      <div className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+        Latest decision: {formatObservationDate(latestDecision.decisionDate)} — {decisionLabel(latestDecision.decisionType)}
+      </div>
+      {!latestWasAChange && lastChange && (
+        <div className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
+          Last change: {formatObservationDate(lastChange.decisionDate)} · {decisionLabel(lastChange.decisionType)}
+          {lastChange.changeBps != null ? ` ${Math.abs(lastChange.changeBps)} bps` : ""}
+        </div>
+      )}
       <div className="mt-1 text-[11px] text-zinc-400 dark:text-zinc-500">MPC decision · Bank of Ghana</div>
     </div>
   );
@@ -205,7 +215,7 @@ export default async function OverviewPage() {
   ]);
 
   const [fxLatest, fxPrevious] = fx.latestTwo;
-  const [mprLatest, mprPrevious] = mpr.latestTwo;
+  const { latestDecision: mprLatestDecision, lastChange: mprLastChange } = mpr;
   const treasuryByCode = new Map(treasury.map((t) => [t.code, t]));
 
   const treasuryChartSeries: RatesSeries[] = treasury
@@ -245,27 +255,29 @@ export default async function OverviewPage() {
       });
     }
   }
-  if (mprLatest) {
-    if (mprPrevious) {
-      const bps = bpsChange(Number(mprLatest.value), Number(mprPrevious.value));
-      changedItems.push({
-        key: "mpr",
-        node:
-          bps === 0 ? (
-            <>
-              <span className="font-medium">Policy Rate</span>{" "}
-              <span className="text-zinc-400 dark:text-zinc-500">
-                unchanged at {Number(mprLatest.value).toFixed(2)}% since latest MPC decision
-              </span>
-            </>
-          ) : (
-            <>
-              <span className="font-medium">Policy Rate</span> {bps > 0 ? "▲" : "▼"} {Math.abs(bps)} bps{" "}
-              <span className="text-zinc-400 dark:text-zinc-500">to {Number(mprLatest.value).toFixed(2)}% at latest MPC decision</span>
-            </>
-          ),
-      });
-    }
+  if (mprLatestDecision) {
+    const rate = Number(mprLatestDecision.resultingRate);
+    changedItems.push({
+      key: "mpr",
+      node:
+        mprLatestDecision.decisionType === "HOLD" ? (
+          <>
+            <span className="font-medium">Policy Rate</span>{" "}
+            <span className="text-zinc-400 dark:text-zinc-500">
+              held at {rate.toFixed(2)}% — latest MPC decision {formatObservationDate(mprLatestDecision.decisionDate)}
+            </span>
+          </>
+        ) : (
+          <>
+            <span className="font-medium">Policy Rate</span>{" "}
+            {mprLatestDecision.decisionType === "HIKE" ? "▲" : "▼"}{" "}
+            {mprLatestDecision.changeBps != null ? Math.abs(mprLatestDecision.changeBps) : "—"} bps{" "}
+            <span className="text-zinc-400 dark:text-zinc-500">
+              to {rate.toFixed(2)}% at latest MPC decision ({formatObservationDate(mprLatestDecision.decisionDate)})
+            </span>
+          </>
+        ),
+    });
   }
 
   return (
@@ -289,7 +301,7 @@ export default async function OverviewPage() {
           <MetricCard label="GSE Composite Index" unit="index" />
           <FxMetricCard latest={fxLatest} previous={fxPrevious} />
           <MetricCard label="CPI Inflation (YoY)" unit="%" />
-          <MprMetricCard latest={mprLatest} previous={mprPrevious} />
+          <MprMetricCard latestDecision={mprLatestDecision ?? undefined} lastChange={mprLastChange ?? undefined} />
           {TREASURY_INSTRUMENTS.map(({ code, label }) => {
             const snapshot = treasuryByCode.get(code);
             const [latest, previous] = snapshot?.latestTwo ?? [];

@@ -49,6 +49,14 @@ enum IngestionStatus {
   FAILED
 }
 
+/// Outcome of a Monetary Policy Committee decision relative to the prior
+/// decision.
+enum PolicyDecisionType {
+  HIKE
+  CUT
+  HOLD
+}
+
 /// Observation frequency for macro series.
 enum MacroFrequency {
   DAILY
@@ -89,6 +97,7 @@ model DataSource {
   macroSeries       MacroSeries[]
   exchangeRates     ExchangeRate[]
   treasuryRates     TreasuryRate[]
+  policyDecisions   PolicyDecision[]
 
   @@index([provider])
   @@index([active])
@@ -124,6 +133,7 @@ model IngestionRun {
   macroObservations MacroObservation[]
   exchangeRates     ExchangeRate[]
   treasuryRates     TreasuryRate[]
+  policyDecisions   PolicyDecision[]
 
   @@index([dataSourceId])
   @@index([status])
@@ -310,6 +320,46 @@ model TreasuryRate {
   @@unique([instrumentId, observationDate])
   @@index([instrumentId])
   @@index([observationDate])
+  @@index([sourceId])
+  @@index([ingestionRunId])
+}
+
+// ---------------------------------------------------------------------------
+// Monetary Policy
+// ---------------------------------------------------------------------------
+
+/// A single Monetary Policy Committee decision.
+///
+/// Deliberately not modeled as a MacroObservation: MPR is event-driven
+/// (decisionType/changeBps have no meaning in a plain numeric time
+/// series), and forcing HOLD/CUT/HIKE semantics into MacroObservation's
+/// bare (date, value) shape would make that domain confusing for its
+/// other, genuinely numeric series. This is the "minimal policy-decision
+/// model" option.
+///
+/// `resultingRate` is always the rate in force after this decision —
+/// including for HOLD, where it equals the previous decision's rate.
+/// `changeBps` is null only for the very first decision Korbly has on
+/// record (2002), which has no prior decision to compare against.
+model PolicyDecision {
+  id             String             @id @default(cuid())
+  decisionDate   DateTime           @db.Date
+  resultingRate  Decimal            @db.Decimal(9, 4)
+  decisionType   PolicyDecisionType
+  changeBps      Int?
+
+  sourceId       String
+  ingestionRunId String
+  retrievedAt    DateTime           @default(now())
+
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+
+  source         DataSource   @relation(fields: [sourceId], references: [id], onDelete: Restrict)
+  ingestionRun   IngestionRun @relation(fields: [ingestionRunId], references: [id], onDelete: Restrict)
+
+  @@unique([decisionDate])
+  @@index([decisionDate])
   @@index([sourceId])
   @@index([ingestionRunId])
 }
