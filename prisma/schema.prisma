@@ -41,27 +41,34 @@ enum IngestionMethod {
 enum IngestionStatus {
   PENDING
   RUNNING
-  COMPLETED
+  SUCCESS
   FAILED
-  PARTIAL
+}
+
+/// Observation frequency for macro series.
+enum MacroFrequency {
+  DAILY
+  WEEKLY
+  MONTHLY
+  QUARTERLY
+  ANNUAL
 }
 
 // ---------------------------------------------------------------------------
-// Models
+// Source & Ingestion
 // ---------------------------------------------------------------------------
 
-/// Describes a provider or dataset origin.
+/// Describes a specific dataset/source combination.
 ///
-/// Each DataSource represents one logical stream of information (e.g. "BoG
-/// Daily FX Rates", "GSS Monthly CPI", "GSE Daily Equity Prices").  Future
-/// ingestion providers, parsers, and UI health tables all reference this
-/// model, so it is designed to be stable and extensible.
+/// One provider may produce many datasets.  E.g. "Bank of Ghana" produces
+/// "BoG Daily Interbank FX", "BoG Treasury Bill Rates", "BoG Monetary
+/// Policy Rate", etc.
 model DataSource {
   id                String            @id @default(cuid())
-  name              String            @unique          // e.g. "BoG Daily FX Rates"
-  provider          String                              // e.g. "Bank of Ghana"
+  name              String            @unique
+  provider          String
   sourceType        SourceType        @default(MANUAL)
-  url               String?                            // base URL or source reference
+  url               String?
   expectedFrequency ExpectedFrequency @default(UNKNOWN)
   ingestionMethod   IngestionMethod   @default(MANUAL_ENTRY)
   active            Boolean           @default(true)
@@ -69,8 +76,8 @@ model DataSource {
   createdAt         DateTime          @default(now())
   updatedAt         DateTime          @updatedAt
 
-  // Relations — defined as lists; one source has many runs.
   ingestionRuns     IngestionRun[]
+  macroSeries       MacroSeries[]
 
   @@index([provider])
   @@index([active])
@@ -78,9 +85,9 @@ model DataSource {
 
 /// Records every attempted refresh or import.
 ///
-/// Every data mutation flows through an IngestionRun, providing a full audit
-/// trail.  Downstream domain models (MacroObservation, ExchangeRate, etc.)
-/// will reference IngestionRun to attribute their source and retrieval time.
+/// Historical ingestion runs are the system's audit trail.  Deleting a
+/// DataSource must NOT silently erase its runs — the FK uses Restrict
+/// so deletion is blocked when runs exist.  Deactivate sources instead.
 model IngestionRun {
   id              String          @id @default(cuid())
   dataSourceId    String
@@ -94,18 +101,72 @@ model IngestionRun {
   recordsRejected Int?
 
   errorMessage    String?
-  triggeredBy     String?                        // "manual", "schedule", "api", user id
-  artifactName    String?                        // file name, URL, feed identifier
-  checksum        String?                        // hash for deduplication / audit
+  triggeredBy     String?
+  artifactName    String?
+  checksum        String?
 
   createdAt       DateTime        @default(now())
   updatedAt       DateTime        @updatedAt
 
-  // Relations
-  dataSource      DataSource      @relation(fields: [dataSourceId], references: [id], onDelete: Cascade)
+  dataSource      DataSource      @relation(fields: [dataSourceId], references: [id], onDelete: Restrict)
+
+  macroObservations MacroObservation[]
 
   @@index([dataSourceId])
   @@index([status])
   @@index([startedAt])
   @@index([completedAt])
+}
+
+// ---------------------------------------------------------------------------
+// Macro
+// ---------------------------------------------------------------------------
+
+/// Metadata about a macroeconomic time series.
+///
+/// Each series belongs to exactly one DataSource and carries enough
+/// descriptive metadata (code, unit, frequency) so that observations
+/// are self-describing.
+model MacroSeries {
+  id          String          @id @default(cuid())
+  code        String          @unique
+  name        String
+  category    String?
+  unit        String
+  frequency   MacroFrequency
+  sourceId    String
+
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  source      DataSource      @relation(fields: [sourceId], references: [id], onDelete: Restrict)
+  observations MacroObservation[]
+
+  @@index([sourceId])
+  @@index([category])
+}
+
+/// A single observation for a macro series.
+///
+/// Uniqueness is enforced on (seriesId, observationDate).  Running the
+/// same ingestion twice performs an upsert: if the value changed it is
+/// updated, otherwise the row is left untouched.
+model MacroObservation {
+  id              String    @id @default(cuid())
+  seriesId        String
+  observationDate DateTime @db.Date
+  value           Decimal   @db.Decimal(18, 6)
+  retrievedAt     DateTime  @default(now())
+  ingestionRunId  String
+
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  series          MacroSeries  @relation(fields: [seriesId], references: [id], onDelete: Restrict)
+  ingestionRun    IngestionRun @relation(fields: [ingestionRunId], references: [id], onDelete: Restrict)
+
+  @@unique([seriesId, observationDate])
+  @@index([seriesId])
+  @@index([observationDate])
+  @@index([ingestionRunId])
 }

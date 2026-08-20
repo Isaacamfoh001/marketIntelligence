@@ -2,11 +2,15 @@
   "name": "korbly-market-intelligence",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "ingest:fixture": "node --import tsx scripts/ingest-fixture.ts"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.9.1",
@@ -25,6 +29,8 @@
     "eslint": "^9",
     "eslint-config-next": "16.3.1",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "tsx": "^4.23.12",
+    "typescript": "^5",
+    "vitest": "^4.1.11"
   }
 }
