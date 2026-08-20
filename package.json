@@ -17,6 +17,7 @@
     "ingest:bog-treasury:backfill": "node --import tsx scripts/ingest-bog-treasury.ts --backfill",
     "ingest:bog-mpr": "node --import tsx scripts/ingest-bog-mpr.ts",
     "ingest:gss-inflation": "node --import tsx scripts/ingest-gss-inflation.ts",
+    "ingest:gss-inflation-latest": "node --import tsx scripts/ingest-gss-inflation-latest.ts",
     "ingest:gss-gdp": "node --import tsx scripts/ingest-gss-gdp.ts"
   },
   "dependencies": {

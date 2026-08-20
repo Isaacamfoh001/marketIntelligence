@@ -30,6 +30,14 @@ async function main() {
       console.log(`  ${JSON.stringify(err.row)}: ${err.errors.join("; ")}`);
     }
   }
+
+  if (result.conflicts.length > 0) {
+    console.log("");
+    console.log(`⚠ ${result.conflicts.length} month(s) where StatsBank disagrees with the Latest Release source (NOT applied — Latest Release keeps priority):`);
+    for (const c of result.conflicts) {
+      console.log(`  ${c.observationDate}: StatsBank=${c.incomingValue}  Latest Release (kept)=${c.existingValue}`);
+    }
+  }
   console.log("");
 
   if (result.status !== "SUCCESS") process.exitCode = 1;

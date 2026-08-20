@@ -22,11 +22,21 @@ async function getDataSourcesWithRuns() {
   // feeds (macro series, FX pairs, Treasury rates, ...). N+1 is
   // acceptable at V1 scale (a handful of sources); revisit only if the
   // source count grows.
+  //
+  // macroObservation is joined via ingestionRun.dataSourceId, NOT
+  // series.sourceId: a MacroSeries belongs to exactly one "owning"
+  // source, but individual observations can be contributed by a
+  // *different* source (e.g. GSS CPI Latest Release upserting into the
+  // same GSS_CPI_INFLATION_YOY series StatsBank also writes to — see
+  // gss-cpi-provider.ts). Joining via series.sourceId would silently
+  // attribute every observation to whichever source created the series
+  // first, making the other contributing source look like it never
+  // ingested anything even after a real successful run.
   const withLatestObservation = await Promise.all(
     sources.map(async (src) => {
       const [macroLatest, fxLatest, treasuryLatest, policyLatest] = await Promise.all([
         prisma.macroObservation.findFirst({
-          where: { series: { sourceId: src.id } },
+          where: { ingestionRun: { dataSourceId: src.id } },
           orderBy: { observationDate: "desc" },
           select: { observationDate: true },
         }),

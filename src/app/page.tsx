@@ -1,5 +1,7 @@
 import { getPrisma } from "@/lib/prisma";
 import { dailyFreshness, observationFreshness, type Freshness } from "@/lib/freshness";
+import { describeDirection, DIRECTION_ARROW, type Direction } from "@/lib/direction";
+import { DirectionText } from "@/components/DirectionText";
 import { RatesChart, type RatesSeries } from "@/components/RatesChart";
 import {
   getUsdGhsSnapshot,
@@ -18,6 +20,13 @@ import {
 
 function decisionLabel(type: PolicyDecisionRow["decisionType"]): string {
   return type === "HOLD" ? "HELD" : type;
+}
+
+/** Policy decisions are already classified (HIKE/CUT/HOLD) — no arithmetic needed to know their direction. */
+function directionForDecision(type: PolicyDecisionRow["decisionType"]): Direction {
+  if (type === "HIKE") return "up";
+  if (type === "CUT") return "down";
+  return "flat";
 }
 
 // Database-backed page: must reflect the latest ingestion state on every
@@ -92,19 +101,19 @@ function FreshnessBadge({ freshness }: { freshness: Freshness }) {
   );
 }
 
+const NO_CHANGE_LINE = <span className="text-zinc-400 dark:text-zinc-500">·</span>;
+
 function CardShell({
   label,
   freshness,
   value,
   changeLine,
-  changeColor = "text-zinc-500 dark:text-zinc-400",
   footer,
 }: {
   label: string;
   freshness?: Freshness;
   value: string;
-  changeLine: string;
-  changeColor?: string;
+  changeLine: React.ReactNode;
   footer: string;
 }) {
   return (
@@ -116,26 +125,37 @@ function CardShell({
         {freshness && <FreshnessBadge freshness={freshness} />}
       </div>
       <div className="mt-2 text-2xl font-semibold text-zinc-900 dark:text-zinc-100">{value}</div>
-      <div className={`mt-1 text-xs ${changeColor}`}>{changeLine}</div>
+      <div className="mt-1 text-xs">{changeLine}</div>
       <div className="mt-1 text-[11px] text-zinc-400 dark:text-zinc-500">{footer}</div>
     </div>
   );
 }
 
+// USD/GHS is quoted GHS-per-USD, so a rising rate means the cedi
+// weakened — the opposite of an equity index rising. Spelled out
+// explicitly (not just color) so an upward arrow paired with red never
+// reads as a UI bug.
 function FxMetricCard({ latest, previous }: { latest: FxObservation | undefined; previous: FxObservation | undefined }) {
   if (!latest) return <MetricCard label="USD/GHS" unit="GHS" />;
 
   const mid = Number(latest.midRate);
   const freshness = dailyFreshness(latest.observationDate);
 
-  let changeLine = "·";
-  let changeColor = "text-zinc-500 dark:text-zinc-400";
+  let changeLine: React.ReactNode = NO_CHANGE_LINE;
   if (previous) {
     const prevMid = Number(previous.midRate);
     const pct = ((mid - prevMid) / prevMid) * 100;
-    const arrow = pct > 0 ? "▲" : pct < 0 ? "▼" : "—";
-    changeColor = pct > 0 ? "text-red-600 dark:text-red-400" : pct < 0 ? "text-emerald-600 dark:text-emerald-400" : changeColor;
-    changeLine = `${arrow} ${Math.abs(pct).toFixed(2)}% vs ${formatObservationDate(previous.observationDate)}`;
+    const { arrow, sentiment, direction } = describeDirection(mid, prevMid, "higherIsNegative");
+    const cediLabel = direction === "up" ? "Cedi weakened" : direction === "down" ? "Cedi strengthened" : undefined;
+    changeLine = (
+      <DirectionText
+        arrow={arrow}
+        text={`${Math.abs(pct).toFixed(2)}%`}
+        label={cediLabel}
+        suffix={`vs ${formatObservationDate(previous.observationDate)}`}
+        sentiment={sentiment}
+      />
+    );
   }
 
   return (
@@ -144,12 +164,14 @@ function FxMetricCard({ latest, previous }: { latest: FxObservation | undefined;
       freshness={freshness}
       value={mid.toFixed(4)}
       changeLine={changeLine}
-      changeColor={changeColor}
       footer={`Mid rate · ${formatObservationDate(latest.observationDate)} · Bank of Ghana`}
     />
   );
 }
 
+// Treasury yield direction has no single universal meaning (a higher
+// yield can be attractive to an income investor while also implying
+// tighter financial conditions) — always neutral, never red/green.
 function TreasuryMetricCard({ label, latest, previous }: { label: string; latest: TreasuryObservation | undefined; previous: TreasuryObservation | undefined }) {
   if (!latest) return <MetricCard label={`${label} T-Bill`} unit="%" />;
 
@@ -157,11 +179,11 @@ function TreasuryMetricCard({ label, latest, previous }: { label: string; latest
   const discount = Number(latest.discountRate);
   const freshness = observationFreshness("WEEKLY", latest.observationDate);
 
-  let changeLine = "·";
+  let changeLine: React.ReactNode = NO_CHANGE_LINE;
   if (previous) {
     const bps = bpsChange(interest, Number(previous.interestRate));
-    const arrow = bps > 0 ? "▲" : bps < 0 ? "▼" : "—";
-    changeLine = `${arrow} ${Math.abs(bps)} bps vs previous auction`;
+    const { arrow, sentiment } = describeDirection(interest, Number(previous.interestRate), "neutral");
+    changeLine = <DirectionText arrow={arrow} text={`${Math.abs(bps)} bps`} suffix="vs previous auction" sentiment={sentiment} />;
   }
 
   return (
@@ -175,6 +197,8 @@ function TreasuryMetricCard({ label, latest, previous }: { label: string; latest
   );
 }
 
+// Policy-rate direction also defaults to neutral — a cut or hike's market
+// interpretation belongs in a later Market Condition layer, not here.
 function MprMetricCard({
   latestDecision,
   lastChange,
@@ -197,9 +221,14 @@ function MprMetricCard({
         Latest decision: {formatObservationDate(latestDecision.decisionDate)} — {decisionLabel(latestDecision.decisionType)}
       </div>
       {!latestWasAChange && lastChange && (
-        <div className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
-          Last change: {formatObservationDate(lastChange.decisionDate)} · {decisionLabel(lastChange.decisionType)}
-          {lastChange.changeBps != null ? ` ${Math.abs(lastChange.changeBps)} bps` : ""}
+        <div className="mt-0.5 text-xs">
+          <DirectionText
+            arrow={DIRECTION_ARROW[directionForDecision(lastChange.decisionType)]}
+            text={lastChange.changeBps != null ? `${Math.abs(lastChange.changeBps)} bps` : "—"}
+            label={decisionLabel(lastChange.decisionType)}
+            suffix={`since ${formatObservationDate(lastChange.decisionDate)}`}
+            sentiment="neutral"
+          />
         </div>
       )}
       <div className="mt-1 text-[11px] text-zinc-400 dark:text-zinc-500">MPC decision · Bank of Ghana</div>
@@ -207,17 +236,19 @@ function MprMetricCard({
   );
 }
 
+// Rising inflation erodes purchasing power — higher is negative, the
+// opposite of an equity index.
 function InflationMetricCard({ latest, previous }: { latest: MacroSeriesObservation | undefined; previous: MacroSeriesObservation | undefined }) {
   if (!latest) return <MetricCard label="CPI Inflation (YoY)" unit="%" />;
 
   const rate = Number(latest.value);
   const freshness = observationFreshness("MONTHLY", latest.observationDate);
 
-  let changeLine = "·";
+  let changeLine: React.ReactNode = NO_CHANGE_LINE;
   if (previous) {
     const pp = ppChange(rate, Number(previous.value));
-    const arrow = pp > 0 ? "▲" : pp < 0 ? "▼" : "—";
-    changeLine = `${arrow} ${Math.abs(pp).toFixed(2)} pp vs previous month`;
+    const { arrow, sentiment } = describeDirection(rate, Number(previous.value), "higherIsNegative");
+    changeLine = <DirectionText arrow={arrow} text={`${Math.abs(pp).toFixed(2)} pp`} suffix="vs previous month" sentiment={sentiment} />;
   }
 
   return (
@@ -252,53 +283,71 @@ export default async function OverviewPage() {
     .map((t) => ({ key: t.code, label: t.label, color: TREASURY_CHART_COLORS[t.code] ?? "#71717a", data: t.history }));
 
   const changedItems: { key: string; node: React.ReactNode }[] = [];
+
   if (inflationLatest && inflationPrevious) {
-    const pp = ppChange(Number(inflationLatest.value), Number(inflationPrevious.value));
-    const arrow = pp > 0 ? "▲" : pp < 0 ? "▼" : "—";
+    const rate = Number(inflationLatest.value);
+    const prevRate = Number(inflationPrevious.value);
+    const pp = ppChange(rate, prevRate);
+    const { arrow, sentiment } = describeDirection(rate, prevRate, "higherIsNegative");
     changedItems.push({
       key: "inflation",
       node: (
         <>
-          <span className="font-medium">Inflation</span> {arrow} {Math.abs(pp).toFixed(2)} pp{" "}
-          <span className="text-zinc-400 dark:text-zinc-500">
-            vs previous month ({formatObservationDate(inflationPrevious.observationDate)} &rarr; {formatObservationDate(inflationLatest.observationDate)})
-          </span>
+          <span className="font-medium">Inflation</span>{" "}
+          <DirectionText
+            arrow={arrow}
+            text={`${Math.abs(pp).toFixed(2)} pp`}
+            suffix={`vs previous month (${formatObservationDate(inflationPrevious.observationDate)} → ${formatObservationDate(inflationLatest.observationDate)})`}
+            sentiment={sentiment}
+          />
         </>
       ),
     });
   }
+
   if (fxLatest && fxPrevious) {
-    const pct = ((Number(fxLatest.midRate) - Number(fxPrevious.midRate)) / Number(fxPrevious.midRate)) * 100;
-    const arrow = pct > 0 ? "▲" : pct < 0 ? "▼" : "—";
+    const mid = Number(fxLatest.midRate);
+    const prevMid = Number(fxPrevious.midRate);
+    const pct = ((mid - prevMid) / prevMid) * 100;
+    const { arrow, sentiment, direction } = describeDirection(mid, prevMid, "higherIsNegative");
+    const cediLabel = direction === "up" ? "Cedi weakened" : direction === "down" ? "Cedi strengthened" : undefined;
     changedItems.push({
       key: "fx",
       node: (
         <>
-          <span className="font-medium">USD/GHS</span> {arrow} {Math.abs(pct).toFixed(2)}%{" "}
-          <span className="text-zinc-400 dark:text-zinc-500">
-            vs previous available observation ({formatObservationDate(fxPrevious.observationDate)} &rarr; {formatObservationDate(fxLatest.observationDate)})
-          </span>
+          <span className="font-medium">USD/GHS</span>{" "}
+          <DirectionText
+            arrow={arrow}
+            text={`${Math.abs(pct).toFixed(2)}%`}
+            label={cediLabel}
+            suffix={`vs previous available observation (${formatObservationDate(fxPrevious.observationDate)} → ${formatObservationDate(fxLatest.observationDate)})`}
+            sentiment={sentiment}
+          />
         </>
       ),
     });
   }
+
   for (const { code, label } of TREASURY_INSTRUMENTS) {
     const snapshot = treasuryByCode.get(code);
     const [latest, previous] = snapshot?.latestTwo ?? [];
     if (latest && previous) {
-      const bps = bpsChange(Number(latest.interestRate), Number(previous.interestRate));
-      const arrow = bps > 0 ? "▲" : bps < 0 ? "▼" : "—";
+      const interest = Number(latest.interestRate);
+      const prevInterest = Number(previous.interestRate);
+      const bps = bpsChange(interest, prevInterest);
+      const { arrow, sentiment } = describeDirection(interest, prevInterest, "neutral");
       changedItems.push({
         key: code,
         node: (
           <>
-            <span className="font-medium">{label} T-Bill</span> {arrow} {Math.abs(bps)} bps{" "}
-            <span className="text-zinc-400 dark:text-zinc-500">vs previous auction</span>
+            <span className="font-medium">{label} T-Bill</span>{" "}
+            <DirectionText arrow={arrow} text={`${Math.abs(bps)} bps`} suffix="vs previous auction" sentiment={sentiment} />
           </>
         ),
       });
     }
   }
+
   if (mprLatestDecision) {
     const rate = Number(mprLatestDecision.resultingRate);
     changedItems.push({
@@ -307,18 +356,23 @@ export default async function OverviewPage() {
         mprLatestDecision.decisionType === "HOLD" ? (
           <>
             <span className="font-medium">Policy Rate</span>{" "}
-            <span className="text-zinc-400 dark:text-zinc-500">
-              held at {rate.toFixed(2)}% — latest MPC decision {formatObservationDate(mprLatestDecision.decisionDate)}
-            </span>
+            <DirectionText
+              arrow={DIRECTION_ARROW.flat}
+              text={`held at ${rate.toFixed(2)}%`}
+              suffix={`latest MPC decision ${formatObservationDate(mprLatestDecision.decisionDate)}`}
+              sentiment="neutral"
+            />
           </>
         ) : (
           <>
             <span className="font-medium">Policy Rate</span>{" "}
-            {mprLatestDecision.decisionType === "HIKE" ? "▲" : "▼"}{" "}
-            {mprLatestDecision.changeBps != null ? Math.abs(mprLatestDecision.changeBps) : "—"} bps{" "}
-            <span className="text-zinc-400 dark:text-zinc-500">
-              to {rate.toFixed(2)}% at latest MPC decision ({formatObservationDate(mprLatestDecision.decisionDate)})
-            </span>
+            <DirectionText
+              arrow={DIRECTION_ARROW[directionForDecision(mprLatestDecision.decisionType)]}
+              text={`${mprLatestDecision.changeBps != null ? Math.abs(mprLatestDecision.changeBps) : "—"} bps`}
+              label={decisionLabel(mprLatestDecision.decisionType)}
+              suffix={`to ${rate.toFixed(2)}% at latest MPC decision (${formatObservationDate(mprLatestDecision.decisionDate)})`}
+              sentiment="neutral"
+            />
           </>
         ),
     });

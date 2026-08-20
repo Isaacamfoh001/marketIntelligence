@@ -17,7 +17,7 @@ vi.mock("../ingestion/gss-http", () => ({
 }));
 
 import { postGssJson } from "../ingestion/gss-http";
-import { ingestGssInflation } from "../ingestion/gss-cpi-provider";
+import { ingestGssInflation, ingestGssInflationLatestRelease } from "../ingestion/gss-cpi-provider";
 
 const db = getPrisma();
 const mockPost = vi.mocked(postGssJson);
@@ -27,6 +27,12 @@ const createdRunIds: string[] = [];
 
 async function trackedIngest() {
   const result = await ingestGssInflation();
+  createdRunIds.push(result.runId);
+  return result;
+}
+
+async function trackedIngestLatestRelease(observations: { referenceMonth: string; headlineYoy: number }[]) {
+  const result = await ingestGssInflationLatestRelease(observations);
   createdRunIds.push(result.runId);
   return result;
 }
@@ -164,5 +170,129 @@ describe("ingestGssInflation", () => {
     expect(run.status).toBe("FAILED");
     expect(run.completedAt).not.toBeNull();
     expect(run.errorMessage).toContain("simulated network failure");
+  });
+});
+
+describe("ingestGssInflationLatestRelease", () => {
+  it("persists a valid release with correct end-of-month dating and its own provenance", async () => {
+    const result = await trackedIngestLatestRelease([{ referenceMonth: "2099-07", headlineYoy: 4.6 }]);
+
+    expect(result.status).toBe("SUCCESS");
+    expect(result.latest).toBe("2099-07-31");
+
+    const series = await db.macroSeries.findUniqueOrThrow({ where: { code: "GSS_CPI_INFLATION_YOY" } });
+    const stored = await db.macroObservation.findFirstOrThrow({
+      where: { seriesId: series.id, observationDate: new Date("2099-07-31T00:00:00.000Z") },
+      include: { ingestionRun: { include: { dataSource: true } } },
+    });
+    expect(stored.value.toString()).toBe("4.6");
+    expect(stored.ingestionRunId).toBe(result.runId);
+    expect(stored.ingestionRun.dataSource.name).toBe("Ghana Statistical Service — CPI Latest Release");
+    expect(stored.ingestionRun.dataSource.ingestionMethod).toBe("MANUAL_ENTRY");
+  });
+
+  it("rejects a malformed reference month", async () => {
+    const result = await trackedIngestLatestRelease([{ referenceMonth: "July 2099", headlineYoy: 4.6 }]);
+    expect(result.recordsRejected).toBe(1);
+    const series = await db.macroSeries.findUniqueOrThrow({ where: { code: "GSS_CPI_INFLATION_YOY" } });
+    const count = await db.macroObservation.count({ where: { seriesId: series.id, observationDate: { gte: SYNTHETIC_FLOOR } } });
+    expect(count).toBe(0);
+  });
+
+  it("rejects a non-finite value, never storing missing as zero", async () => {
+    const result = await trackedIngestLatestRelease([{ referenceMonth: "2099-08", headlineYoy: Number.NaN }]);
+    expect(result.recordsRejected).toBe(1);
+    expect(result.persisted).toBe(0);
+  });
+
+  it("is idempotent across repeated identical entry", async () => {
+    await trackedIngestLatestRelease([{ referenceMonth: "2099-09", headlineYoy: 5.0 }]);
+    await trackedIngestLatestRelease([{ referenceMonth: "2099-09", headlineYoy: 5.0 }]);
+
+    const series = await db.macroSeries.findUniqueOrThrow({ where: { code: "GSS_CPI_INFLATION_YOY" } });
+    const count = await db.macroObservation.count({ where: { seriesId: series.id, observationDate: new Date("2099-09-30T00:00:00.000Z") } });
+    expect(count).toBe(1);
+  });
+});
+
+describe("CPI source merge — StatsBank history + Latest Release priority", () => {
+  it("lets the latest release become the headline when StatsBank history ends earlier", async () => {
+    // StatsBank only has data through May; June/July only exist via the release source.
+    mockIndicators([["2099M05", 6.1]]);
+    await trackedIngest();
+    await trackedIngestLatestRelease([
+      { referenceMonth: "2099-06", headlineYoy: 5.3 },
+      { referenceMonth: "2099-07", headlineYoy: 4.6 },
+    ]);
+
+    const series = await db.macroSeries.findUniqueOrThrow({ where: { code: "GSS_CPI_INFLATION_YOY" } });
+    const latestTwo = await db.macroObservation.findMany({
+      where: { seriesId: series.id, observationDate: { gte: SYNTHETIC_FLOOR } },
+      orderBy: { observationDate: "desc" },
+      take: 2,
+    });
+    expect(latestTwo[0].observationDate.toISOString().slice(0, 10)).toBe("2099-07-31");
+    expect(latestTwo[0].value.toString()).toBe("4.6");
+    expect(latestTwo[1].observationDate.toISOString().slice(0, 10)).toBe("2099-06-30");
+    expect(latestTwo[1].value.toString()).toBe("5.3");
+    // pp change matches -0.7, the same shape as the real July-vs-June figure.
+    expect(Number(latestTwo[0].value) - Number(latestTwo[1].value)).toBeCloseTo(-0.7, 5);
+  });
+
+  it("does not create a duplicate month when StatsBank later reports the same period with the same value", async () => {
+    await trackedIngestLatestRelease([{ referenceMonth: "2099-10", headlineYoy: 4.2 }]);
+    mockIndicators([["2099M10", 4.2]]); // StatsBank catches up, agrees
+    await trackedIngest();
+
+    const series = await db.macroSeries.findUniqueOrThrow({ where: { code: "GSS_CPI_INFLATION_YOY" } });
+    const count = await db.macroObservation.count({ where: { seriesId: series.id, observationDate: new Date("2099-10-31T00:00:00.000Z") } });
+    expect(count).toBe(1);
+
+    const stored = await db.macroObservation.findFirstOrThrow({
+      where: { seriesId: series.id, observationDate: new Date("2099-10-31T00:00:00.000Z") },
+    });
+    expect(stored.value.toString()).toBe("4.2");
+  });
+
+  it("never lets StatsBank silently overwrite a differing Latest Release value — reports a conflict instead", async () => {
+    const releaseResult = await trackedIngestLatestRelease([{ referenceMonth: "2099-11", headlineYoy: 4.6 }]);
+
+    // StatsBank later reports a different figure for the same month.
+    mockIndicators([["2099M11", 4.9]]);
+    const statsBankResult = await trackedIngest();
+
+    expect(statsBankResult.conflicts).toHaveLength(1);
+    expect(statsBankResult.conflicts[0]).toMatchObject({
+      observationDate: "2099-11-30",
+      incomingValue: "4.9",
+      existingValue: "4.6",
+    });
+
+    // The higher-priority Latest Release value must still be what's stored.
+    const series = await db.macroSeries.findUniqueOrThrow({ where: { code: "GSS_CPI_INFLATION_YOY" } });
+    const stored = await db.macroObservation.findFirstOrThrow({
+      where: { seriesId: series.id, observationDate: new Date("2099-11-30T00:00:00.000Z") },
+    });
+    expect(stored.value.toString()).toBe("4.6");
+    expect(stored.ingestionRunId).toBe(releaseResult.runId);
+  });
+
+  it("keeps provenance tied to whichever run is actually responsible for the current value", async () => {
+    mockIndicators([["2099M12", 7.0]]);
+    const statsBankRun = await trackedIngest();
+
+    const series = await db.macroSeries.findUniqueOrThrow({ where: { code: "GSS_CPI_INFLATION_YOY" } });
+    let stored = await db.macroObservation.findFirstOrThrow({
+      where: { seriesId: series.id, observationDate: new Date("2099-12-31T00:00:00.000Z") },
+    });
+    expect(stored.ingestionRunId).toBe(statsBankRun.runId);
+
+    // A later official release for the same month takes over provenance too.
+    const releaseRun = await trackedIngestLatestRelease([{ referenceMonth: "2099-12", headlineYoy: 6.8 }]);
+    stored = await db.macroObservation.findFirstOrThrow({
+      where: { seriesId: series.id, observationDate: new Date("2099-12-31T00:00:00.000Z") },
+    });
+    expect(stored.ingestionRunId).toBe(releaseRun.runId);
+    expect(stored.value.toString()).toBe("6.8");
   });
 });

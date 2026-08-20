@@ -1,5 +1,7 @@
 import { RatesChart, LONG_HISTORY_WINDOWS } from "@/components/RatesChart";
 import { GdpChart } from "@/components/GdpChart";
+import { describeDirection, DIRECTION_ARROW, SENTIMENT_TEXT_CLASS, type Direction } from "@/lib/direction";
+import { DirectionText } from "@/components/DirectionText";
 import {
   getUsdGhsSnapshot,
   getTreasurySnapshot,
@@ -17,14 +19,19 @@ import {
   type PolicyDecisionRow,
 } from "@/lib/queries/market-data";
 
+/** Policy decisions are already classified — no arithmetic needed for their direction. */
+function directionForDecision(type: PolicyDecisionRow["decisionType"]): Direction {
+  if (type === "HIKE") return "up";
+  if (type === "CUT") return "down";
+  return "flat";
+}
+
+// Policy-rate direction defaults to neutral everywhere on this page too
+// (see Overview's MprMetricCard) — HOLD/CUT/HIKE are distinguished by
+// label only, never by a red/green-adjacent color.
 function DecisionBadge({ type }: { type: PolicyDecisionRow["decisionType"] }) {
-  const styles: Record<string, string> = {
-    HOLD: "bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400",
-    CUT: "bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400",
-    HIKE: "bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400",
-  };
   return (
-    <span className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium ${styles[type]}`}>
+    <span className="inline-flex items-center rounded-full bg-zinc-100 px-1.5 py-0.5 text-[10px] font-medium text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
       {type === "HOLD" ? "HELD" : type}
     </span>
   );
@@ -54,7 +61,7 @@ function EmptyState({ message }: { message: string }) {
   );
 }
 
-function StatBlock({ label, value, sub }: { label: string; value: string; sub: string }) {
+function StatBlock({ label, value, sub }: { label: string; value: React.ReactNode; sub: string }) {
   return (
     <div>
       <div className="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">{label}</div>
@@ -116,7 +123,16 @@ export default async function MacroRatesPage() {
                 />
                 <StatBlock
                   label="Last Rate Change"
-                  value={mprLastChange ? `${mprLastChange.decisionType} ${mprLastChange.changeBps != null ? `${mprLastChange.changeBps > 0 ? "+" : ""}${mprLastChange.changeBps}bps` : ""}` : "—"}
+                  value={
+                    mprLastChange ? (
+                      <span className={SENTIMENT_TEXT_CLASS.neutral}>
+                        {DIRECTION_ARROW[directionForDecision(mprLastChange.decisionType)]}{" "}
+                        {mprLastChange.changeBps != null ? `${Math.abs(mprLastChange.changeBps)} bps` : "—"} · {mprLastChange.decisionType}
+                      </span>
+                    ) : (
+                      "—"
+                    )
+                  }
                   sub={mprLastChange ? formatObservationDate(mprLastChange.decisionDate) : "no change on record"}
                 />
               </div>
@@ -157,7 +173,7 @@ export default async function MacroRatesPage() {
                     <td className="whitespace-nowrap px-4 py-2 font-medium text-zinc-900 dark:text-zinc-100">{Number(row.resultingRate).toFixed(2)}%</td>
                     <td className="whitespace-nowrap px-4 py-2"><DecisionBadge type={row.decisionType} /></td>
                     <td className="whitespace-nowrap px-4 py-2 text-zinc-600 dark:text-zinc-400">
-                      {row.changeBps == null ? "—" : `${row.changeBps > 0 ? "+" : ""}${row.changeBps} bps`}
+                      {row.changeBps == null ? "—" : `${DIRECTION_ARROW[directionForDecision(row.decisionType)]} ${Math.abs(row.changeBps)} bps`}
                     </td>
                   </tr>
                 ))}
@@ -188,7 +204,17 @@ export default async function MacroRatesPage() {
                     <StatBlock
                       label="Discount Rate"
                       value={`${Number(latest.discountRate).toFixed(2)}%`}
-                      sub={previous ? `${bpsChange(Number(latest.interestRate), Number(previous.interestRate))} bps vs prior auction` : "no prior auction stored"}
+                      sub={
+                        previous
+                          ? (() => {
+                              const interest = Number(latest.interestRate);
+                              const prevInterest = Number(previous.interestRate);
+                              const bps = bpsChange(interest, prevInterest);
+                              const { arrow } = describeDirection(interest, prevInterest, "neutral");
+                              return `${arrow} ${Math.abs(bps)} bps vs prior auction`;
+                            })()
+                          : "no prior auction stored"
+                      }
                     />
                   </div>
                 ) : (
@@ -293,8 +319,11 @@ export default async function MacroRatesPage() {
                   value={
                     inflationPrevious
                       ? (() => {
-                          const pp = ppChange(Number(inflationLatest.value), Number(inflationPrevious.value));
-                          return `${pp > 0 ? "+" : ""}${pp.toFixed(2)} pp`;
+                          const rate = Number(inflationLatest.value);
+                          const prevRate = Number(inflationPrevious.value);
+                          const pp = ppChange(rate, prevRate);
+                          const { arrow, sentiment } = describeDirection(rate, prevRate, "higherIsNegative");
+                          return <DirectionText arrow={arrow} text={`${Math.abs(pp).toFixed(2)} pp`} sentiment={sentiment} />;
                         })()
                       : "—"
                   }
@@ -302,8 +331,9 @@ export default async function MacroRatesPage() {
                 />
               </div>
               <p className="mt-4 text-[11px] text-zinc-400 dark:text-zinc-500">
-                Source: Ghana Statistical Service — StatsBank/PxWeb (Consumer Price Index and Inflation). Reference
-                month dated to month-end; may lag the latest GSS press release — see Data Centre for freshness.
+                Source: Ghana Statistical Service — long-run history from StatsBank/PxWeb; current headline value
+                from the latest official CPI release once published. Reference month dated to month-end — see Data
+                Centre for the source behind each observation.
               </p>
             </SectionCard>
             <div className="lg:col-span-2">

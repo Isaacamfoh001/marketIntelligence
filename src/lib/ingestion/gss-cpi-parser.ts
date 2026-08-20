@@ -10,7 +10,8 @@
 // different table would be needed and isn't pursued here).
 // ---------------------------------------------------------------------------
 
-import { extractPxWebSeries, parseGssMonth, validatePxWebValue, type JsonStat2Response } from "./gss-pxweb";
+import { extractPxWebSeries, parseGssMonth, validatePxWebValue, lastDayOfUtcMonth, type JsonStat2Response } from "./gss-pxweb";
+import type { ValidationError } from "../validation/index";
 
 export interface RawCpiRow {
   periodKey: string;
@@ -45,6 +46,71 @@ export function validateCpiRows(rows: RawCpiRow[]): CpiValidationResult {
     if (parsedDate.error) errors.push(parsedDate.error.message);
 
     const value = validatePxWebValue(row.value, "inflation_rate", INFLATION_BOUNDS);
+    if (value.error) errors.push(value.error.message);
+
+    if (errors.length > 0) {
+      invalid.push({ row, errors });
+      continue;
+    }
+
+    valid.push({ observationDate: parsedDate.date!, value: value.value! });
+  }
+
+  return { valid, invalid };
+}
+
+// ---------------------------------------------------------------------------
+// Latest-release manual entry
+//
+// GSS's current latest-release surface is not machine-readable (see
+// gss-cpi-provider.ts file header for the full investigation): the
+// homepage highlight is a banner image with no text layer, the CPI
+// release page is a client-rendered SPA with no discoverable JSON API,
+// and monthly bulletin PDFs have no predictable/indexed URL scheme. This
+// is exactly the "public but awkward source" case CLAUDE.md's Mode B/C
+// (semi-automated / manual entry) exists for — an analyst reads the
+// official release and enters (reference month, headline YoY) here,
+// which is validated and provenanced identically to every automated
+// series, not hardcoded into UI/query code.
+// ---------------------------------------------------------------------------
+
+export interface LatestReleaseRawRow {
+  referenceMonth: string; // "YYYY-MM"
+  headlineYoy: number;
+}
+
+export interface LatestReleaseValidationResult {
+  valid: NormalisedCpiRow[];
+  invalid: { row: LatestReleaseRawRow; errors: string[] }[];
+}
+
+const REFERENCE_MONTH_RE = /^(\d{4})-(\d{2})$/;
+
+function parseReferenceMonth(text: string, field: string = "referenceMonth"): { date: Date; error: null } | { date: null; error: ValidationError } {
+  const trimmed = text.trim();
+  const match = REFERENCE_MONTH_RE.exec(trimmed);
+  if (!match) {
+    return { date: null, error: { field, message: `${field} must be "YYYY-MM": "${trimmed}"` } };
+  }
+  const year = Number(match[1]);
+  const month1 = Number(match[2]);
+  if (month1 < 1 || month1 > 12) {
+    return { date: null, error: { field, message: `${field} has an invalid month: "${trimmed}"` } };
+  }
+  return { date: lastDayOfUtcMonth(year, month1 - 1), error: null };
+}
+
+export function validateLatestReleaseRows(rows: LatestReleaseRawRow[]): LatestReleaseValidationResult {
+  const valid: NormalisedCpiRow[] = [];
+  const invalid: { row: LatestReleaseRawRow; errors: string[] }[] = [];
+
+  for (const row of rows) {
+    const errors: string[] = [];
+
+    const parsedDate = parseReferenceMonth(row.referenceMonth);
+    if (parsedDate.error) errors.push(parsedDate.error.message);
+
+    const value = validatePxWebValue(row.headlineYoy, "inflation_rate", INFLATION_BOUNDS);
     if (value.error) errors.push(value.error.message);
 
     if (errors.length > 0) {

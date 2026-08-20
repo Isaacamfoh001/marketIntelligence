@@ -55,9 +55,9 @@ export function extractPxWebSeries(data: JsonStat2Response, periodDimensionCode:
 // Period parsing
 // ---------------------------------------------------------------------------
 
-type DateResult = { date: Date; error: null } | { date: null; error: ValidationError };
+export type DateResult = { date: Date; error: null } | { date: null; error: ValidationError };
 
-function lastDayOfUtcMonth(year: number, month0: number): Date {
+export function lastDayOfUtcMonth(year: number, month0: number): Date {
   return new Date(Date.UTC(year, month0 + 1, 0));
 }
 
