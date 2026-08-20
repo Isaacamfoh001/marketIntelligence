@@ -12,7 +12,10 @@
     "test:watch": "vitest",
     "ingest:fixture": "node --import tsx scripts/ingest-fixture.ts",
     "ingest:bog-fx": "node --import tsx scripts/ingest-bog-fx.ts",
-    "ingest:bog-fx:backfill": "node --import tsx scripts/ingest-bog-fx.ts --backfill"
+    "ingest:bog-fx:backfill": "node --import tsx scripts/ingest-bog-fx.ts --backfill",
+    "ingest:bog-treasury": "node --import tsx scripts/ingest-bog-treasury.ts",
+    "ingest:bog-treasury:backfill": "node --import tsx scripts/ingest-bog-treasury.ts --backfill",
+    "ingest:bog-mpr": "node --import tsx scripts/ingest-bog-mpr.ts"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.9.1",

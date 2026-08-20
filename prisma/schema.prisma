@@ -56,6 +56,11 @@ enum MacroFrequency {
   MONTHLY
   QUARTERLY
   ANNUAL
+  /// Event-driven series with no fixed calendar cadence, e.g. a policy
+  /// rate that changes only on MPC decision dates. Observations are
+  /// stored per real decision/effective date — never one manufactured
+  /// row per calendar month.
+  AD_HOC
 }
 
 // ---------------------------------------------------------------------------
@@ -83,6 +88,7 @@ model DataSource {
   ingestionRuns     IngestionRun[]
   macroSeries       MacroSeries[]
   exchangeRates     ExchangeRate[]
+  treasuryRates     TreasuryRate[]
 
   @@index([provider])
   @@index([active])
@@ -117,6 +123,7 @@ model IngestionRun {
 
   macroObservations MacroObservation[]
   exchangeRates     ExchangeRate[]
+  treasuryRates     TreasuryRate[]
 
   @@index([dataSourceId])
   @@index([status])
@@ -239,6 +246,69 @@ model ExchangeRate {
 
   @@unique([currencyPairId, observationDate])
   @@index([currencyPairId])
+  @@index([observationDate])
+  @@index([sourceId])
+  @@index([ingestionRunId])
+}
+
+// ---------------------------------------------------------------------------
+// Treasury
+// ---------------------------------------------------------------------------
+
+/// A specific Treasury security BoG auctions, e.g. the 91-day bill.
+///
+/// `instrumentType` is a plain string ("BILL" today) rather than an enum:
+/// BoG's own security-type filter already lists ~13 tenors across bills,
+/// notes, and bonds, and V1 only needs bills — modeling the rest as an
+/// enum now would be speculative schema for instruments this milestone
+/// doesn't ingest.
+model TreasuryInstrument {
+  id             String  @id @default(cuid())
+  code           String  @unique
+  name           String
+  tenorDays      Int
+  currency       String  @default("GHS")
+  instrumentType String
+  active         Boolean @default(true)
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  treasuryRates  TreasuryRate[]
+
+  @@index([active])
+}
+
+/// A single auction/issue-date observation for a Treasury instrument.
+///
+/// Both discountRate and interestRate are required: Bank of Ghana
+/// publishes them together as one atomic auction result (every observed
+/// row carries both), and the Overview headline uses interestRate while
+/// discountRate is retained rather than discarded — a row missing either
+/// is rejected during validation, never stored with a fabricated value.
+/// `tenderNumber` preserves BoG's own auction identifier for traceability.
+model TreasuryRate {
+  id              String   @id @default(cuid())
+  instrumentId    String
+  observationDate DateTime @db.Date
+  tenderNumber    String?
+
+  discountRate    Decimal  @db.Decimal(9, 4)
+  interestRate    Decimal  @db.Decimal(9, 4)
+
+  sourceId        String
+  ingestionRunId  String
+  retrievedAt     DateTime @default(now())
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  instrument      TreasuryInstrument @relation(fields: [instrumentId], references: [id], onDelete: Restrict)
+  source          DataSource         @relation(fields: [sourceId], references: [id], onDelete: Restrict)
+  ingestionRun    IngestionRun       @relation(fields: [ingestionRunId], references: [id], onDelete: Restrict)
+
+  @@unique([instrumentId, observationDate])
+  @@index([instrumentId])
   @@index([observationDate])
   @@index([sourceId])
   @@index([ingestionRunId])

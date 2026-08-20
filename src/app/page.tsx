@@ -1,12 +1,27 @@
 import { getPrisma } from "@/lib/prisma";
-import { dailyFreshness } from "@/lib/freshness";
-import { FxChart, type FxChartPoint } from "@/components/FxChart";
+import { dailyFreshness, observationFreshness, type Freshness } from "@/lib/freshness";
+import { RatesChart, type RatesSeries } from "@/components/RatesChart";
+import {
+  getUsdGhsSnapshot,
+  getTreasurySnapshot,
+  getMprSnapshot,
+  formatObservationDate,
+  bpsChange,
+  TREASURY_INSTRUMENTS,
+  type FxObservation,
+  type TreasuryObservation,
+  type MprObservation,
+} from "@/lib/queries/market-data";
 
 // Database-backed page: must reflect the latest ingestion state on every
 // request, not the state at build time.
 export const dynamic = "force-dynamic";
 
-const FX_PAIR_CODE = "USDGHS";
+const TREASURY_CHART_COLORS: Record<string, string> = {
+  "91_DAY_BILL": "#3b82f6",
+  "182_DAY_BILL": "#8b5cf6",
+  "364_DAY_BILL": "#ec4899",
+};
 
 async function getLatestIngestionRun() {
   const prisma = getPrisma();
@@ -28,33 +43,6 @@ async function getIngestionRunCount() {
   return prisma.ingestionRun.count();
 }
 
-async function getUsdGhsSnapshot() {
-  const prisma = getPrisma();
-  const pair = await prisma.currencyPair.findUnique({ where: { code: FX_PAIR_CODE } });
-  if (!pair) return { latestTwo: [], history: [] as FxChartPoint[] };
-
-  const [latestTwo, history] = await Promise.all([
-    prisma.exchangeRate.findMany({
-      where: { currencyPairId: pair.id },
-      orderBy: { observationDate: "desc" },
-      take: 2,
-      include: { source: true },
-    }),
-    prisma.exchangeRate.findMany({
-      where: { currencyPairId: pair.id },
-      orderBy: { observationDate: "asc" },
-      select: { observationDate: true, midRate: true },
-    }),
-  ]);
-
-  const chartHistory: FxChartPoint[] = history.map((row) => ({
-    date: row.observationDate.toISOString().slice(0, 10),
-    mid: Number(row.midRate),
-  }));
-
-  return { latestTwo, history: chartHistory };
-}
-
 function formatRelativeTime(date: Date | null): string {
   if (!date) return "never";
   const now = new Date();
@@ -66,10 +54,6 @@ function formatRelativeTime(date: Date | null): string {
   if (diffHr < 24) return `${diffHr}h ago`;
   const diffDay = Math.floor(diffHr / 24);
   return `${diffDay}d ago`;
-}
-
-function formatObservationDate(date: Date): string {
-  return date.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
 }
 
 function MetricCard({ label, unit }: { label: string; unit?: string }) {
@@ -88,7 +72,7 @@ function MetricCard({ label, unit }: { label: string; unit?: string }) {
   );
 }
 
-function FreshnessBadge({ freshness }: { freshness: "CURRENT" | "STALE" | "MISSING" }) {
+function FreshnessBadge({ freshness }: { freshness: Freshness }) {
   const styles: Record<string, string> = {
     CURRENT: "bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400",
     STALE: "bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400",
@@ -101,56 +85,188 @@ function FreshnessBadge({ freshness }: { freshness: "CURRENT" | "STALE" | "MISSI
   );
 }
 
-function FxMetricCard({
-  latest,
-  previous,
+function CardShell({
+  label,
+  freshness,
+  value,
+  changeLine,
+  changeColor = "text-zinc-500 dark:text-zinc-400",
+  footer,
 }: {
-  latest: { observationDate: Date; midRate: unknown } | undefined;
-  previous: { observationDate: Date; midRate: unknown } | undefined;
+  label: string;
+  freshness?: Freshness;
+  value: string;
+  changeLine: string;
+  changeColor?: string;
+  footer: string;
 }) {
+  return (
+    <div className="rounded border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
+      <div className="flex items-center justify-between">
+        <div className="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+          {label}
+        </div>
+        {freshness && <FreshnessBadge freshness={freshness} />}
+      </div>
+      <div className="mt-2 text-2xl font-semibold text-zinc-900 dark:text-zinc-100">{value}</div>
+      <div className={`mt-1 text-xs ${changeColor}`}>{changeLine}</div>
+      <div className="mt-1 text-[11px] text-zinc-400 dark:text-zinc-500">{footer}</div>
+    </div>
+  );
+}
+
+function FxMetricCard({ latest, previous }: { latest: FxObservation | undefined; previous: FxObservation | undefined }) {
   if (!latest) return <MetricCard label="USD/GHS" unit="GHS" />;
 
   const mid = Number(latest.midRate);
   const freshness = dailyFreshness(latest.observationDate);
 
-  let changeLabel: string | null = null;
+  let changeLine = "·";
   let changeColor = "text-zinc-500 dark:text-zinc-400";
   if (previous) {
     const prevMid = Number(previous.midRate);
     const pct = ((mid - prevMid) / prevMid) * 100;
     const arrow = pct > 0 ? "▲" : pct < 0 ? "▼" : "—";
     changeColor = pct > 0 ? "text-red-600 dark:text-red-400" : pct < 0 ? "text-emerald-600 dark:text-emerald-400" : changeColor;
-    changeLabel = `${arrow} ${Math.abs(pct).toFixed(2)}% vs ${formatObservationDate(previous.observationDate)}`;
+    changeLine = `${arrow} ${Math.abs(pct).toFixed(2)}% vs ${formatObservationDate(previous.observationDate)}`;
+  }
+
+  return (
+    <CardShell
+      label="USD/GHS"
+      freshness={freshness}
+      value={mid.toFixed(4)}
+      changeLine={changeLine}
+      changeColor={changeColor}
+      footer={`Mid rate · ${formatObservationDate(latest.observationDate)} · Bank of Ghana`}
+    />
+  );
+}
+
+function TreasuryMetricCard({ label, latest, previous }: { label: string; latest: TreasuryObservation | undefined; previous: TreasuryObservation | undefined }) {
+  if (!latest) return <MetricCard label={`${label} T-Bill`} unit="%" />;
+
+  const interest = Number(latest.interestRate);
+  const discount = Number(latest.discountRate);
+  const freshness = observationFreshness("WEEKLY", latest.observationDate);
+
+  let changeLine = "·";
+  if (previous) {
+    const bps = bpsChange(interest, Number(previous.interestRate));
+    const arrow = bps > 0 ? "▲" : bps < 0 ? "▼" : "—";
+    changeLine = `${arrow} ${Math.abs(bps)} bps vs previous auction`;
+  }
+
+  return (
+    <CardShell
+      label={`${label} T-Bill`}
+      freshness={freshness}
+      value={`${interest.toFixed(2)}%`}
+      changeLine={changeLine}
+      footer={`Interest rate · Discount ${discount.toFixed(2)}% · ${formatObservationDate(latest.observationDate)}`}
+    />
+  );
+}
+
+function MprMetricCard({ latest, previous }: { latest: MprObservation | undefined; previous: MprObservation | undefined }) {
+  if (!latest) return <MetricCard label="BoG Policy Rate" unit="%" />;
+
+  const rate = Number(latest.value);
+  let changeLine = "·";
+  if (previous) {
+    const bps = bpsChange(rate, Number(previous.value));
+    changeLine = bps === 0
+      ? `Unchanged since ${formatObservationDate(latest.observationDate)}`
+      : `${bps > 0 ? "▲" : "▼"} ${Math.abs(bps)} bps since ${formatObservationDate(latest.observationDate)}`;
+  } else {
+    changeLine = `Effective ${formatObservationDate(latest.observationDate)}`;
   }
 
   return (
     <div className="rounded border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
-      <div className="flex items-center justify-between">
-        <div className="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-          USD/GHS
-        </div>
-        <FreshnessBadge freshness={freshness} />
+      <div className="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+        BoG Policy Rate
       </div>
-      <div className="mt-2 text-2xl font-semibold text-zinc-900 dark:text-zinc-100">
-        {mid.toFixed(4)}
-      </div>
-      <div className={`mt-1 text-xs ${changeColor}`}>{changeLabel ?? "·"}</div>
-      <div className="mt-1 text-[11px] text-zinc-400 dark:text-zinc-500">
-        Mid rate &middot; {formatObservationDate(latest.observationDate)} &middot; Bank of Ghana
-      </div>
+      <div className="mt-2 text-2xl font-semibold text-zinc-900 dark:text-zinc-100">{rate.toFixed(2)}%</div>
+      <div className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">{changeLine}</div>
+      <div className="mt-1 text-[11px] text-zinc-400 dark:text-zinc-500">MPC decision · Bank of Ghana</div>
     </div>
   );
 }
 
 export default async function OverviewPage() {
-  const [latestRun, sourceCount, runCount, fx] = await Promise.all([
+  const [latestRun, sourceCount, runCount, fx, treasury, mpr] = await Promise.all([
     getLatestIngestionRun(),
     getDataSourceCount(),
     getIngestionRunCount(),
     getUsdGhsSnapshot(),
+    getTreasurySnapshot(),
+    getMprSnapshot(),
   ]);
 
   const [fxLatest, fxPrevious] = fx.latestTwo;
+  const [mprLatest, mprPrevious] = mpr.latestTwo;
+  const treasuryByCode = new Map(treasury.map((t) => [t.code, t]));
+
+  const treasuryChartSeries: RatesSeries[] = treasury
+    .filter((t) => t.history.length > 0)
+    .map((t) => ({ key: t.code, label: t.label, color: TREASURY_CHART_COLORS[t.code] ?? "#71717a", data: t.history }));
+
+  const changedItems: { key: string; node: React.ReactNode }[] = [];
+  if (fxLatest && fxPrevious) {
+    const pct = ((Number(fxLatest.midRate) - Number(fxPrevious.midRate)) / Number(fxPrevious.midRate)) * 100;
+    const arrow = pct > 0 ? "▲" : pct < 0 ? "▼" : "—";
+    changedItems.push({
+      key: "fx",
+      node: (
+        <>
+          <span className="font-medium">USD/GHS</span> {arrow} {Math.abs(pct).toFixed(2)}%{" "}
+          <span className="text-zinc-400 dark:text-zinc-500">
+            vs previous available observation ({formatObservationDate(fxPrevious.observationDate)} &rarr; {formatObservationDate(fxLatest.observationDate)})
+          </span>
+        </>
+      ),
+    });
+  }
+  for (const { code, label } of TREASURY_INSTRUMENTS) {
+    const snapshot = treasuryByCode.get(code);
+    const [latest, previous] = snapshot?.latestTwo ?? [];
+    if (latest && previous) {
+      const bps = bpsChange(Number(latest.interestRate), Number(previous.interestRate));
+      const arrow = bps > 0 ? "▲" : bps < 0 ? "▼" : "—";
+      changedItems.push({
+        key: code,
+        node: (
+          <>
+            <span className="font-medium">{label} T-Bill</span> {arrow} {Math.abs(bps)} bps{" "}
+            <span className="text-zinc-400 dark:text-zinc-500">vs previous auction</span>
+          </>
+        ),
+      });
+    }
+  }
+  if (mprLatest) {
+    if (mprPrevious) {
+      const bps = bpsChange(Number(mprLatest.value), Number(mprPrevious.value));
+      changedItems.push({
+        key: "mpr",
+        node:
+          bps === 0 ? (
+            <>
+              <span className="font-medium">Policy Rate</span>{" "}
+              <span className="text-zinc-400 dark:text-zinc-500">
+                unchanged at {Number(mprLatest.value).toFixed(2)}% since latest MPC decision
+              </span>
+            </>
+          ) : (
+            <>
+              <span className="font-medium">Policy Rate</span> {bps > 0 ? "▲" : "▼"} {Math.abs(bps)} bps{" "}
+              <span className="text-zinc-400 dark:text-zinc-500">to {Number(mprLatest.value).toFixed(2)}% at latest MPC decision</span>
+            </>
+          ),
+      });
+    }
+  }
 
   return (
     <div className="space-y-6">
@@ -173,10 +289,12 @@ export default async function OverviewPage() {
           <MetricCard label="GSE Composite Index" unit="index" />
           <FxMetricCard latest={fxLatest} previous={fxPrevious} />
           <MetricCard label="CPI Inflation (YoY)" unit="%" />
-          <MetricCard label="BoG Policy Rate" unit="%" />
-          <MetricCard label="91-Day T-Bill" unit="%" />
-          <MetricCard label="182-Day T-Bill" unit="%" />
-          <MetricCard label="364-Day T-Bill" unit="%" />
+          <MprMetricCard latest={mprLatest} previous={mprPrevious} />
+          {TREASURY_INSTRUMENTS.map(({ code, label }) => {
+            const snapshot = treasuryByCode.get(code);
+            const [latest, previous] = snapshot?.latestTwo ?? [];
+            return <TreasuryMetricCard key={code} label={label} latest={latest} previous={previous} />;
+          })}
         </div>
       </section>
 
@@ -185,19 +303,12 @@ export default async function OverviewPage() {
           What Changed?
         </h2>
         <div className="rounded border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
-          {fxLatest && fxPrevious ? (
-            <p className="text-sm text-zinc-700 dark:text-zinc-300">
-              <span className="font-medium">USD/GHS</span>{" "}
-              {(() => {
-                const pct = ((Number(fxLatest.midRate) - Number(fxPrevious.midRate)) / Number(fxPrevious.midRate)) * 100;
-                const arrow = pct > 0 ? "▲" : pct < 0 ? "▼" : "—";
-                return `${arrow} ${Math.abs(pct).toFixed(2)}%`;
-              })()}{" "}
-              <span className="text-zinc-400 dark:text-zinc-500">
-                vs previous available observation ({formatObservationDate(fxPrevious.observationDate)} &rarr;{" "}
-                {formatObservationDate(fxLatest.observationDate)})
-              </span>
-            </p>
+          {changedItems.length > 0 ? (
+            <ul className="space-y-1.5 text-sm text-zinc-700 dark:text-zinc-300">
+              {changedItems.map((item) => (
+                <li key={item.key}>{item.node}</li>
+              ))}
+            </ul>
           ) : (
             <p className="text-sm text-zinc-400 dark:text-zinc-500">
               Not enough observations yet to compare
@@ -219,19 +330,17 @@ export default async function OverviewPage() {
               Awaiting index data
             </p>
           </div>
-          <div className="rounded border border-zinc-200 bg-white p-6 text-center dark:border-zinc-800 dark:bg-zinc-900">
-            <p className="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+          <div className="rounded border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
+            <p className="mb-1 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
               Treasury Yields
             </p>
-            <p className="mt-3 text-sm text-zinc-400 dark:text-zinc-500">
-              Awaiting Treasury data
-            </p>
+            <RatesChart series={treasuryChartSeries} unit="%" />
           </div>
           <div className="rounded border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
             <p className="mb-1 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
               USD/GHS
             </p>
-            <FxChart data={fx.history} unit="GHS" />
+            <RatesChart series={[{ key: "mid", label: "USD/GHS", color: "#3b82f6", data: fx.history }]} unit="GHS" />
           </div>
         </div>
       </section>
@@ -263,7 +372,7 @@ export default async function OverviewPage() {
           Data Status
         </h2>
         <div className="rounded border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
-          <div className="flex items-center gap-4 text-sm">
+          <div className="flex flex-wrap items-center gap-4 text-sm">
             <div>
               <span className="text-zinc-400">Sources: </span>
               <span className="font-medium text-zinc-700 dark:text-zinc-300">{sourceCount}</span>

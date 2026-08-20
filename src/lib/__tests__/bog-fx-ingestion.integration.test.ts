@@ -26,6 +26,24 @@ const mockPost = vi.mocked(postBogForm);
 
 const SYNTHETIC_FLOOR = new Date("2099-01-01T00:00:00.000Z");
 
+// ingestBogFxDaily/ingestBogFxBackfill upsert against the SAME DataSource
+// row live ingestion uses (there's no test-only source to isolate into —
+// DataSource identity is the provider's own upsert-by-name). Every run
+// these tests create is tracked here and deleted in afterAll, so a test
+// run — including the deliberately FAILED ones — never lingers as the
+// "latest run" Data Centre reports for the real source.
+const createdRunIds: string[] = [];
+async function trackedIngestBogFxDaily(...args: Parameters<typeof ingestBogFxDaily>) {
+  const result = await ingestBogFxDaily(...args);
+  createdRunIds.push(result.runId);
+  return result;
+}
+async function trackedIngestBogFxBackfill(...args: Parameters<typeof ingestBogFxBackfill>) {
+  const result = await ingestBogFxBackfill(...args);
+  createdRunIds.push(result.runId);
+  return result;
+}
+
 function dailyHtml(rows: string[][]): string {
   const body = rows
     .map((cells) => `<tr>${cells.map((c) => `<td>${c}</td>`).join("")}</tr>`)
@@ -51,6 +69,7 @@ beforeEach(() => {
 
 afterAll(async () => {
   await db.exchangeRate.deleteMany({ where: { observationDate: { gte: SYNTHETIC_FLOOR } } });
+  await db.ingestionRun.deleteMany({ where: { id: { in: createdRunIds } } });
 });
 
 describe("ingestBogFxDaily", () => {
@@ -59,7 +78,7 @@ describe("ingestBogFxDaily", () => {
       dailyHtml([["01 Jan 2099", "US Dollar", "USDGHS", "11.0695", "11.0805", "11.0750"]]),
     );
 
-    const result = await ingestBogFxDaily("USDGHS");
+    const result = await trackedIngestBogFxDaily("USDGHS");
 
     expect(result.status).toBe("SUCCESS");
     expect(result.recordsRead).toBe(1);
@@ -84,12 +103,12 @@ describe("ingestBogFxDaily", () => {
     mockFetch.mockResolvedValueOnce(
       dailyHtml([["02 Jan 2099", "US Dollar", "USDGHS", "11.0000", "11.0200", "11.0100"]]),
     );
-    const run1 = await ingestBogFxDaily("USDGHS");
+    const run1 = await trackedIngestBogFxDaily("USDGHS");
 
     mockFetch.mockResolvedValueOnce(
       dailyHtml([["02 Jan 2099", "US Dollar", "USDGHS", "11.0000", "11.0200", "11.0100"]]),
     );
-    const run2 = await ingestBogFxDaily("USDGHS");
+    const run2 = await trackedIngestBogFxDaily("USDGHS");
 
     let count = await db.exchangeRate.count({ where: { observationDate: new Date("2099-01-02T00:00:00.000Z") } });
     expect(count).toBe(1);
@@ -98,7 +117,7 @@ describe("ingestBogFxDaily", () => {
     mockFetch.mockResolvedValueOnce(
       dailyHtml([["02 Jan 2099", "US Dollar", "USDGHS", "11.0050", "11.0250", "11.0150"]]),
     );
-    const run3 = await ingestBogFxDaily("USDGHS");
+    const run3 = await trackedIngestBogFxDaily("USDGHS");
 
     count = await db.exchangeRate.count({ where: { observationDate: new Date("2099-01-02T00:00:00.000Z") } });
     expect(count).toBe(1);
@@ -120,7 +139,7 @@ describe("ingestBogFxDaily", () => {
       ]),
     );
 
-    const result = await ingestBogFxDaily("USDGHS");
+    const result = await trackedIngestBogFxDaily("USDGHS");
 
     expect(result.recordsRead).toBe(1); // GBPGHS not counted
     expect(result.recordsAccepted).toBe(1);
@@ -138,7 +157,7 @@ describe("ingestBogFxDaily", () => {
       ]),
     );
 
-    const result = await ingestBogFxDaily("USDGHS");
+    const result = await trackedIngestBogFxDaily("USDGHS");
 
     expect(result.status).toBe("SUCCESS");
     expect(result.recordsRead).toBe(2);
@@ -154,7 +173,7 @@ describe("ingestBogFxDaily", () => {
   it("marks the run FAILED with completedAt and an error message when the fetch throws", async () => {
     mockFetch.mockRejectedValueOnce(new Error("simulated network failure"));
 
-    const result = await ingestBogFxDaily("USDGHS");
+    const result = await trackedIngestBogFxDaily("USDGHS");
 
     expect(result.status).toBe("FAILED");
 
@@ -176,7 +195,7 @@ describe("ingestBogFxBackfill", () => {
       ]),
     );
 
-    const result = await ingestBogFxBackfill("USDGHS", "2099-01-01", 100);
+    const result = await trackedIngestBogFxBackfill("USDGHS", "2099-01-01", 100);
     expect(result.status).toBe("SUCCESS");
     expect(result.recordsRead).toBe(3);
     expect(result.recordsAccepted).toBe(2); // 2098 row excluded by fromDate
@@ -195,7 +214,7 @@ describe("ingestBogFxBackfill", () => {
         ["19 Jan 2099", "US Dollar", "USDGHS", "11.10", "11.12", "11.11"],
       ]),
     );
-    await ingestBogFxBackfill("USDGHS", "2099-01-01", 100);
+    await trackedIngestBogFxBackfill("USDGHS", "2099-01-01", 100);
 
     const count = await db.exchangeRate.count({
       where: {
@@ -210,7 +229,7 @@ describe("ingestBogFxBackfill", () => {
   it("marks the run FAILED when the historical page structure can't be parsed (missing nonce)", async () => {
     mockFetch.mockResolvedValueOnce("<html><body>no wpDataTables config here</body></html>");
 
-    const result = await ingestBogFxBackfill("USDGHS", "2099-01-01");
+    const result = await trackedIngestBogFxBackfill("USDGHS", "2099-01-01");
 
     expect(result.status).toBe("FAILED");
     const run = await db.ingestionRun.findUniqueOrThrow({ where: { id: result.runId } });

@@ -1,6 +1,6 @@
 import { getPrisma } from "@/lib/prisma";
 import { type ExpectedFrequency, type IngestionStatus } from "@/generated/prisma/enums";
-import { dailyFreshness } from "@/lib/freshness";
+import { observationFreshness, type Cadence } from "@/lib/freshness";
 
 // Database-backed page: must reflect the latest ingestion state on every
 // request, not the state at build time.
@@ -19,11 +19,12 @@ async function getDataSourcesWithRuns() {
   });
 
   // Latest observation date per source, across whichever domain(s) it
-  // feeds (macro series, FX pairs, ...). N+1 is acceptable at V1 scale
-  // (a handful of sources); revisit only if the source count grows.
+  // feeds (macro series, FX pairs, Treasury rates, ...). N+1 is
+  // acceptable at V1 scale (a handful of sources); revisit only if the
+  // source count grows.
   const withLatestObservation = await Promise.all(
     sources.map(async (src) => {
-      const [macroLatest, fxLatest] = await Promise.all([
+      const [macroLatest, fxLatest, treasuryLatest] = await Promise.all([
         prisma.macroObservation.findFirst({
           where: { series: { sourceId: src.id } },
           orderBy: { observationDate: "desc" },
@@ -34,8 +35,13 @@ async function getDataSourcesWithRuns() {
           orderBy: { observationDate: "desc" },
           select: { observationDate: true },
         }),
+        prisma.treasuryRate.findFirst({
+          where: { sourceId: src.id },
+          orderBy: { observationDate: "desc" },
+          select: { observationDate: true },
+        }),
       ]);
-      const dates = [macroLatest?.observationDate, fxLatest?.observationDate].filter(
+      const dates = [macroLatest?.observationDate, fxLatest?.observationDate, treasuryLatest?.observationDate].filter(
         (d): d is Date => d != null,
       );
       const latestObservationDate = dates.length > 0 ? dates.reduce((a, b) => (b > a ? b : a)) : null;
@@ -57,22 +63,12 @@ async function getRecentRuns() {
 }
 
 // Freshness rule: cadence-aware, not a universal 24-hour cutoff (see
-// CLAUDE.md §11/§27 and src/lib/freshness.ts). DAILY sources use the
-// business-day-aware dailyFreshness() check against the latest stored
-// observation date; other cadences fall back to a threshold scaled to
-// their expected frequency, measured from the latest successful run
-// (they don't yet have a per-domain "latest observation" concept as
-// clean as FX/macro's observationDate for every case).
-const FALLBACK_STALE_THRESHOLD_MS: Record<ExpectedFrequency, number> = {
-  DAILY: 3 * 24 * 60 * 60 * 1000,
-  WEEKLY: 10 * 24 * 60 * 60 * 1000,
-  MONTHLY: 45 * 24 * 60 * 60 * 1000,
-  QUARTERLY: 100 * 24 * 60 * 60 * 1000,
-  ANNUAL: 400 * 24 * 60 * 60 * 1000,
-  AD_HOC: 30 * 24 * 60 * 60 * 1000,
-  UNKNOWN: 30 * 24 * 60 * 60 * 1000,
-};
-
+// CLAUDE.md §11/§27 and src/lib/freshness.ts). Every cadence is judged
+// against the latest stored *observation* date, not merely "did a run
+// complete recently" — a run can succeed while returning nothing new.
+// DAILY (FX) is business-day-aware; WEEKLY (Treasury) tolerates a missed
+// auction week; AD_HOC (MPR) never goes stale from elapsed time — an
+// unchanged policy rate is not a failure.
 function deriveStatus(params: {
   latestRun: { status: IngestionStatus; completedAt: Date | null } | undefined;
   active: boolean;
@@ -86,14 +82,9 @@ function deriveStatus(params: {
   if (latestRun.status === "RUNNING") return "RUNNING";
   if (latestRun.status !== "SUCCESS" || !latestRun.completedAt) return "UNKNOWN";
 
-  if (expectedFrequency === "DAILY") {
-    const freshness = dailyFreshness(latestObservationDate);
-    if (freshness === "MISSING") return "UNKNOWN";
-    return freshness === "CURRENT" ? "HEALTHY" : "STALE";
-  }
-
-  const age = Date.now() - latestRun.completedAt.getTime();
-  return age > FALLBACK_STALE_THRESHOLD_MS[expectedFrequency] ? "STALE" : "HEALTHY";
+  const freshness = observationFreshness(expectedFrequency as Cadence, latestObservationDate);
+  if (freshness === "MISSING") return "UNKNOWN";
+  return freshness === "CURRENT" ? "HEALTHY" : "STALE";
 }
 
 function StatusBadge({ status }: { status: string }) {
@@ -168,7 +159,7 @@ export default async function DataCentrePage() {
           </div>
         ) : (
           <div className="overflow-x-auto rounded border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
-            <table className="w-full text-left text-sm">
+            <table className="w-full min-w-[720px] text-left text-sm">
               <thead>
                 <tr className="border-b border-zinc-200 dark:border-zinc-800">
                   <th className="px-4 py-2.5 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Dataset</th>
@@ -191,17 +182,17 @@ export default async function DataCentrePage() {
                   });
                   return (
                     <tr key={src.id} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/50">
-                      <td className="px-4 py-2.5 font-medium text-zinc-900 dark:text-zinc-100">{src.name}</td>
-                      <td className="px-4 py-2.5 text-zinc-600 dark:text-zinc-400">{src.provider}</td>
-                      <td className="px-4 py-2.5 text-zinc-600 dark:text-zinc-400">{src.ingestionMethod}</td>
-                      <td className="px-4 py-2.5 text-zinc-600 dark:text-zinc-400">{src.expectedFrequency}</td>
-                      <td className="px-4 py-2.5 text-zinc-600 dark:text-zinc-400">
+                      <td className="whitespace-nowrap px-4 py-2.5 font-medium text-zinc-900 dark:text-zinc-100">{src.name}</td>
+                      <td className="whitespace-nowrap px-4 py-2.5 text-zinc-600 dark:text-zinc-400">{src.provider}</td>
+                      <td className="whitespace-nowrap px-4 py-2.5 text-zinc-600 dark:text-zinc-400">{src.ingestionMethod}</td>
+                      <td className="whitespace-nowrap px-4 py-2.5 text-zinc-600 dark:text-zinc-400">{src.expectedFrequency}</td>
+                      <td className="whitespace-nowrap px-4 py-2.5 text-zinc-600 dark:text-zinc-400">
                         {formatDate(src.latestObservationDate)}
                       </td>
-                      <td className="px-4 py-2.5 text-zinc-600 dark:text-zinc-400">
+                      <td className="whitespace-nowrap px-4 py-2.5 text-zinc-600 dark:text-zinc-400">
                         {formatDate(latestRun?.completedAt ?? null)}
                       </td>
-                      <td className="px-4 py-2.5"><StatusBadge status={status} /></td>
+                      <td className="whitespace-nowrap px-4 py-2.5"><StatusBadge status={status} /></td>
                     </tr>
                   );
                 })}
@@ -221,7 +212,7 @@ export default async function DataCentrePage() {
           </div>
         ) : (
           <div className="overflow-x-auto rounded border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
-            <table className="w-full text-left text-sm">
+            <table className="w-full min-w-[880px] text-left text-sm">
               <thead>
                 <tr className="border-b border-zinc-200 dark:border-zinc-800">
                   <th className="px-4 py-2.5 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Source</th>
@@ -238,14 +229,14 @@ export default async function DataCentrePage() {
               <tbody>
                 {recentRuns.map((run) => (
                   <tr key={run.id} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/50">
-                    <td className="px-4 py-2.5 font-medium text-zinc-900 dark:text-zinc-100">{run.dataSource.name}</td>
-                    <td className="px-4 py-2.5 text-zinc-600 dark:text-zinc-400">{formatDateTime(run.startedAt)}</td>
-                    <td className="px-4 py-2.5 text-zinc-600 dark:text-zinc-400">{formatDuration(run.startedAt, run.completedAt)}</td>
-                    <td className="px-4 py-2.5 text-zinc-600 dark:text-zinc-400">{run.recordsRead ?? "\u2014"}</td>
-                    <td className="px-4 py-2.5 text-zinc-600 dark:text-zinc-400">{run.recordsAccepted ?? "\u2014"}</td>
-                    <td className="px-4 py-2.5 text-zinc-600 dark:text-zinc-400">{run.recordsRejected ?? "\u2014"}</td>
-                    <td className="px-4 py-2.5 text-zinc-600 dark:text-zinc-400">{run.triggeredBy ?? "\u2014"}</td>
-                    <td className="px-4 py-2.5"><StatusBadge status={run.status} /></td>
+                    <td className="whitespace-nowrap px-4 py-2.5 font-medium text-zinc-900 dark:text-zinc-100">{run.dataSource.name}</td>
+                    <td className="whitespace-nowrap px-4 py-2.5 text-zinc-600 dark:text-zinc-400">{formatDateTime(run.startedAt)}</td>
+                    <td className="whitespace-nowrap px-4 py-2.5 text-zinc-600 dark:text-zinc-400">{formatDuration(run.startedAt, run.completedAt)}</td>
+                    <td className="whitespace-nowrap px-4 py-2.5 text-zinc-600 dark:text-zinc-400">{run.recordsRead ?? "\u2014"}</td>
+                    <td className="whitespace-nowrap px-4 py-2.5 text-zinc-600 dark:text-zinc-400">{run.recordsAccepted ?? "\u2014"}</td>
+                    <td className="whitespace-nowrap px-4 py-2.5 text-zinc-600 dark:text-zinc-400">{run.recordsRejected ?? "\u2014"}</td>
+                    <td className="whitespace-nowrap px-4 py-2.5 text-zinc-600 dark:text-zinc-400">{run.triggeredBy ?? "\u2014"}</td>
+                    <td className="whitespace-nowrap px-4 py-2.5"><StatusBadge status={run.status} /></td>
                     <td className="max-w-[200px] truncate px-4 py-2.5 text-zinc-600 dark:text-zinc-400">
                       {run.errorMessage ?? "\u2014"}
                     </td>
