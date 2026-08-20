@@ -1,6 +1,8 @@
 import { getPrisma } from "@/lib/prisma";
 import { type ExpectedFrequency, type IngestionStatus } from "@/generated/prisma/enums";
 import { observationFreshness, type Cadence } from "@/lib/freshness";
+import { ensureGseSecurityDataSources } from "@/lib/ingestion/gse-security-provider";
+import { ensureGseIndexDataSource } from "@/lib/ingestion/gse-index-provider";
 
 // Database-backed page: must reflect the latest ingestion state on every
 // request, not the state at build time.
@@ -8,6 +10,14 @@ export const dynamic = "force-dynamic";
 
 async function getDataSourcesWithRuns() {
   const prisma = getPrisma();
+
+  // GSE's three import channels are manual-only (see gse-security-provider.ts
+  // for why) and may go a long time before anyone actually runs an import.
+  // Registering them here — metadata only, no run, no observation — lets
+  // Data Centre show them as NOT_CONFIGURED/awaiting-first-import from day
+  // one, rather than being invisible until the first real file is loaded.
+  await Promise.all([ensureGseSecurityDataSources(), ensureGseIndexDataSource()]);
+
   const sources = await prisma.dataSource.findMany({
     orderBy: [{ provider: "asc" }, { name: "asc" }],
     include: {
@@ -34,7 +44,7 @@ async function getDataSourcesWithRuns() {
   // ingested anything even after a real successful run.
   const withLatestObservation = await Promise.all(
     sources.map(async (src) => {
-      const [macroLatest, fxLatest, treasuryLatest, policyLatest] = await Promise.all([
+      const [macroLatest, fxLatest, treasuryLatest, policyLatest, indexLatest, summaryLatest, securityPriceLatest] = await Promise.all([
         prisma.macroObservation.findFirst({
           where: { ingestionRun: { dataSourceId: src.id } },
           orderBy: { observationDate: "desc" },
@@ -55,12 +65,35 @@ async function getDataSourcesWithRuns() {
           orderBy: { decisionDate: "desc" },
           select: { decisionDate: true },
         }),
+        // GSE indices, market summary, and security prices are all joined
+        // via ingestionRun.dataSourceId — same reasoning as macroObservation
+        // above: "Daily Shares & ETFs" and "Market Report Backfill" are two
+        // distinct sources that can both contribute SecurityPrice rows for
+        // the same security, and source.sourceId would silently hide one.
+        prisma.marketIndexObservation.findFirst({
+          where: { ingestionRun: { dataSourceId: src.id } },
+          orderBy: { observationDate: "desc" },
+          select: { observationDate: true },
+        }),
+        prisma.marketSummary.findFirst({
+          where: { ingestionRun: { dataSourceId: src.id } },
+          orderBy: { tradingDate: "desc" },
+          select: { tradingDate: true },
+        }),
+        prisma.securityPrice.findFirst({
+          where: { ingestionRun: { dataSourceId: src.id } },
+          orderBy: { tradingDate: "desc" },
+          select: { tradingDate: true },
+        }),
       ]);
       const dates = [
         macroLatest?.observationDate,
         fxLatest?.observationDate,
         treasuryLatest?.observationDate,
         policyLatest?.decisionDate,
+        indexLatest?.observationDate,
+        summaryLatest?.tradingDate,
+        securityPriceLatest?.tradingDate,
       ].filter((d): d is Date => d != null);
       const latestObservationDate = dates.length > 0 ? dates.reduce((a, b) => (b > a ? b : a)) : null;
       return { ...src, latestObservationDate };

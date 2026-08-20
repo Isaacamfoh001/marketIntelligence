@@ -57,6 +57,19 @@ enum PolicyDecisionType {
   HOLD
 }
 
+/// Classification of a traded instrument. GSE's board lists ordinary
+/// shares alongside a small number of preference shares, depositary
+/// receipts, and one ETF — classified from the import file's own
+/// security-type column when present, defaulting to ORDINARY_SHARE
+/// rather than guessing (CLAUDE.md §12: "do not spend excessive time
+/// constructing perfect issuer master data in M6").
+enum SecurityType {
+  ORDINARY_SHARE
+  PREFERENCE_SHARE
+  DEPOSITARY_SHARE
+  ETF
+}
+
 /// Observation frequency for macro series.
 enum MacroFrequency {
   DAILY
@@ -90,14 +103,17 @@ model DataSource {
   ingestionMethod   IngestionMethod   @default(MANUAL_ENTRY)
   active            Boolean           @default(true)
 
-  createdAt         DateTime          @default(now())
-  updatedAt         DateTime          @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  ingestionRuns     IngestionRun[]
-  macroSeries       MacroSeries[]
-  exchangeRates     ExchangeRate[]
-  treasuryRates     TreasuryRate[]
-  policyDecisions   PolicyDecision[]
+  ingestionRuns           IngestionRun[]
+  macroSeries             MacroSeries[]
+  exchangeRates           ExchangeRate[]
+  treasuryRates           TreasuryRate[]
+  policyDecisions         PolicyDecision[]
+  marketIndexObservations MarketIndexObservation[]
+  marketSummaries         MarketSummary[]
+  securityPrices          SecurityPrice[]
 
   @@index([provider])
   @@index([active])
@@ -109,31 +125,34 @@ model DataSource {
 /// DataSource must NOT silently erase its runs — the FK uses Restrict
 /// so deletion is blocked when runs exist.  Deactivate sources instead.
 model IngestionRun {
-  id              String          @id @default(cuid())
-  dataSourceId    String
+  id           String @id @default(cuid())
+  dataSourceId String
 
-  startedAt       DateTime        @default(now())
-  completedAt     DateTime?
+  startedAt   DateTime  @default(now())
+  completedAt DateTime?
 
   status          IngestionStatus @default(PENDING)
   recordsRead     Int?
   recordsAccepted Int?
   recordsRejected Int?
 
-  errorMessage    String?
-  triggeredBy     String?
-  artifactName    String?
-  checksum        String?
+  errorMessage String?
+  triggeredBy  String?
+  artifactName String?
+  checksum     String?
 
-  createdAt       DateTime        @default(now())
-  updatedAt       DateTime        @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  dataSource      DataSource      @relation(fields: [dataSourceId], references: [id], onDelete: Restrict)
+  dataSource DataSource @relation(fields: [dataSourceId], references: [id], onDelete: Restrict)
 
-  macroObservations MacroObservation[]
-  exchangeRates     ExchangeRate[]
-  treasuryRates     TreasuryRate[]
-  policyDecisions   PolicyDecision[]
+  macroObservations       MacroObservation[]
+  exchangeRates           ExchangeRate[]
+  treasuryRates           TreasuryRate[]
+  policyDecisions         PolicyDecision[]
+  marketIndexObservations MarketIndexObservation[]
+  marketSummaries         MarketSummary[]
+  securityPrices          SecurityPrice[]
 
   @@index([dataSourceId])
   @@index([status])
@@ -151,18 +170,18 @@ model IngestionRun {
 /// descriptive metadata (code, unit, frequency) so that observations
 /// are self-describing.
 model MacroSeries {
-  id          String          @id @default(cuid())
-  code        String          @unique
-  name        String
-  category    String?
-  unit        String
-  frequency   MacroFrequency
-  sourceId    String
+  id        String         @id @default(cuid())
+  code      String         @unique
+  name      String
+  category  String?
+  unit      String
+  frequency MacroFrequency
+  sourceId  String
 
-  createdAt   DateTime        @default(now())
-  updatedAt   DateTime        @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  source      DataSource      @relation(fields: [sourceId], references: [id], onDelete: Restrict)
+  source       DataSource         @relation(fields: [sourceId], references: [id], onDelete: Restrict)
   observations MacroObservation[]
 
   @@index([sourceId])
@@ -183,19 +202,19 @@ model MacroSeries {
 /// does expose this can populate it without a schema change — not
 /// speculative modeling of data that isn't there.
 model MacroObservation {
-  id              String    @id @default(cuid())
+  id              String   @id @default(cuid())
   seriesId        String
   observationDate DateTime @db.Date
-  value           Decimal   @db.Decimal(18, 6)
+  value           Decimal  @db.Decimal(18, 6)
   revisionStatus  String?
-  retrievedAt     DateTime  @default(now())
+  retrievedAt     DateTime @default(now())
   ingestionRunId  String
 
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  series          MacroSeries  @relation(fields: [seriesId], references: [id], onDelete: Restrict)
-  ingestionRun    IngestionRun @relation(fields: [ingestionRunId], references: [id], onDelete: Restrict)
+  series       MacroSeries  @relation(fields: [seriesId], references: [id], onDelete: Restrict)
+  ingestionRun IngestionRun @relation(fields: [ingestionRunId], references: [id], onDelete: Restrict)
 
   @@unique([seriesId, observationDate])
   @@index([seriesId])
@@ -213,14 +232,14 @@ model MacroObservation {
 /// by more than one provider. Source attribution lives on ExchangeRate,
 /// not here.
 model CurrencyPair {
-  id            String   @id @default(cuid())
-  code          String   @unique
+  id            String  @id @default(cuid())
+  code          String  @unique
   baseCurrency  String
   quoteCurrency String
-  active        Boolean  @default(true)
+  active        Boolean @default(true)
 
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   exchangeRates ExchangeRate[]
 
@@ -248,20 +267,20 @@ model ExchangeRate {
   currencyPairId  String
   observationDate DateTime @db.Date
 
-  buyingRate      Decimal? @db.Decimal(18, 6)
-  sellingRate     Decimal? @db.Decimal(18, 6)
-  midRate         Decimal  @db.Decimal(18, 6)
+  buyingRate  Decimal? @db.Decimal(18, 6)
+  sellingRate Decimal? @db.Decimal(18, 6)
+  midRate     Decimal  @db.Decimal(18, 6)
 
-  sourceId        String
-  ingestionRunId  String
-  retrievedAt     DateTime @default(now())
+  sourceId       String
+  ingestionRunId String
+  retrievedAt    DateTime @default(now())
 
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  currencyPair    CurrencyPair @relation(fields: [currencyPairId], references: [id], onDelete: Restrict)
-  source          DataSource   @relation(fields: [sourceId], references: [id], onDelete: Restrict)
-  ingestionRun    IngestionRun @relation(fields: [ingestionRunId], references: [id], onDelete: Restrict)
+  currencyPair CurrencyPair @relation(fields: [currencyPairId], references: [id], onDelete: Restrict)
+  source       DataSource   @relation(fields: [sourceId], references: [id], onDelete: Restrict)
+  ingestionRun IngestionRun @relation(fields: [ingestionRunId], references: [id], onDelete: Restrict)
 
   @@unique([currencyPairId, observationDate])
   @@index([currencyPairId])
@@ -290,10 +309,10 @@ model TreasuryInstrument {
   instrumentType String
   active         Boolean @default(true)
 
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  treasuryRates  TreasuryRate[]
+  treasuryRates TreasuryRate[]
 
   @@index([active])
 }
@@ -312,19 +331,19 @@ model TreasuryRate {
   observationDate DateTime @db.Date
   tenderNumber    String?
 
-  discountRate    Decimal  @db.Decimal(9, 4)
-  interestRate    Decimal  @db.Decimal(9, 4)
+  discountRate Decimal @db.Decimal(9, 4)
+  interestRate Decimal @db.Decimal(9, 4)
 
-  sourceId        String
-  ingestionRunId  String
-  retrievedAt     DateTime @default(now())
+  sourceId       String
+  ingestionRunId String
+  retrievedAt    DateTime @default(now())
 
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  instrument      TreasuryInstrument @relation(fields: [instrumentId], references: [id], onDelete: Restrict)
-  source          DataSource         @relation(fields: [sourceId], references: [id], onDelete: Restrict)
-  ingestionRun    IngestionRun       @relation(fields: [ingestionRunId], references: [id], onDelete: Restrict)
+  instrument   TreasuryInstrument @relation(fields: [instrumentId], references: [id], onDelete: Restrict)
+  source       DataSource         @relation(fields: [sourceId], references: [id], onDelete: Restrict)
+  ingestionRun IngestionRun       @relation(fields: [ingestionRunId], references: [id], onDelete: Restrict)
 
   @@unique([instrumentId, observationDate])
   @@index([instrumentId])
@@ -351,24 +370,206 @@ model TreasuryRate {
 /// `changeBps` is null only for the very first decision Korbly has on
 /// record (2002), which has no prior decision to compare against.
 model PolicyDecision {
-  id             String             @id @default(cuid())
-  decisionDate   DateTime           @db.Date
-  resultingRate  Decimal            @db.Decimal(9, 4)
-  decisionType   PolicyDecisionType
-  changeBps      Int?
+  id            String             @id @default(cuid())
+  decisionDate  DateTime           @db.Date
+  resultingRate Decimal            @db.Decimal(9, 4)
+  decisionType  PolicyDecisionType
+  changeBps     Int?
 
   sourceId       String
   ingestionRunId String
-  retrievedAt    DateTime           @default(now())
+  retrievedAt    DateTime @default(now())
 
-  createdAt      DateTime           @default(now())
-  updatedAt      DateTime           @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  source         DataSource   @relation(fields: [sourceId], references: [id], onDelete: Restrict)
-  ingestionRun   IngestionRun @relation(fields: [ingestionRunId], references: [id], onDelete: Restrict)
+  source       DataSource   @relation(fields: [sourceId], references: [id], onDelete: Restrict)
+  ingestionRun IngestionRun @relation(fields: [ingestionRunId], references: [id], onDelete: Restrict)
 
   @@unique([decisionDate])
   @@index([decisionDate])
+  @@index([sourceId])
+  @@index([ingestionRunId])
+}
+
+// ---------------------------------------------------------------------------
+// Ghana Stock Exchange — Markets & Equities (M6)
+// ---------------------------------------------------------------------------
+
+/// A published GSE market index, e.g. the Composite Index (GSE-CI) or the
+/// Financial Stocks Index (GSE-FSI). Index *levels* are always ingested
+/// from GSE's own published index/market-summary data — never derived by
+/// Korbly from constituent security prices (CLAUDE.md: "do not reconstruct
+/// GSE-CI from constituent prices if that leads to errors or
+/// inconsistencies" — an index derivation would also silently depend on
+/// Korbly having complete, correctly-weighted constituent coverage, which
+/// it does not).
+model MarketIndex {
+  id       String  @id @default(cuid())
+  code     String  @unique
+  name     String
+  exchange String  @default("Ghana Stock Exchange")
+  currency String  @default("GHS")
+  active   Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  observations MarketIndexObservation[]
+
+  @@index([active])
+}
+
+/// A single trading day's published level for one index.
+///
+/// `changePct` is populated only when the source itself publishes a daily
+/// change figure alongside the level (a raw fact from the source) — it is
+/// never computed and written back by Korbly. Application code that needs
+/// 1D/1M/YTD/1Y returns computes them at read time from stored levels via
+/// the shared returns engine (src/lib/returns.ts), so there is exactly one
+/// place that implements "latest valid observation on or before the
+/// comparison date" — not two definitions that can drift apart.
+model MarketIndexObservation {
+  id              String   @id @default(cuid())
+  marketIndexId   String
+  observationDate DateTime @db.Date
+  level           Decimal  @db.Decimal(18, 4)
+  changePct       Decimal? @db.Decimal(9, 4)
+
+  sourceId       String
+  ingestionRunId String
+  retrievedAt    DateTime @default(now())
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  marketIndex  MarketIndex  @relation(fields: [marketIndexId], references: [id], onDelete: Restrict)
+  source       DataSource   @relation(fields: [sourceId], references: [id], onDelete: Restrict)
+  ingestionRun IngestionRun @relation(fields: [ingestionRunId], references: [id], onDelete: Restrict)
+
+  @@unique([marketIndexId, observationDate])
+  @@index([marketIndexId])
+  @@index([observationDate])
+  @@index([sourceId])
+  @@index([ingestionRunId])
+}
+
+/// Whole-market daily figures (total volume, total value traded, market
+/// capitalization) as published by GSE's Daily Market Summary.
+///
+/// Deliberately separate from MarketIndexObservation: these are
+/// market-wide facts, not a property of any one index, and a summary row
+/// may exist for a day even when only one of the two indices is present
+/// (or vice versa) — folding them together would force an artificial
+/// pairing between two things that are conceptually and temporally
+/// independent (CLAUDE.md: "do not shoehorn total-market fields into an
+/// individual index observation").
+model MarketSummary {
+  id          String   @id @default(cuid())
+  tradingDate DateTime @unique @db.Date
+
+  totalVolume         BigInt?
+  totalValueTradedGhs Decimal? @db.Decimal(20, 2)
+  marketCapGhs        Decimal? @db.Decimal(20, 2)
+
+  sourceId       String
+  ingestionRunId String
+  retrievedAt    DateTime @default(now())
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  source       DataSource   @relation(fields: [sourceId], references: [id], onDelete: Restrict)
+  ingestionRun IngestionRun @relation(fields: [ingestionRunId], references: [id], onDelete: Restrict)
+
+  @@index([sourceId])
+  @@index([ingestionRunId])
+}
+
+/// A listed issuer. Kept separate from Security so one company's multiple
+/// traded instruments (e.g. an ordinary share and a preference share)
+/// share one issuer identity rather than duplicating company metadata.
+model Company {
+  id       String  @id @default(cuid())
+  name     String
+  sector   String?
+  exchange String  @default("Ghana Stock Exchange")
+  currency String  @default("GHS")
+  active   Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  securities Security[]
+
+  @@index([active])
+}
+
+/// A specific traded instrument. `ticker` is the GSE share code (e.g.
+/// "MTNGH") and is globally unique on the exchange regardless of issuer.
+model Security {
+  id           String       @id @default(cuid())
+  companyId    String
+  ticker       String       @unique
+  securityType SecurityType @default(ORDINARY_SHARE)
+  currency     String       @default("GHS")
+  active       Boolean      @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company Company         @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  prices  SecurityPrice[]
+
+  @@index([companyId])
+  @@index([active])
+}
+
+/// A single trading day's published price record for one security.
+///
+/// Field set mirrors GSE's own Daily Shares & ETFs publication exactly
+/// (see gse-security-parser.ts). `closeVwap` is the ONLY required price
+/// field and is the primary value the rest of the application displays —
+/// GSE's "Closing Price - VWAP" is a volume-weighted average close, and is
+/// documented here as the display convention precisely so no call site
+/// ever silently substitutes `lastTransactionPrice` for it. Every other
+/// price/quote field is nullable: GSE may not publish a bid/offer or a
+/// year high/low for a thinly-traded line on a given day, and a blank
+/// cell must be stored as missing, never coerced to 0 (CLAUDE.md §14).
+/// `volume`/`valueTradedGhs` are also nullable for the same reason, but an
+/// explicit "0" in the source file (a real no-trade day) is stored as the
+/// number 0 — the parser distinguishes the two cases, not this schema.
+model SecurityPrice {
+  id          String   @id @default(cuid())
+  securityId  String
+  tradingDate DateTime @db.Date
+
+  previousCloseVwap    Decimal? @db.Decimal(18, 4)
+  openPrice            Decimal? @db.Decimal(18, 4)
+  lastTransactionPrice Decimal? @db.Decimal(18, 4)
+  closeVwap            Decimal  @db.Decimal(18, 4)
+  priceChange          Decimal? @db.Decimal(18, 4)
+  yearHigh             Decimal? @db.Decimal(18, 4)
+  yearLow              Decimal? @db.Decimal(18, 4)
+  closingBid           Decimal? @db.Decimal(18, 4)
+  closingOffer         Decimal? @db.Decimal(18, 4)
+  volume               BigInt?
+  valueTradedGhs       Decimal? @db.Decimal(20, 2)
+
+  sourceId       String
+  ingestionRunId String
+  retrievedAt    DateTime @default(now())
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  security     Security     @relation(fields: [securityId], references: [id], onDelete: Restrict)
+  source       DataSource   @relation(fields: [sourceId], references: [id], onDelete: Restrict)
+  ingestionRun IngestionRun @relation(fields: [ingestionRunId], references: [id], onDelete: Restrict)
+
+  @@unique([securityId, tradingDate])
+  @@index([securityId])
+  @@index([tradingDate])
   @@index([sourceId])
   @@index([ingestionRunId])
 }

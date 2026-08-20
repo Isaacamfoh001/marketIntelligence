@@ -17,6 +17,12 @@ import {
   type PolicyDecisionRow,
   type MacroSeriesObservation,
 } from "@/lib/queries/market-data";
+import {
+  getMarketIndexSnapshot,
+  getSecuritiesWithReturns,
+  getMarketActivity,
+  type MarketIndexSnapshot,
+} from "@/lib/queries/equities";
 
 function decisionLabel(type: PolicyDecisionRow["decisionType"]): string {
   return type === "HOLD" ? "HELD" : type;
@@ -262,8 +268,37 @@ function InflationMetricCard({ latest, previous }: { latest: MacroSeriesObservat
   );
 }
 
+// GSE-CI follows ordinary-equity polarity: rising is positive (green) —
+// the same shared direction rule the Equities page and SecuritiesTable
+// use for individual securities, applied here to the headline index.
+function GseCiMetricCard({ index }: { index: MarketIndexSnapshot | null }) {
+  const [latest, previous] = index?.latestTwo ?? [];
+  if (!latest) return <MetricCard label="GSE Composite Index" unit="index" />;
+
+  const level = Number(latest.level);
+  const freshness = dailyFreshness(latest.observationDate);
+
+  let changeLine: React.ReactNode = NO_CHANGE_LINE;
+  if (previous) {
+    const prevLevel = Number(previous.level);
+    const pct = ((level - prevLevel) / prevLevel) * 100;
+    const { arrow, sentiment } = describeDirection(level, prevLevel, "higherIsPositive");
+    changeLine = <DirectionText arrow={arrow} text={`${Math.abs(pct).toFixed(2)}%`} suffix="vs previous trading day" sentiment={sentiment} />;
+  }
+
+  return (
+    <CardShell
+      label="GSE Composite Index"
+      freshness={freshness}
+      value={level.toLocaleString("en-GH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+      changeLine={changeLine}
+      footer={`${formatObservationDate(latest.observationDate)} · Ghana Stock Exchange`}
+    />
+  );
+}
+
 export default async function OverviewPage() {
-  const [latestRun, sourceCount, runCount, fx, treasury, mpr, inflation] = await Promise.all([
+  const [latestRun, sourceCount, runCount, fx, treasury, mpr, inflation, gseCi, securities] = await Promise.all([
     getLatestIngestionRun(),
     getDataSourceCount(),
     getIngestionRunCount(),
@@ -271,18 +306,47 @@ export default async function OverviewPage() {
     getTreasurySnapshot(),
     getMprSnapshot(),
     getInflationSnapshot(),
+    getMarketIndexSnapshot("GSE-CI"),
+    getSecuritiesWithReturns(),
   ]);
 
   const [fxLatest, fxPrevious] = fx.latestTwo;
   const { latestDecision: mprLatestDecision, lastChange: mprLastChange } = mpr;
   const [inflationLatest, inflationPrevious] = inflation.latestTwo;
   const treasuryByCode = new Map(treasury.map((t) => [t.code, t]));
+  const [gseCiLatest, gseCiPrevious] = gseCi?.latestTwo ?? [];
+  // See equities/page.tsx for why this filters on actual price data
+  // rather than Security row existence.
+  const securitiesWithPrices = securities.filter((s) => s.latestPrice !== null);
+  const marketActivity = getMarketActivity(securitiesWithPrices, 5);
+  const hasAnySecurities = securitiesWithPrices.length > 0;
 
   const treasuryChartSeries: RatesSeries[] = treasury
     .filter((t) => t.history.length > 0)
     .map((t) => ({ key: t.code, label: t.label, color: TREASURY_CHART_COLORS[t.code] ?? "#71717a", data: t.history }));
 
   const changedItems: { key: string; node: React.ReactNode }[] = [];
+
+  if (gseCiLatest && gseCiPrevious) {
+    const level = Number(gseCiLatest.level);
+    const prevLevel = Number(gseCiPrevious.level);
+    const pct = ((level - prevLevel) / prevLevel) * 100;
+    const { arrow, sentiment } = describeDirection(level, prevLevel, "higherIsPositive");
+    changedItems.push({
+      key: "gse-ci",
+      node: (
+        <>
+          <span className="font-medium">GSE-CI</span>{" "}
+          <DirectionText
+            arrow={arrow}
+            text={`${Math.abs(pct).toFixed(2)}%`}
+            suffix={`vs previous trading day (${formatObservationDate(gseCiPrevious.observationDate)} → ${formatObservationDate(gseCiLatest.observationDate)})`}
+            sentiment={sentiment}
+          />
+        </>
+      ),
+    });
+  }
 
   if (inflationLatest && inflationPrevious) {
     const rate = Number(inflationLatest.value);
@@ -396,7 +460,7 @@ export default async function OverviewPage() {
           Key Indicators
         </h2>
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
-          <MetricCard label="GSE Composite Index" unit="index" />
+          <GseCiMetricCard index={gseCi} />
           <FxMetricCard latest={fxLatest} previous={fxPrevious} />
           <InflationMetricCard latest={inflationLatest} previous={inflationPrevious} />
           <MprMetricCard latestDecision={mprLatestDecision ?? undefined} lastChange={mprLastChange ?? undefined} />
@@ -432,13 +496,11 @@ export default async function OverviewPage() {
           Charts
         </h2>
         <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
-          <div className="rounded border border-zinc-200 bg-white p-6 text-center dark:border-zinc-800 dark:bg-zinc-900">
-            <p className="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+          <div className="rounded border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
+            <p className="mb-1 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
               GSE Performance
             </p>
-            <p className="mt-3 text-sm text-zinc-400 dark:text-zinc-500">
-              Awaiting index data
-            </p>
+            <RatesChart series={[{ key: "gseci", label: "GSE-CI", color: "#10b981", data: gseCi?.history ?? [] }]} unit="pts" />
           </div>
           <div className="rounded border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
             <p className="mb-1 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
@@ -459,11 +521,63 @@ export default async function OverviewPage() {
         <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
           Market Activity
         </h2>
-        <div className="rounded border border-zinc-200 bg-white p-6 text-center dark:border-zinc-800 dark:bg-zinc-900">
-          <p className="text-sm text-zinc-400 dark:text-zinc-500">
-            Awaiting GSE equity data
-          </p>
-        </div>
+        {hasAnySecurities ? (
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <div className="rounded border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
+              <p className="mb-2 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Top Gainers</p>
+              {marketActivity.gainers.length === 0 ? (
+                <p className="py-2 text-center text-xs text-zinc-400 dark:text-zinc-500">No gainers today</p>
+              ) : (
+                <ul className="space-y-1.5 text-sm">
+                  {marketActivity.gainers.slice(0, 3).map((g) => (
+                    <li key={g.ticker} className="flex items-center justify-between">
+                      <span className="font-medium text-zinc-900 dark:text-zinc-100">{g.ticker}</span>
+                      <DirectionText arrow={DIRECTION_ARROW.up} text={`${g.oneDayChangePct.toFixed(2)}%`} sentiment="positive" />
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <div className="rounded border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
+              <p className="mb-2 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Top Losers</p>
+              {marketActivity.losers.length === 0 ? (
+                <p className="py-2 text-center text-xs text-zinc-400 dark:text-zinc-500">No losers today</p>
+              ) : (
+                <ul className="space-y-1.5 text-sm">
+                  {marketActivity.losers.slice(0, 3).map((l) => (
+                    <li key={l.ticker} className="flex items-center justify-between">
+                      <span className="font-medium text-zinc-900 dark:text-zinc-100">{l.ticker}</span>
+                      <DirectionText arrow={DIRECTION_ARROW.down} text={`${Math.abs(l.oneDayChangePct).toFixed(2)}%`} sentiment="negative" />
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <div className="rounded border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
+              <p className="mb-2 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Most Traded — By Value</p>
+              {marketActivity.mostTradedByValue.length === 0 ? (
+                <p className="py-2 text-center text-xs text-zinc-400 dark:text-zinc-500">No trading activity recorded</p>
+              ) : (
+                <ul className="space-y-1.5 text-sm">
+                  {marketActivity.mostTradedByValue.slice(0, 3).map((m) => (
+                    <li key={m.ticker} className="flex items-center justify-between">
+                      <span className="font-medium text-zinc-900 dark:text-zinc-100">{m.ticker}</span>
+                      <span className="tabular-nums text-zinc-600 dark:text-zinc-400">
+                        GHS {(m.latestValueTradedGhs ?? 0).toLocaleString("en-GH", { maximumFractionDigits: 0 })}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+        ) : (
+          <div className="rounded border border-zinc-200 bg-white p-6 text-center dark:border-zinc-800 dark:bg-zinc-900">
+            <p className="text-sm text-zinc-400 dark:text-zinc-500">
+              Awaiting first official GSE import — see Equities for details
+            </p>
+          </div>
+        )}
       </section>
 
       <section>

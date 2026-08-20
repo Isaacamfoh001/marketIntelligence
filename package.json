@@ -18,13 +18,16 @@
     "ingest:bog-mpr": "node --import tsx scripts/ingest-bog-mpr.ts",
     "ingest:gss-inflation": "node --import tsx scripts/ingest-gss-inflation.ts",
     "ingest:gss-inflation-latest": "node --import tsx scripts/ingest-gss-inflation-latest.ts",
-    "ingest:gss-gdp": "node --import tsx scripts/ingest-gss-gdp.ts"
+    "ingest:gss-gdp": "node --import tsx scripts/ingest-gss-gdp.ts",
+    "import:gse-securities": "node --import tsx scripts/import-gse-security-prices.ts",
+    "import:gse-market-summary": "node --import tsx scripts/import-gse-market-summary.ts"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.9.1",
     "@prisma/client": "^7.9.1",
     "cheerio": "^1.2.0",
     "dotenv": "^17.4.2",
+    "exceljs": "^4.4.0",
     "next": "16.3.1",
     "prisma": "^7.9.1",
     "react": "19.2.8",
