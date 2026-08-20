@@ -1,0 +1,111 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+/// How the data source is accessed.
+enum SourceType {
+  AUTOMATED
+  SEMI_AUTOMATED
+  MANUAL
+}
+
+/// Expected update cadence for a data source.
+enum ExpectedFrequency {
+  DAILY
+  WEEKLY
+  MONTHLY
+  QUARTERLY
+  ANNUAL
+  AD_HOC
+  UNKNOWN
+}
+
+/// How data is physically ingested from a source.
+enum IngestionMethod {
+  API
+  FILE_UPLOAD
+  FILE_IMPORT
+  MANUAL_ENTRY
+}
+
+/// Lifecycle status of an ingestion run.
+enum IngestionStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+  PARTIAL
+}
+
+// ---------------------------------------------------------------------------
+// Models
+// ---------------------------------------------------------------------------
+
+/// Describes a provider or dataset origin.
+///
+/// Each DataSource represents one logical stream of information (e.g. "BoG
+/// Daily FX Rates", "GSS Monthly CPI", "GSE Daily Equity Prices").  Future
+/// ingestion providers, parsers, and UI health tables all reference this
+/// model, so it is designed to be stable and extensible.
+model DataSource {
+  id                String            @id @default(cuid())
+  name              String            @unique          // e.g. "BoG Daily FX Rates"
+  provider          String                              // e.g. "Bank of Ghana"
+  sourceType        SourceType        @default(MANUAL)
+  url               String?                            // base URL or source reference
+  expectedFrequency ExpectedFrequency @default(UNKNOWN)
+  ingestionMethod   IngestionMethod   @default(MANUAL_ENTRY)
+  active            Boolean           @default(true)
+
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  // Relations — defined as lists; one source has many runs.
+  ingestionRuns     IngestionRun[]
+
+  @@index([provider])
+  @@index([active])
+}
+
+/// Records every attempted refresh or import.
+///
+/// Every data mutation flows through an IngestionRun, providing a full audit
+/// trail.  Downstream domain models (MacroObservation, ExchangeRate, etc.)
+/// will reference IngestionRun to attribute their source and retrieval time.
+model IngestionRun {
+  id              String          @id @default(cuid())
+  dataSourceId    String
+
+  startedAt       DateTime        @default(now())
+  completedAt     DateTime?
+
+  status          IngestionStatus @default(PENDING)
+  recordsRead     Int?
+  recordsAccepted Int?
+  recordsRejected Int?
+
+  errorMessage    String?
+  triggeredBy     String?                        // "manual", "schedule", "api", user id
+  artifactName    String?                        // file name, URL, feed identifier
+  checksum        String?                        // hash for deduplication / audit
+
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  // Relations
+  dataSource      DataSource      @relation(fields: [dataSourceId], references: [id], onDelete: Cascade)
+
+  @@index([dataSourceId])
+  @@index([status])
+  @@index([startedAt])
+  @@index([completedAt])
+}
