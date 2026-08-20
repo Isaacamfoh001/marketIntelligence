@@ -180,6 +180,76 @@ export async function getRecentMprDecisions(limit: number = 15): Promise<PolicyD
 }
 
 // ---------------------------------------------------------------------------
+// Inflation (GSS CPI) and GDP (GSS Quarterly GDP)
+//
+// Both reuse the plain MacroSeries/MacroObservation domain — a single
+// generic snapshot query serves both, and Overview/Macro & Rates. See
+// gss-cpi-provider.ts / gss-gdp-provider.ts for source and dating
+// conventions (observationDate is always the LAST day of the reference
+// month/quarter, not the publication date).
+// ---------------------------------------------------------------------------
+
+const INFLATION_YOY_SERIES_CODE = "GSS_CPI_INFLATION_YOY";
+const GDP_GROWTH_SERIES_CODE = "GSS_REAL_GDP_GROWTH_YOY";
+
+export interface MacroSeriesObservation {
+  observationDate: Date;
+  value: unknown;
+}
+
+export interface MacroSeriesSnapshot {
+  latestTwo: MacroSeriesObservation[];
+  history: ChartPoint[];
+}
+
+async function getMacroSeriesSnapshot(seriesCode: string): Promise<MacroSeriesSnapshot> {
+  const prisma = getPrisma();
+  const series = await prisma.macroSeries.findUnique({ where: { code: seriesCode } });
+  if (!series) return { latestTwo: [], history: [] };
+
+  const [latestTwo, history] = await Promise.all([
+    prisma.macroObservation.findMany({
+      where: { seriesId: series.id },
+      orderBy: { observationDate: "desc" },
+      take: 2,
+    }),
+    prisma.macroObservation.findMany({
+      where: { seriesId: series.id },
+      orderBy: { observationDate: "asc" },
+      select: { observationDate: true, value: true },
+    }),
+  ]);
+
+  return {
+    latestTwo,
+    history: history.map((row) => ({ date: row.observationDate.toISOString().slice(0, 10), value: Number(row.value) })),
+  };
+}
+
+export function getInflationSnapshot(): Promise<MacroSeriesSnapshot> {
+  return getMacroSeriesSnapshot(INFLATION_YOY_SERIES_CODE);
+}
+
+export function getGdpSnapshot(): Promise<MacroSeriesSnapshot> {
+  return getMacroSeriesSnapshot(GDP_GROWTH_SERIES_CODE);
+}
+
+/** Recent quarterly GDP observations, newest first. */
+export async function getRecentGdpObservations(limit: number = 8): Promise<MacroSeriesObservation[]> {
+  const prisma = getPrisma();
+  const series = await prisma.macroSeries.findUnique({ where: { code: GDP_GROWTH_SERIES_CODE } });
+  if (!series) return [];
+  return prisma.macroObservation.findMany({ where: { seriesId: series.id }, orderBy: { observationDate: "desc" }, take: limit });
+}
+
+/** Which calendar quarter (1-4) an end-of-quarter observation date falls in. */
+export function quarterLabel(date: Date): string {
+  const month = date.getUTCMonth(); // 0-indexed
+  const quarter = Math.floor(month / 3) + 1;
+  return `${date.getUTCFullYear()}Q${quarter}`;
+}
+
+// ---------------------------------------------------------------------------
 // Shared formatting helpers
 // ---------------------------------------------------------------------------
 
@@ -190,4 +260,9 @@ export function formatObservationDate(date: Date): string {
 /** Basis-point change: (current − prior) × 100, for rates stored as percentage points. */
 export function bpsChange(current: number, prior: number): number {
   return Math.round((current - prior) * 100);
+}
+
+/** Percentage-point change: (current − prior), for indicators like inflation that are compared in pp, not bps or relative %. */
+export function ppChange(current: number, prior: number): number {
+  return Math.round((current - prior) * 100) / 100;
 }

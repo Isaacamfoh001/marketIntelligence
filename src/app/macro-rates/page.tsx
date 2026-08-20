@@ -1,12 +1,18 @@
-import { RatesChart } from "@/components/RatesChart";
+import { RatesChart, LONG_HISTORY_WINDOWS } from "@/components/RatesChart";
+import { GdpChart } from "@/components/GdpChart";
 import {
   getUsdGhsSnapshot,
   getTreasurySnapshot,
   getMprSnapshot,
+  getInflationSnapshot,
+  getGdpSnapshot,
   getRecentTreasuryRates,
   getRecentMprDecisions,
+  getRecentGdpObservations,
   formatObservationDate,
   bpsChange,
+  ppChange,
+  quarterLabel,
   TREASURY_INSTRUMENTS,
   type PolicyDecisionRow,
 } from "@/lib/queries/market-data";
@@ -59,13 +65,19 @@ function StatBlock({ label, value, sub }: { label: string; value: string; sub: s
 }
 
 export default async function MacroRatesPage() {
-  const [fx, treasury, mpr, recentTreasury, recentMpr] = await Promise.all([
+  const [fx, treasury, mpr, inflation, gdp, recentTreasury, recentMpr, recentGdp] = await Promise.all([
     getUsdGhsSnapshot(),
     getTreasurySnapshot(),
     getMprSnapshot(),
+    getInflationSnapshot(),
+    getGdpSnapshot(),
     getRecentTreasuryRates(20),
     getRecentMprDecisions(10),
+    getRecentGdpObservations(8),
   ]);
+
+  const [inflationLatest, inflationPrevious] = inflation.latestTwo;
+  const [gdpLatest, gdpPrevious] = gdp.latestTwo;
 
   const [fxLatest] = fx.latestTwo;
   const { latestDecision: mprLatestDecision, lastChange: mprLastChange } = mpr;
@@ -267,14 +279,110 @@ export default async function MacroRatesPage() {
         <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
           Inflation
         </h2>
-        <EmptyState message="Ghana CPI inflation is not yet connected — planned for Day 5" />
+        {inflationLatest ? (
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+            <SectionCard>
+              <div className="grid grid-cols-2 gap-4">
+                <StatBlock
+                  label="Headline YoY Inflation"
+                  value={`${Number(inflationLatest.value).toFixed(1)}%`}
+                  sub={`Reference ${formatObservationDate(inflationLatest.observationDate)}`}
+                />
+                <StatBlock
+                  label="Change"
+                  value={
+                    inflationPrevious
+                      ? (() => {
+                          const pp = ppChange(Number(inflationLatest.value), Number(inflationPrevious.value));
+                          return `${pp > 0 ? "+" : ""}${pp.toFixed(2)} pp`;
+                        })()
+                      : "—"
+                  }
+                  sub={inflationPrevious ? `vs ${formatObservationDate(inflationPrevious.observationDate)}` : "no prior month stored"}
+                />
+              </div>
+              <p className="mt-4 text-[11px] text-zinc-400 dark:text-zinc-500">
+                Source: Ghana Statistical Service — StatsBank/PxWeb (Consumer Price Index and Inflation). Reference
+                month dated to month-end; may lag the latest GSS press release — see Data Centre for freshness.
+              </p>
+            </SectionCard>
+            <div className="lg:col-span-2">
+              <SectionCard>
+                <p className="mb-1 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                  Inflation History (Headline YoY)
+                </p>
+                <RatesChart
+                  series={[{ key: "yoy", label: "Headline YoY", color: "#f59e0b", data: inflation.history }]}
+                  unit="%"
+                  windows={LONG_HISTORY_WINDOWS}
+                  defaultWindow="5Y"
+                />
+              </SectionCard>
+            </div>
+          </div>
+        ) : (
+          <EmptyState message="No inflation data available yet" />
+        )}
       </section>
 
+      {/* ------------------------------------------------------------ */}
       <section>
         <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
           GDP / Economic Activity
         </h2>
-        <EmptyState message="GDP series are not yet connected — planned for Day 5" />
+        {gdpLatest ? (
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+            <SectionCard>
+              <div className="grid grid-cols-2 gap-4">
+                <StatBlock
+                  label="Real GDP Growth (YoY)"
+                  value={`${Number(gdpLatest.value).toFixed(1)}%`}
+                  sub={quarterLabel(gdpLatest.observationDate)}
+                />
+                <StatBlock
+                  label="Previous Quarter"
+                  value={gdpPrevious ? `${Number(gdpPrevious.value).toFixed(1)}%` : "—"}
+                  sub={gdpPrevious ? quarterLabel(gdpPrevious.observationDate) : "no prior quarter stored"}
+                />
+              </div>
+              <p className="mt-4 text-[11px] text-zinc-400 dark:text-zinc-500">
+                Source: Ghana Statistical Service — StatsBank/PxWeb (Quarterly GDP, Production Approach, Overall
+                GDP). Headline year-on-year growth measure, as GSS itself leads with in its quarterly release.
+              </p>
+            </SectionCard>
+            <div className="lg:col-span-2">
+              <SectionCard>
+                <p className="mb-1 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                  Quarterly Real GDP Growth (YoY)
+                </p>
+                <GdpChart data={gdp.history} height={200} />
+              </SectionCard>
+            </div>
+          </div>
+        ) : (
+          <EmptyState message="No GDP data available yet" />
+        )}
+
+        {recentGdp.length > 0 && (
+          <div className="mt-3 overflow-x-auto rounded border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
+            <table className="w-full min-w-[360px] text-left text-sm">
+              <thead>
+                <tr className="border-b border-zinc-200 dark:border-zinc-800">
+                  <th className="px-4 py-2 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Quarter</th>
+                  <th className="px-4 py-2 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Real GDP Growth (YoY)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {recentGdp.map((row, i) => (
+                  <tr key={i} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/50">
+                    <td className="whitespace-nowrap px-4 py-2 text-zinc-600 dark:text-zinc-400">{quarterLabel(row.observationDate)}</td>
+                    <td className="whitespace-nowrap px-4 py-2 font-medium text-zinc-900 dark:text-zinc-100">{Number(row.value).toFixed(1)}%</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </section>
     </div>
   );

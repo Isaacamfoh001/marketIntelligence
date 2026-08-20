@@ -5,12 +5,15 @@ import {
   getUsdGhsSnapshot,
   getTreasurySnapshot,
   getMprSnapshot,
+  getInflationSnapshot,
   formatObservationDate,
   bpsChange,
+  ppChange,
   TREASURY_INSTRUMENTS,
   type FxObservation,
   type TreasuryObservation,
   type PolicyDecisionRow,
+  type MacroSeriesObservation,
 } from "@/lib/queries/market-data";
 
 function decisionLabel(type: PolicyDecisionRow["decisionType"]): string {
@@ -204,18 +207,44 @@ function MprMetricCard({
   );
 }
 
+function InflationMetricCard({ latest, previous }: { latest: MacroSeriesObservation | undefined; previous: MacroSeriesObservation | undefined }) {
+  if (!latest) return <MetricCard label="CPI Inflation (YoY)" unit="%" />;
+
+  const rate = Number(latest.value);
+  const freshness = observationFreshness("MONTHLY", latest.observationDate);
+
+  let changeLine = "·";
+  if (previous) {
+    const pp = ppChange(rate, Number(previous.value));
+    const arrow = pp > 0 ? "▲" : pp < 0 ? "▼" : "—";
+    changeLine = `${arrow} ${Math.abs(pp).toFixed(2)} pp vs previous month`;
+  }
+
+  return (
+    <CardShell
+      label="CPI Inflation (YoY)"
+      freshness={freshness}
+      value={`${rate.toFixed(1)}%`}
+      changeLine={changeLine}
+      footer={`Reference ${formatObservationDate(latest.observationDate)} · GSS`}
+    />
+  );
+}
+
 export default async function OverviewPage() {
-  const [latestRun, sourceCount, runCount, fx, treasury, mpr] = await Promise.all([
+  const [latestRun, sourceCount, runCount, fx, treasury, mpr, inflation] = await Promise.all([
     getLatestIngestionRun(),
     getDataSourceCount(),
     getIngestionRunCount(),
     getUsdGhsSnapshot(),
     getTreasurySnapshot(),
     getMprSnapshot(),
+    getInflationSnapshot(),
   ]);
 
   const [fxLatest, fxPrevious] = fx.latestTwo;
   const { latestDecision: mprLatestDecision, lastChange: mprLastChange } = mpr;
+  const [inflationLatest, inflationPrevious] = inflation.latestTwo;
   const treasuryByCode = new Map(treasury.map((t) => [t.code, t]));
 
   const treasuryChartSeries: RatesSeries[] = treasury
@@ -223,6 +252,21 @@ export default async function OverviewPage() {
     .map((t) => ({ key: t.code, label: t.label, color: TREASURY_CHART_COLORS[t.code] ?? "#71717a", data: t.history }));
 
   const changedItems: { key: string; node: React.ReactNode }[] = [];
+  if (inflationLatest && inflationPrevious) {
+    const pp = ppChange(Number(inflationLatest.value), Number(inflationPrevious.value));
+    const arrow = pp > 0 ? "▲" : pp < 0 ? "▼" : "—";
+    changedItems.push({
+      key: "inflation",
+      node: (
+        <>
+          <span className="font-medium">Inflation</span> {arrow} {Math.abs(pp).toFixed(2)} pp{" "}
+          <span className="text-zinc-400 dark:text-zinc-500">
+            vs previous month ({formatObservationDate(inflationPrevious.observationDate)} &rarr; {formatObservationDate(inflationLatest.observationDate)})
+          </span>
+        </>
+      ),
+    });
+  }
   if (fxLatest && fxPrevious) {
     const pct = ((Number(fxLatest.midRate) - Number(fxPrevious.midRate)) / Number(fxPrevious.midRate)) * 100;
     const arrow = pct > 0 ? "▲" : pct < 0 ? "▼" : "—";
@@ -300,7 +344,7 @@ export default async function OverviewPage() {
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
           <MetricCard label="GSE Composite Index" unit="index" />
           <FxMetricCard latest={fxLatest} previous={fxPrevious} />
-          <MetricCard label="CPI Inflation (YoY)" unit="%" />
+          <InflationMetricCard latest={inflationLatest} previous={inflationPrevious} />
           <MprMetricCard latestDecision={mprLatestDecision ?? undefined} lastChange={mprLastChange ?? undefined} />
           {TREASURY_INSTRUMENTS.map(({ code, label }) => {
             const snapshot = treasuryByCode.get(code);

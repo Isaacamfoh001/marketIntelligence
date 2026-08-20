@@ -174,11 +174,20 @@ model MacroSeries {
 /// Uniqueness is enforced on (seriesId, observationDate).  Running the
 /// same ingestion twice performs an upsert: if the value changed it is
 /// updated, otherwise the row is left untouched.
+///
+/// `revisionStatus` is nullable and currently unpopulated by any
+/// provider: GSS's StatsBank/PxWeb tables don't expose a structured
+/// provisional/revised flag on individual data points (verified by
+/// inspection of the JSON-stat2 "status" codes, which only mark missing
+/// data, not revision state). The column exists so a future source that
+/// does expose this can populate it without a schema change — not
+/// speculative modeling of data that isn't there.
 model MacroObservation {
   id              String    @id @default(cuid())
   seriesId        String
   observationDate DateTime @db.Date
   value           Decimal   @db.Decimal(18, 6)
+  revisionStatus  String?
   retrievedAt     DateTime  @default(now())
   ingestionRunId  String
 

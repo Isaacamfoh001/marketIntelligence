@@ -24,8 +24,9 @@ export interface RatesSeries {
   data: RatesSeriesPoint[];
 }
 
-const WINDOWS = ["1M", "3M", "YTD", "MAX"] as const;
-type ChartWindow = (typeof WINDOWS)[number];
+export const DEFAULT_WINDOWS = ["1M", "3M", "YTD", "MAX"] as const;
+export const LONG_HISTORY_WINDOWS = ["1Y", "3Y", "5Y", "MAX"] as const;
+export type ChartWindow = (typeof DEFAULT_WINDOWS)[number] | (typeof LONG_HISTORY_WINDOWS)[number];
 
 function windowStart(window: ChartWindow, latest: Date): Date {
   const d = new Date(latest);
@@ -40,7 +41,19 @@ function windowStart(window: ChartWindow, latest: Date): Date {
   if (window === "YTD") {
     return new Date(Date.UTC(latest.getUTCFullYear(), 0, 1));
   }
-  return new Date(0);
+  if (window === "1Y") {
+    d.setUTCFullYear(d.getUTCFullYear() - 1);
+    return d;
+  }
+  if (window === "3Y") {
+    d.setUTCFullYear(d.getUTCFullYear() - 3);
+    return d;
+  }
+  if (window === "5Y") {
+    d.setUTCFullYear(d.getUTCFullYear() - 5);
+    return d;
+  }
+  return new Date(0); // MAX
 }
 
 function formatTick(dateStr: string): string {
@@ -70,12 +83,16 @@ export function RatesChart({
   series,
   unit,
   height = 180,
+  windows = DEFAULT_WINDOWS,
+  defaultWindow,
 }: {
   series: RatesSeries[];
   unit: string;
   height?: number;
+  windows?: readonly ChartWindow[];
+  defaultWindow?: ChartWindow;
 }) {
-  const [window, setWindow] = useState<ChartWindow>("YTD");
+  const [window, setWindow] = useState<ChartWindow>(defaultWindow ?? "YTD");
 
   const merged = useMemo(() => mergeSeries(series), [series]);
 
@@ -99,7 +116,7 @@ export function RatesChart({
   return (
     <div>
       <div className="mb-2 flex justify-end gap-1">
-        {WINDOWS.map((w) => (
+        {windows.map((w) => (
           <button
             key={w}
             type="button"

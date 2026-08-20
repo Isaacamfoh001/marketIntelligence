@@ -15,7 +15,9 @@
     "ingest:bog-fx:backfill": "node --import tsx scripts/ingest-bog-fx.ts --backfill",
     "ingest:bog-treasury": "node --import tsx scripts/ingest-bog-treasury.ts",
     "ingest:bog-treasury:backfill": "node --import tsx scripts/ingest-bog-treasury.ts --backfill",
-    "ingest:bog-mpr": "node --import tsx scripts/ingest-bog-mpr.ts"
+    "ingest:bog-mpr": "node --import tsx scripts/ingest-bog-mpr.ts",
+    "ingest:gss-inflation": "node --import tsx scripts/ingest-gss-inflation.ts",
+    "ingest:gss-gdp": "node --import tsx scripts/ingest-gss-gdp.ts"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.9.1",
