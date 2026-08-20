@@ -32,6 +32,10 @@ enum ExpectedFrequency {
 /// How data is physically ingested from a source.
 enum IngestionMethod {
   API
+  /// Automated retrieval by fetching and parsing an official web page —
+  /// used when a provider publishes data as a rendered page/table rather
+  /// than a documented API or downloadable file (e.g. Bank of Ghana).
+  HTML_FETCH
   FILE_UPLOAD
   FILE_IMPORT
   MANUAL_ENTRY
@@ -78,6 +82,7 @@ model DataSource {
 
   ingestionRuns     IngestionRun[]
   macroSeries       MacroSeries[]
+  exchangeRates     ExchangeRate[]
 
   @@index([provider])
   @@index([active])
@@ -111,6 +116,7 @@ model IngestionRun {
   dataSource      DataSource      @relation(fields: [dataSourceId], references: [id], onDelete: Restrict)
 
   macroObservations MacroObservation[]
+  exchangeRates     ExchangeRate[]
 
   @@index([dataSourceId])
   @@index([status])
@@ -168,5 +174,72 @@ model MacroObservation {
   @@unique([seriesId, observationDate])
   @@index([seriesId])
   @@index([observationDate])
+  @@index([ingestionRunId])
+}
+
+// ---------------------------------------------------------------------------
+// FX
+// ---------------------------------------------------------------------------
+
+/// A traded currency pair, e.g. USDGHS (US Dollar priced in Ghana Cedis).
+///
+/// Pair identity is source-agnostic: the same pair may in future be priced
+/// by more than one provider. Source attribution lives on ExchangeRate,
+/// not here.
+model CurrencyPair {
+  id            String   @id @default(cuid())
+  code          String   @unique
+  baseCurrency  String
+  quoteCurrency String
+  active        Boolean  @default(true)
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  exchangeRates ExchangeRate[]
+
+  @@index([active])
+}
+
+/// A single day's published exchange rate for a currency pair.
+///
+/// Design: one row per (currencyPair, observationDate) carrying buying,
+/// selling, and mid rate together (rather than one row per rate type).
+/// Bank of Ghana publishes buy/sell/mid as a single atomic daily quote —
+/// they are three views of the same observation, not independently timed
+/// readings — so storing them together keeps the sanity check
+/// (buying <= mid <= selling), the Overview mid-rate chart, and the
+/// "what changed" comparison all single-row operations instead of
+/// self-joins across rate-type rows.
+///
+/// buyingRate/sellingRate are nullable because a source may occasionally
+/// publish only a mid rate; midRate is required because it is the
+/// primary value the rest of the application relies on — a row without
+/// it is rejected during validation rather than stored with a fabricated
+/// value. Missing must not become zero.
+model ExchangeRate {
+  id              String   @id @default(cuid())
+  currencyPairId  String
+  observationDate DateTime @db.Date
+
+  buyingRate      Decimal? @db.Decimal(18, 6)
+  sellingRate     Decimal? @db.Decimal(18, 6)
+  midRate         Decimal  @db.Decimal(18, 6)
+
+  sourceId        String
+  ingestionRunId  String
+  retrievedAt     DateTime @default(now())
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  currencyPair    CurrencyPair @relation(fields: [currencyPairId], references: [id], onDelete: Restrict)
+  source          DataSource   @relation(fields: [sourceId], references: [id], onDelete: Restrict)
+  ingestionRun    IngestionRun @relation(fields: [ingestionRunId], references: [id], onDelete: Restrict)
+
+  @@unique([currencyPairId, observationDate])
+  @@index([currencyPairId])
+  @@index([observationDate])
+  @@index([sourceId])
   @@index([ingestionRunId])
 }

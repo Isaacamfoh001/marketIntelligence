@@ -1,5 +1,6 @@
 import { getPrisma } from "@/lib/prisma";
-import { type IngestionStatus } from "@/generated/prisma/enums";
+import { type ExpectedFrequency, type IngestionStatus } from "@/generated/prisma/enums";
+import { dailyFreshness } from "@/lib/freshness";
 
 // Database-backed page: must reflect the latest ingestion state on every
 // request, not the state at build time.
@@ -16,7 +17,33 @@ async function getDataSourcesWithRuns() {
       },
     },
   });
-  return sources;
+
+  // Latest observation date per source, across whichever domain(s) it
+  // feeds (macro series, FX pairs, ...). N+1 is acceptable at V1 scale
+  // (a handful of sources); revisit only if the source count grows.
+  const withLatestObservation = await Promise.all(
+    sources.map(async (src) => {
+      const [macroLatest, fxLatest] = await Promise.all([
+        prisma.macroObservation.findFirst({
+          where: { series: { sourceId: src.id } },
+          orderBy: { observationDate: "desc" },
+          select: { observationDate: true },
+        }),
+        prisma.exchangeRate.findFirst({
+          where: { sourceId: src.id },
+          orderBy: { observationDate: "desc" },
+          select: { observationDate: true },
+        }),
+      ]);
+      const dates = [macroLatest?.observationDate, fxLatest?.observationDate].filter(
+        (d): d is Date => d != null,
+      );
+      const latestObservationDate = dates.length > 0 ? dates.reduce((a, b) => (b > a ? b : a)) : null;
+      return { ...src, latestObservationDate };
+    }),
+  );
+
+  return withLatestObservation;
 }
 
 async function getRecentRuns() {
@@ -29,21 +56,44 @@ async function getRecentRuns() {
   return runs;
 }
 
-function deriveStatus(
-  latestRun: { status: IngestionStatus; completedAt: Date | null } | undefined,
-  active: boolean,
-): string {
+// Freshness rule: cadence-aware, not a universal 24-hour cutoff (see
+// CLAUDE.md §11/§27 and src/lib/freshness.ts). DAILY sources use the
+// business-day-aware dailyFreshness() check against the latest stored
+// observation date; other cadences fall back to a threshold scaled to
+// their expected frequency, measured from the latest successful run
+// (they don't yet have a per-domain "latest observation" concept as
+// clean as FX/macro's observationDate for every case).
+const FALLBACK_STALE_THRESHOLD_MS: Record<ExpectedFrequency, number> = {
+  DAILY: 3 * 24 * 60 * 60 * 1000,
+  WEEKLY: 10 * 24 * 60 * 60 * 1000,
+  MONTHLY: 45 * 24 * 60 * 60 * 1000,
+  QUARTERLY: 100 * 24 * 60 * 60 * 1000,
+  ANNUAL: 400 * 24 * 60 * 60 * 1000,
+  AD_HOC: 30 * 24 * 60 * 60 * 1000,
+  UNKNOWN: 30 * 24 * 60 * 60 * 1000,
+};
+
+function deriveStatus(params: {
+  latestRun: { status: IngestionStatus; completedAt: Date | null } | undefined;
+  active: boolean;
+  expectedFrequency: ExpectedFrequency;
+  latestObservationDate: Date | null;
+}): string {
+  const { latestRun, active, expectedFrequency, latestObservationDate } = params;
   if (!active) return "INACTIVE";
   if (!latestRun) return "NOT_CONFIGURED";
   if (latestRun.status === "FAILED") return "FAILED";
   if (latestRun.status === "RUNNING") return "RUNNING";
-  if (latestRun.status === "SUCCESS" && latestRun.completedAt) {
-    const age = Date.now() - latestRun.completedAt.getTime();
-    const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
-    if (age > THIRTY_DAYS) return "STALE";
-    return "HEALTHY";
+  if (latestRun.status !== "SUCCESS" || !latestRun.completedAt) return "UNKNOWN";
+
+  if (expectedFrequency === "DAILY") {
+    const freshness = dailyFreshness(latestObservationDate);
+    if (freshness === "MISSING") return "UNKNOWN";
+    return freshness === "CURRENT" ? "HEALTHY" : "STALE";
   }
-  return "UNKNOWN";
+
+  const age = Date.now() - latestRun.completedAt.getTime();
+  return age > FALLBACK_STALE_THRESHOLD_MS[expectedFrequency] ? "STALE" : "HEALTHY";
 }
 
 function StatusBadge({ status }: { status: string }) {
@@ -125,6 +175,7 @@ export default async function DataCentrePage() {
                   <th className="px-4 py-2.5 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Provider</th>
                   <th className="px-4 py-2.5 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Method</th>
                   <th className="px-4 py-2.5 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Frequency</th>
+                  <th className="px-4 py-2.5 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Latest Observation</th>
                   <th className="px-4 py-2.5 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Last Refresh</th>
                   <th className="px-4 py-2.5 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Status</th>
                 </tr>
@@ -132,16 +183,21 @@ export default async function DataCentrePage() {
               <tbody>
                 {sources.map((src) => {
                   const latestRun = src.ingestionRuns[0];
-                  const status = deriveStatus(
-                    latestRun ? { status: latestRun.status, completedAt: latestRun.completedAt } : undefined,
-                    src.active,
-                  );
+                  const status = deriveStatus({
+                    latestRun: latestRun ? { status: latestRun.status, completedAt: latestRun.completedAt } : undefined,
+                    active: src.active,
+                    expectedFrequency: src.expectedFrequency,
+                    latestObservationDate: src.latestObservationDate,
+                  });
                   return (
                     <tr key={src.id} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/50">
                       <td className="px-4 py-2.5 font-medium text-zinc-900 dark:text-zinc-100">{src.name}</td>
                       <td className="px-4 py-2.5 text-zinc-600 dark:text-zinc-400">{src.provider}</td>
                       <td className="px-4 py-2.5 text-zinc-600 dark:text-zinc-400">{src.ingestionMethod}</td>
                       <td className="px-4 py-2.5 text-zinc-600 dark:text-zinc-400">{src.expectedFrequency}</td>
+                      <td className="px-4 py-2.5 text-zinc-600 dark:text-zinc-400">
+                        {formatDate(src.latestObservationDate)}
+                      </td>
                       <td className="px-4 py-2.5 text-zinc-600 dark:text-zinc-400">
                         {formatDate(latestRun?.completedAt ?? null)}
                       </td>

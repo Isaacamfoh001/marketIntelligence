@@ -27,6 +27,9 @@ PROJECT.md
 # misc
 .DS_Store
 *.pem
+# Public CA certificates the app depends on at runtime (no private key
+# material) are intentionally tracked despite the blanket *.pem rule above.
+!src/lib/ingestion/certs/*.pem
 
 # debug
 npm-debug.log*
