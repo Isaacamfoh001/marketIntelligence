@@ -1,5 +1,9 @@
 import { getPrisma } from "@/lib/prisma";
 
+// Database-backed page: must reflect the latest ingestion state on every
+// request, not the state at build time.
+export const dynamic = "force-dynamic";
+
 async function getLatestIngestionRun() {
   const prisma = getPrisma();
   const run = await prisma.ingestionRun.findFirst({

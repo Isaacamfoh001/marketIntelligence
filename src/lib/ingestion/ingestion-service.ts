@@ -97,24 +97,3 @@ export async function failRun(
     recordsRejected: run.recordsRejected ?? 0,
   };
 }
-
-/**
- * High-level wrapper: execute an ingestion function, automatically
- * creating/starting/completing/failing the run.
- *
- * If the inner function throws, the run is recorded as FAILED.
- */
-export async function withRun<T>(
-  ctx: RunContext,
-  fn: (runId: string) => Promise<T>,
-): Promise<{ result: T; run: CompleteRunResult }> {
-  const { runId } = await startRun(ctx);
-  try {
-    const result = await fn(runId);
-    return { result, run: { runId, status: "SUCCESS", recordsRead: 0, recordsAccepted: 0, recordsRejected: 0 } };
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    const run = await failRun(runId, message);
-    return { result: undefined as T, run };
-  }
-}

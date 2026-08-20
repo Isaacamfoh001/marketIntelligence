@@ -67,33 +67,17 @@ export function validateMacroRows(rows: RawRow[]): ValidationResult {
     const errors: string[] = [];
 
     const dateErr = requireString(row.observation_date, "observation_date");
-    if (dateErr) {
-      errors.push(dateErr.message);
-    } else {
-      const parsed = parseDate(row.observation_date, "observation_date");
-      if (parsed.error) {
-        errors.push(parsed.error.message);
-      } else if (parsed.date) {
-        const numCheck = parseDecimal(row.value, "value");
-        if (numCheck.error) {
-          errors.push(numCheck.error.message);
-        } else {
-          valid.push({ observationDate: parsed.date, value: numCheck.value! });
-          continue;
-        }
-      }
-    }
+    const parsedDate = dateErr ? null : parseDate(row.observation_date, "observation_date");
+    if (dateErr) errors.push(dateErr.message);
+    else if (parsedDate?.error) errors.push(parsedDate.error.message);
 
-    // If we reach here without continuing, check for value errors
-    if (errors.length === 0) {
-      const numCheck = parseDecimal(row.value, "value");
-      if (numCheck.error) {
-        errors.push(numCheck.error.message);
-      }
-    }
+    const numCheck = parseDecimal(row.value, "value");
+    if (numCheck.error) errors.push(numCheck.error.message);
 
     if (errors.length > 0) {
       invalid.push({ row, errors });
+    } else {
+      valid.push({ observationDate: parsedDate!.date!, value: numCheck.value! });
     }
   }
 

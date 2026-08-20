@@ -28,6 +28,14 @@ export function requireString(
   return null;
 }
 
+const ISO_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/**
+ * Parses a date strictly as YYYY-MM-DD. Rejects any other format
+ * (e.g. "02/13/2026", "Feb 1 2026") since those are ambiguous or
+ * locale-dependent under permissive `new Date(str)` parsing, and
+ * rejects out-of-range calendar dates (e.g. "2026-02-30").
+ */
 export function parseDate(
   value: unknown,
   field: string,
@@ -36,11 +44,28 @@ export function parseDate(
     return { date: null, error: { field, message: `${field} is required` } };
   }
   const str = String(value).trim();
-  const d = new Date(str);
-  if (isNaN(d.getTime())) {
-    return { date: null, error: { field, message: `${field} is not a valid date: "${str}"` } };
+  const match = ISO_DATE_RE.exec(str);
+  if (!match) {
+    return {
+      date: null,
+      error: { field, message: `${field} must be in YYYY-MM-DD format: "${str}"` },
+    };
   }
-  return { date: d, error: null };
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  const isRealCalendarDate =
+    date.getUTCFullYear() === year &&
+    date.getUTCMonth() === month - 1 &&
+    date.getUTCDate() === day;
+  if (!isRealCalendarDate) {
+    return {
+      date: null,
+      error: { field, message: `${field} is not a valid calendar date: "${str}"` },
+    };
+  }
+  return { date, error: null };
 }
 
 export function parseDecimal(
