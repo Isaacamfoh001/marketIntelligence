@@ -1,4 +1,4 @@
-import { dailyFreshness, type Freshness } from "@/lib/freshness";
+import { observationFreshness, type Freshness } from "@/lib/freshness";
 import { describeDirection, DIRECTION_ARROW } from "@/lib/direction";
 import { DirectionText } from "@/components/DirectionText";
 import { SecuritiesTable } from "@/components/SecuritiesTable";
@@ -48,7 +48,14 @@ function EmptyMetric({ label }: { label: string }) {
   );
 }
 
-/** GSE-CI/GSE-FSI follow ordinary-equity polarity: rising is positive (the shared M6 direction rule) — the same treatment SecuritiesTable gives individual stocks. */
+/**
+ * GSE-CI/GSE-FSI follow ordinary-equity polarity: rising is positive (the shared M6 direction rule) — the same treatment SecuritiesTable gives individual stocks.
+ *
+ * MONTHLY, not DAILY (M8.1): the only GSE-CI/GSE-FSI history this system has
+ * is month-end snapshots transcribed from GSE's official monthly Market
+ * Summary PDF reports, never a live daily feed. dailyFreshness would mark
+ * last month's real, current figure STALE within a day of publication.
+ */
 function IndexMetric({
   label,
   latest,
@@ -61,14 +68,14 @@ function IndexMetric({
   if (!latest) return <EmptyMetric label={label} />;
 
   const level = Number(latest.level);
-  const freshness = dailyFreshness(latest.observationDate);
+  const freshness = observationFreshness("MONTHLY", latest.observationDate);
 
   let changeLine: React.ReactNode = <span className="text-zinc-400 dark:text-zinc-500">·</span>;
   if (previous) {
     const prevLevel = Number(previous.level);
     const pct = ((level - prevLevel) / prevLevel) * 100;
     const { arrow, sentiment } = describeDirection(level, prevLevel, "higherIsPositive");
-    changeLine = <DirectionText arrow={arrow} text={`${Math.abs(pct).toFixed(2)}%`} suffix="vs previous trading day" sentiment={sentiment} />;
+    changeLine = <DirectionText arrow={arrow} text={`${Math.abs(pct).toFixed(2)}%`} suffix="vs previous month-end" sentiment={sentiment} />;
   }
 
   return (
@@ -81,7 +88,7 @@ function IndexMetric({
         {level.toLocaleString("en-GH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
       </div>
       <div className="mt-1 text-xs">{changeLine}</div>
-      <div className="mt-1 text-[11px] text-zinc-400 dark:text-zinc-500">{formatDate(latest.observationDate.toISOString().slice(0, 10))} · GSE</div>
+      <div className="mt-1 text-[11px] text-zinc-400 dark:text-zinc-500">Month-end · {formatDate(latest.observationDate.toISOString().slice(0, 10))} · GSE</div>
     </div>
   );
 }

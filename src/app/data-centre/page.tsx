@@ -3,7 +3,7 @@ import { getPrisma } from "@/lib/prisma";
 import { type ExpectedFrequency, type IngestionStatus } from "@/generated/prisma/enums";
 import { observationFreshness, type Cadence } from "@/lib/freshness";
 import { ensureGseSecurityDataSources } from "@/lib/ingestion/gse-security-provider";
-import { ensureGseIndexDataSource } from "@/lib/ingestion/gse-index-provider";
+import { ensureGseIndexDataSources } from "@/lib/ingestion/gse-index-provider";
 import { ensureFinancialsDataSource } from "@/lib/ingestion/financials-provider";
 
 // Database-backed page: must reflect the latest ingestion state on every
@@ -18,7 +18,7 @@ async function getDataSourcesWithRuns() {
   // Registering them here — metadata only, no run, no observation — lets
   // Data Centre show them as NOT_CONFIGURED/awaiting-first-import from day
   // one, rather than being invisible until the first real file is loaded.
-  await Promise.all([ensureGseSecurityDataSources(), ensureGseIndexDataSource(), ensureFinancialsDataSource()]);
+  await Promise.all([ensureGseSecurityDataSources(), ensureGseIndexDataSources(), ensureFinancialsDataSource()]);
 
   const sources = await prisma.dataSource.findMany({
     orderBy: [{ provider: "asc" }, { name: "asc" }],

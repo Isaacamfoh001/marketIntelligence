@@ -26,10 +26,24 @@ export interface ParsedFile {
 
 export class FileParseError extends Error {}
 
-/** Lowercases, strips punctuation, and collapses whitespace so header matching is resilient to "Closing Price - VWAP" vs "closing_price_vwap" vs "Closing Price (VWAP)". */
+/**
+ * Lowercases, strips punctuation, and collapses whitespace so header
+ * matching is resilient to "Closing Price - VWAP" vs "closing_price_vwap"
+ * vs "Closing Price (VWAP)".
+ *
+ * Parenthetical groups are dropped entirely (not just their punctuation)
+ * before that normalization: a currency/unit annotation like "(GH¢)" would
+ * otherwise leave a dangling "gh" token once the non-ASCII ¢ symbol is
+ * stripped — e.g. "Closing Price - VWAP (GH¢)" (GSE's own real export
+ * header) would normalize to "closing price vwap gh" and silently fail to
+ * match the "closing price vwap" alias for every field, including the
+ * required close_vwap column. A parenthetical is commentary about the
+ * field, never part of its identity, so removing it whole is always safe.
+ */
 export function normalizeHeader(header: string): string {
   return header
     .trim()
+    .replace(/\([^)]*\)/g, " ")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, " ")
     .trim();

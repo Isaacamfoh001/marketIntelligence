@@ -62,7 +62,12 @@ async function runImport(formData: FormData, commit: boolean): Promise<ImportAct
   const { filename, buffer } = extracted;
 
   if (datasetType === "market-summary") {
-    const index = await importGseMarketSummary(filename, buffer, { commit, triggeredBy: "web" });
+    // The browser wizard's "GSE Market Summary" card is for a genuinely
+    // daily CSV/Excel export (see gse-import-templates.ts) — the monthly
+    // PDF-report path (M8.1) is a separate, explicitly-labeled CLI flow
+    // (scripts/import-gse-market-summary.ts --kind=monthly-report), not
+    // yet exposed here.
+    const index = await importGseMarketSummary(filename, buffer, "daily", { commit, triggeredBy: "web" });
     return { ok: true, datasetType, filename, index };
   }
 

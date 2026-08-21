@@ -48,8 +48,8 @@ const FIELD_ALIASES: Record<string, string[]> = {
   last_transaction_price: ["last transaction price", "last price", "last traded price"],
   close_vwap: ["closing price vwap", "closing price", "close vwap", "close"],
   price_change: ["price change", "change"],
-  closing_bid: ["closing bid", "bid"],
-  closing_offer: ["closing offer", "offer", "ask"],
+  closing_bid: ["closing bid", "closing bid price", "bid"],
+  closing_offer: ["closing offer", "closing offer price", "offer", "ask"],
   shares_traded: ["total shares traded", "shares traded", "volume"],
   value_traded: ["total value traded", "value traded", "turnover"],
   year_high: ["year high", "52 week high", "52wk high"],
@@ -141,7 +141,13 @@ export function validateGseSecurityRows(rows: RawGseSecurityRow[]): GseSecurityV
     const dateResult = parseGseFileDate(row.trading_date ?? "", "trading_date");
     if (dateResult.error) errors.push(dateResult.error.message);
 
-    const tickerRaw = (row.share_code ?? "").trim().toUpperCase();
+    // GSE's own real exports sometimes wrap a share code in asterisks
+    // (e.g. "**ALW**", "PBC**") as a footnote/status marker, inconsistently
+    // on either side — the same real security either way (M8.1: verified
+    // against the same rows appearing both decorated and undecorated for
+    // identical trading dates). Stripped before validation so the natural
+    // security key is never fragmented into two different tickers.
+    const tickerRaw = (row.share_code ?? "").trim().toUpperCase().replace(/^\*+|\*+$/g, "");
     if (tickerRaw === "") {
       errors.push("share_code is required");
     } else if (!TICKER_RE.test(tickerRaw)) {
@@ -155,8 +161,17 @@ export function validateGseSecurityRows(rows: RawGseSecurityRow[]): GseSecurityV
     const openPrice = optionalDecimal(row.open_price, "open_price", errors);
     const lastTransactionPrice = optionalDecimal(row.last_transaction_price, "last_transaction_price", errors);
     const priceChange = optionalDecimal(row.price_change, "price_change", errors);
-    const closingBid = optionalDecimal(row.closing_bid, "closing_bid", errors);
-    const closingOffer = optionalDecimal(row.closing_offer, "closing_offer", errors);
+    // A literal 0.00 in GSE's own export is never a real market quote for a
+    // listed equity — no one bids/offers to trade at GHS 0.00. Across this
+    // file it is the source's own inconsistent "no quote published"
+    // convention (some date ranges leave the cell blank instead for the
+    // exact same situation) — normalized to missing here (M8.1: verified
+    // 5,210 of 5,216 real bid>offer validation failures were exactly this,
+    // vs. 6 genuine non-zero crossed quotes that still correctly fail).
+    const closingBidRaw = optionalDecimal(row.closing_bid, "closing_bid", errors);
+    const closingOfferRaw = optionalDecimal(row.closing_offer, "closing_offer", errors);
+    const closingBid = closingBidRaw !== null && Number(closingBidRaw) === 0 ? null : closingBidRaw;
+    const closingOffer = closingOfferRaw !== null && Number(closingOfferRaw) === 0 ? null : closingOfferRaw;
     const yearHigh = optionalDecimal(row.year_high, "year_high", errors);
     const yearLow = optionalDecimal(row.year_low, "year_low", errors);
     const sharesTraded = optionalCount(row.shares_traded, "shares_traded", errors);

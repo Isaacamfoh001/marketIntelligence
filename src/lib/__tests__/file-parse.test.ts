@@ -8,6 +8,15 @@ describe("normalizeHeader", () => {
     expect(normalizeHeader("  Share_Code ")).toBe("share code");
     expect(normalizeHeader("GSE-CI")).toBe("gse ci");
   });
+
+  it("drops a parenthetical currency/unit annotation entirely, not just its punctuation (M8.1 — real GSE export headers)", () => {
+    // The non-ASCII ¢ symbol strips to nothing, which would otherwise leave
+    // a dangling "gh" token and break every alias match for the required
+    // close_vwap column.
+    expect(normalizeHeader("Closing Price - VWAP (GH¢)")).toBe("closing price vwap");
+    expect(normalizeHeader("Year High (GH¢)")).toBe("year high");
+    expect(normalizeHeader("Closing Bid Price (GH¢)")).toBe("closing bid price");
+  });
 });
 
 describe("findHeader", () => {

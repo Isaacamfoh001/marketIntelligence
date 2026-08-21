@@ -286,19 +286,26 @@ function InflationMetricCard({ latest, previous }: { latest: MacroSeriesObservat
 // GSE-CI follows ordinary-equity polarity: rising is positive (green) —
 // the same shared direction rule the Equities page and SecuritiesTable
 // use for individual securities, applied here to the headline index.
+//
+// MONTHLY, not DAILY (M8.1): the only GSE-CI history this system has is
+// month-end snapshots transcribed from GSE's official monthly Market
+// Summary PDF reports, never a live daily feed. Using dailyFreshness here
+// would mark last month's real, current figure STALE within a day of
+// publication — an honest cadence label matters more than reusing the
+// per-security daily-price freshness rule.
 function GseCiMetricCard({ index }: { index: MarketIndexSnapshot | null }) {
   const [latest, previous] = index?.latestTwo ?? [];
   if (!latest) return <MetricCard label="GSE Composite Index" unit="index" />;
 
   const level = Number(latest.level);
-  const freshness = dailyFreshness(latest.observationDate);
+  const freshness = observationFreshness("MONTHLY", latest.observationDate);
 
   let changeLine: React.ReactNode = NO_CHANGE_LINE;
   if (previous) {
     const prevLevel = Number(previous.level);
     const pct = ((level - prevLevel) / prevLevel) * 100;
     const { arrow, sentiment } = describeDirection(level, prevLevel, "higherIsPositive");
-    changeLine = <DirectionText arrow={arrow} text={`${Math.abs(pct).toFixed(2)}%`} suffix="vs previous trading day" sentiment={sentiment} />;
+    changeLine = <DirectionText arrow={arrow} text={`${Math.abs(pct).toFixed(2)}%`} suffix="vs previous month-end" sentiment={sentiment} />;
   }
 
   return (
@@ -307,7 +314,7 @@ function GseCiMetricCard({ index }: { index: MarketIndexSnapshot | null }) {
       freshness={freshness}
       value={level.toLocaleString("en-GH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
       changeLine={changeLine}
-      footer={`${formatObservationDate(latest.observationDate)} · Ghana Stock Exchange`}
+      footer={`Month-end · ${formatObservationDate(latest.observationDate)} · Ghana Stock Exchange`}
     />
   );
 }
@@ -403,7 +410,7 @@ export default async function OverviewPage() {
           <DirectionText
             arrow={arrow}
             text={`${Math.abs(pct).toFixed(2)}%`}
-            suffix={`vs previous trading day (${formatObservationDate(gseCiPrevious.observationDate)} → ${formatObservationDate(gseCiLatest.observationDate)})`}
+            suffix={`vs previous month-end (${formatObservationDate(gseCiPrevious.observationDate)} → ${formatObservationDate(gseCiLatest.observationDate)})`}
             sentiment={sentiment}
           />
         </>

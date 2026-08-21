@@ -5,11 +5,17 @@
 // observations — a market with zero imported price history has no
 // momentum to report, and must say so rather than default to NEUTRAL
 // (M8 §39: "Missing ≠ neutral").
+//
+// MONTHLY cadence (M8.1): GSE-CI history in this system is month-end
+// snapshots transcribed from GSE's official monthly Market Summary PDF
+// reports, not a live daily feed. Freshness is evaluated against a
+// monthly tolerance so a current month-end figure reads CURRENT rather
+// than STALE — this deliberately does not fake daily momentum.
 // ---------------------------------------------------------------------------
 
 import { computeDirection, sentimentFor } from "../direction";
 import { computeReturn, type DatedValue } from "../returns";
-import { dailyFreshness } from "../freshness";
+import { observationFreshness } from "../freshness";
 import { unavailableResult, describeTwelveMonthContext, type IntelligenceResult, type HistoryPoint } from "./types";
 import type { RankableSecurity } from "../rankings";
 
@@ -36,7 +42,7 @@ export function evaluateEquityMomentumCondition(input: EquityMomentumInput): Int
   }
 
   const observationDate = input.latest.observationDate.toISOString().slice(0, 10);
-  const freshness = dailyFreshness(input.latest.observationDate);
+  const freshness = observationFreshness("MONTHLY", input.latest.observationDate);
   const series: DatedValue[] = input.history.map((h) => ({ date: new Date(`${h.date}T00:00:00.000Z`), value: h.value }));
 
   const oneMonth = computeReturn(series, "1M");

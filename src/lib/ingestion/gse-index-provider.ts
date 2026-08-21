@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// GSE Daily Market Summary — index & whole-market import provider.
+// GSE Market Summary — index & whole-market import provider.
 //
 // See gse-security-provider.ts for the full note on why this is a manual
 // (CLAUDE.md Mode B/C) import rather than an automated fetch: gse.com.gh's
@@ -7,9 +7,22 @@
 //
 // One row → up to two MarketIndexObservation rows (GSE-CI, GSE-FSI) and at
 // most one MarketSummary row, split apart rather than reconstructed from
-// each other — GSE publishes these as independent daily facts, and
-// CLAUDE.md is explicit that Korbly must never derive an index level from
-// constituent security prices.
+// each other — GSE publishes these as independent facts, and CLAUDE.md is
+// explicit that Korbly must never derive an index level from constituent
+// security prices.
+//
+// Two distinct sources, same shape (M8.1 §"Monthly vs Daily distinction"):
+// "daily" is a genuinely daily feed (not yet available — no automated GSE
+// access, and no official daily CSV/Excel export has been supplied); the
+// GSE_MONTHLY_REPORT-based data this project actually has is monthly
+// month-end snapshots extracted from GSE's own official monthly Market
+// Summary PDF reports. Mislabeling the latter as "Daily Market Summary"
+// would both misrepresent the source and make every observation look
+// STALE within a day under a daily-freshness rule. Kept as two named
+// sources (mirrors gse-security-provider.ts's daily/backfill split)
+// rather than one, so a real daily feed can later be added and take
+// priority for any date without silently overwriting or being confused
+// with the monthly series.
 // ---------------------------------------------------------------------------
 
 import { getPrisma } from "../prisma";
@@ -17,29 +30,44 @@ import { parseImportFile } from "./file-parse";
 import { extractGseIndexRows, validateGseIndexRows, type NormalisedGseIndexRow, type RawGseIndexRow } from "./gse-index-parser";
 import { startRun, completeRun, failRun } from "./ingestion-service";
 
-const DATA_SOURCE_NAME = "Ghana Stock Exchange — Daily Market Summary";
+export type IndexImportKind = "daily" | "monthly-report";
+
+const DAILY_SOURCE_NAME = "Ghana Stock Exchange — Daily Market Summary";
+const MONTHLY_SOURCE_NAME = "Ghana Stock Exchange — Monthly Market Summary Reports";
+
+// Higher number = higher priority — mirrors SOURCE_PRIORITY in
+// gse-security-provider.ts exactly. A genuine daily feed, if one is added
+// later, must never be silently overwritten by a monthly report re-import.
+const SOURCE_PRIORITY: Record<IndexImportKind, number> = { daily: 2, "monthly-report": 1 };
 
 export const MARKET_INDEXES = {
   GSE_CI: { code: "GSE-CI", name: "GSE Composite Index" },
   GSE_FSI: { code: "GSE-FSI", name: "GSE Financial Stocks Index" },
 } as const;
 
-/** See ensureGseSecurityDataSources in gse-security-provider.ts — same rationale, so Data Centre can show this source before any import has run. */
-export async function ensureGseIndexDataSource() {
-  return ensureDataSource();
+/** See ensureGseSecurityDataSources in gse-security-provider.ts — same rationale, so Data Centre can show both sources before any import has run. */
+export async function ensureGseIndexDataSources() {
+  const [daily, monthlyReport] = await Promise.all([ensureDataSource("daily"), ensureDataSource("monthly-report")]);
+  return { daily, monthlyReport };
 }
 
-async function ensureDataSource() {
+/** @deprecated kept for any existing caller expecting a single source; prefer ensureGseIndexDataSources. */
+export async function ensureGseIndexDataSource() {
+  return ensureDataSource("daily");
+}
+
+async function ensureDataSource(kind: IndexImportKind) {
   const db = getPrisma();
+  const name = kind === "daily" ? DAILY_SOURCE_NAME : MONTHLY_SOURCE_NAME;
   return db.dataSource.upsert({
-    where: { name: DATA_SOURCE_NAME },
+    where: { name },
     update: {},
     create: {
-      name: DATA_SOURCE_NAME,
+      name,
       provider: "Ghana Stock Exchange",
       sourceType: "MANUAL",
-      url: "https://gse.com.gh/market-statistics/",
-      expectedFrequency: "DAILY",
+      url: kind === "daily" ? "https://gse.com.gh/market-statistics/" : "https://gse.com.gh/market-reports/",
+      expectedFrequency: kind === "daily" ? "DAILY" : "MONTHLY",
       ingestionMethod: "FILE_IMPORT",
       active: true,
     },
@@ -66,6 +94,9 @@ async function ensureIndexes(): Promise<Record<keyof typeof MARKET_INDEXES, { id
 async function persistIndexAndSummary(
   runId: string,
   sourceId: string,
+  importKind: IndexImportKind,
+  dailySourceId: string,
+  monthlySourceId: string,
   indexes: Record<keyof typeof MARKET_INDEXES, { id: string }>,
   rows: NormalisedGseIndexRow[],
 ): Promise<{ indexObservationsPersisted: number; summariesPersisted: number; inserted: number; updated: number }> {
@@ -74,6 +105,7 @@ async function persistIndexAndSummary(
   let summariesPersisted = 0;
   let inserted = 0;
   let updated = 0;
+  const currentRank = SOURCE_PRIORITY[importKind];
 
   for (const row of rows) {
     for (const [key, level] of [
@@ -84,8 +116,12 @@ async function persistIndexAndSummary(
       const marketIndexId = indexes[key].id;
       const existing = await db.marketIndexObservation.findUnique({
         where: { marketIndexId_observationDate: { marketIndexId, observationDate: row.tradingDate } },
-        select: { id: true },
+        include: { ingestionRun: true },
       });
+      if (existing) {
+        const existingRank = existing.ingestionRun.dataSourceId === dailySourceId ? SOURCE_PRIORITY.daily : SOURCE_PRIORITY["monthly-report"];
+        if (existingRank > currentRank) continue; // never let the monthly-report series overwrite a real daily observation
+      }
       await db.marketIndexObservation.upsert({
         where: { marketIndexId_observationDate: { marketIndexId, observationDate: row.tradingDate } },
         update: { level, sourceId, retrievedAt: new Date(), ingestionRunId: runId },
@@ -97,26 +133,37 @@ async function persistIndexAndSummary(
     }
 
     if (row.marketCapGhs !== null || row.totalVolume !== null || row.totalValueTradedGhs !== null) {
-      await db.marketSummary.upsert({
+      const existingSummary = await db.marketSummary.findUnique({
         where: { tradingDate: row.tradingDate },
-        update: {
-          totalVolume: row.totalVolume !== null ? BigInt(Math.round(Number(row.totalVolume))) : null,
-          totalValueTradedGhs: row.totalValueTradedGhs,
-          marketCapGhs: row.marketCapGhs,
-          sourceId,
-          retrievedAt: new Date(),
-          ingestionRunId: runId,
-        },
-        create: {
-          tradingDate: row.tradingDate,
-          totalVolume: row.totalVolume !== null ? BigInt(Math.round(Number(row.totalVolume))) : null,
-          totalValueTradedGhs: row.totalValueTradedGhs,
-          marketCapGhs: row.marketCapGhs,
-          sourceId,
-          ingestionRunId: runId,
-        },
+        include: { ingestionRun: true },
       });
-      summariesPersisted++;
+      const existingSummaryRank = existingSummary
+        ? existingSummary.ingestionRun.dataSourceId === dailySourceId
+          ? SOURCE_PRIORITY.daily
+          : SOURCE_PRIORITY["monthly-report"]
+        : null;
+      if (existingSummaryRank === null || existingSummaryRank <= currentRank) {
+        await db.marketSummary.upsert({
+          where: { tradingDate: row.tradingDate },
+          update: {
+            totalVolume: row.totalVolume !== null ? BigInt(Math.round(Number(row.totalVolume))) : null,
+            totalValueTradedGhs: row.totalValueTradedGhs,
+            marketCapGhs: row.marketCapGhs,
+            sourceId,
+            retrievedAt: new Date(),
+            ingestionRunId: runId,
+          },
+          create: {
+            tradingDate: row.tradingDate,
+            totalVolume: row.totalVolume !== null ? BigInt(Math.round(Number(row.totalVolume))) : null,
+            totalValueTradedGhs: row.totalValueTradedGhs,
+            marketCapGhs: row.marketCapGhs,
+            sourceId,
+            ingestionRunId: runId,
+          },
+        });
+        summariesPersisted++;
+      }
     }
   }
 
@@ -156,6 +203,7 @@ function earliestDate(rows: { tradingDate: Date }[]): string | null {
 export async function importGseMarketSummary(
   filename: string,
   buffer: Buffer,
+  kind: IndexImportKind,
   opts: { commit: boolean; triggeredBy?: string } = { commit: false },
 ): Promise<GseIndexImportResult> {
   if (!opts.commit) {
@@ -198,9 +246,10 @@ export async function importGseMarketSummary(
     }
   }
 
-  const dataSource = await ensureDataSource();
+  const [dailySource, monthlySource] = await Promise.all([ensureDataSource("daily"), ensureDataSource("monthly-report")]);
+  const activeSource = kind === "daily" ? dailySource : monthlySource;
   const indexes = await ensureIndexes();
-  const { runId } = await startRun({ dataSourceId: dataSource.id, triggeredBy: opts.triggeredBy ?? "cli", artifactName: filename });
+  const { runId } = await startRun({ dataSourceId: activeSource.id, triggeredBy: opts.triggeredBy ?? "cli", artifactName: filename });
 
   try {
     const parsedFile = await parseImportFile(filename, buffer);
@@ -209,7 +258,10 @@ export async function importGseMarketSummary(
 
     const { indexObservationsPersisted, summariesPersisted, inserted, updated } = await persistIndexAndSummary(
       runId,
-      dataSource.id,
+      activeSource.id,
+      kind,
+      dailySource.id,
+      monthlySource.id,
       indexes,
       validation.valid,
     );

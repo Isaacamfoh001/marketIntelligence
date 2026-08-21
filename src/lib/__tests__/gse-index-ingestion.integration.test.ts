@@ -38,7 +38,7 @@ afterAll(async () => {
 describe("importGseMarketSummary — preview", () => {
   it("validates without creating a run or persisting anything", async () => {
     const buffer = csvBuffer(["2099-01-15,6120.45,3980.10,95000000000,1250000,3400000"]);
-    const result = await importGseMarketSummary("preview.csv", buffer, { commit: false });
+    const result = await importGseMarketSummary("preview.csv", buffer, "daily", { commit: false });
 
     expect(result.status).toBe("PREVIEW");
     expect(result.runId).toBeNull();
@@ -55,7 +55,7 @@ describe("importGseMarketSummary — preview", () => {
 describe("importGseMarketSummary — commit", () => {
   it("splits one row into GSE-CI + GSE-FSI observations and a MarketSummary row, all with correct provenance", async () => {
     const buffer = csvBuffer(["2099-01-15,6120.45,3980.10,95000000000,1250000,3400000"]);
-    const result = await trackedImport("market-summary.csv", buffer, { commit: true });
+    const result = await trackedImport("market-summary.csv", buffer, "daily", { commit: true });
 
     expect(result.status).toBe("SUCCESS");
     expect(result.indexObservationsPersisted).toBe(2);
@@ -82,7 +82,7 @@ describe("importGseMarketSummary — commit", () => {
 
   it("never derives GSE-CI from anything but the imported level — no MarketSummary row when only GSE-CI is present", async () => {
     const buffer = csvBuffer(["2099-01-16,6130.00,,,,"]);
-    await trackedImport("market-summary.csv", buffer, { commit: true });
+    await trackedImport("market-summary.csv", buffer, "daily", { commit: true });
 
     const summary = await db.marketSummary.findUnique({ where: { tradingDate: new Date("2099-01-16T00:00:00.000Z") } });
     expect(summary).toBeNull();
@@ -90,8 +90,8 @@ describe("importGseMarketSummary — commit", () => {
 
   it("is idempotent across a repeated identical import", async () => {
     const buffer = csvBuffer(["2099-01-17,6120.45,,,,"]);
-    await trackedImport("market-summary.csv", buffer, { commit: true });
-    await trackedImport("market-summary.csv", buffer, { commit: true });
+    await trackedImport("market-summary.csv", buffer, "daily", { commit: true });
+    await trackedImport("market-summary.csv", buffer, "daily", { commit: true });
 
     const ci = await db.marketIndex.findUniqueOrThrow({ where: { code: "GSE-CI" } });
     const count = await db.marketIndexObservation.count({
@@ -101,8 +101,8 @@ describe("importGseMarketSummary — commit", () => {
   });
 
   it("upserts a corrected index level and moves provenance to the correcting run", async () => {
-    const run1 = await trackedImport("market-summary.csv", csvBuffer(["2099-01-18,6120.45,,,,"]), { commit: true });
-    const run2 = await trackedImport("market-summary-corrected.csv", csvBuffer(["2099-01-18,6125.10,,,,"]), { commit: true });
+    const run1 = await trackedImport("market-summary.csv", csvBuffer(["2099-01-18,6120.45,,,,"]), "daily", { commit: true });
+    const run2 = await trackedImport("market-summary-corrected.csv", csvBuffer(["2099-01-18,6125.10,,,,"]), "daily", { commit: true });
 
     const ci = await db.marketIndex.findUniqueOrThrow({ where: { code: "GSE-CI" } });
     const stored = await db.marketIndexObservation.findUniqueOrThrow({
@@ -114,7 +114,7 @@ describe("importGseMarketSummary — commit", () => {
   });
 
   it("produces a FAILED IngestionRun when the file can't be parsed at commit time", async () => {
-    const result = await trackedImport("report.pdf", Buffer.from("not a real file"), { commit: true });
+    const result = await trackedImport("report.pdf", Buffer.from("not a real file"), "daily", { commit: true });
     expect(result.status).toBe("FAILED");
     const run = await db.ingestionRun.findUniqueOrThrow({ where: { id: result.runId! } });
     expect(run.status).toBe("FAILED");
@@ -123,7 +123,7 @@ describe("importGseMarketSummary — commit", () => {
 
   it("rejects a row with no recognised data column without persisting it", async () => {
     const buffer = csvBuffer(["2099-01-19,,,,,"]);
-    const result = await trackedImport("market-summary.csv", buffer, { commit: true });
+    const result = await trackedImport("market-summary.csv", buffer, "daily", { commit: true });
     expect(result.recordsRejected).toBe(1);
     expect(result.indexObservationsPersisted).toBe(0);
     expect(result.summariesPersisted).toBe(0);

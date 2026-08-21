@@ -49,6 +49,61 @@ describe("extractGseSecurityRows + validateGseSecurityRows", () => {
     expect(result.valid[0].tradingDate.toISOString().slice(0, 10)).toBe("2026-08-17");
   });
 
+  it("accepts GSE's real export headers, which suffix every price column with a (GH¢) unit annotation (M8.1)", () => {
+    const REAL_GSE_HEADERS = [
+      "Daily Date",
+      "Share Code",
+      "Year High (GH¢)",
+      "Year Low (GH¢)",
+      "Previous Closing Price - VWAP (GH¢)",
+      "Opening Price (GH¢)",
+      "Last Transaction Price (GH¢)",
+      "Closing Price - VWAP (GH¢)",
+      "Price Change (GH¢)",
+      "Closing Bid Price (GH¢)",
+      "Closing Offer Price (GH¢)",
+      "Total Shares Traded",
+      "Total Value Traded (GH¢)",
+    ];
+    const text = csv([["20/08/2026", "MTNGH", "4.60", "3.90", "4.05", "4.05", "4.20", "4.20", "0.15", "4.18", "4.22", "150000", "630000"]], REAL_GSE_HEADERS);
+    const rows = extractGseSecurityRows(parseCsv(text));
+    const result = validateGseSecurityRows(rows);
+    expect(result.invalid).toHaveLength(0);
+    expect(result.valid[0]).toMatchObject({ ticker: "MTNGH", closeVwap: "4.20", closingBid: "4.18", closingOffer: "4.22", yearHigh: "4.60" });
+  });
+
+  it("treats a literal 0.00 closing_bid or closing_offer as missing, not a real zero-value quote (M8.1)", () => {
+    const text = csv(
+      [
+        // A real bid with no offer published (offer cell literally "0.00" in the source).
+        ["2026-08-17", "SAMBA", "", "", "", "0.55", "", "39.00", "0.00", "", "", "", ""],
+        // A genuine non-zero crossed quote must still be rejected.
+        ["2026-08-17", "ACCESS", "", "", "", "13.00", "", "13.12", "2.21", "", "", "", ""],
+      ],
+      CANONICAL_HEADERS,
+    );
+    const rows = extractGseSecurityRows(parseCsv(text));
+    const result = validateGseSecurityRows(rows);
+    expect(result.invalid).toHaveLength(1);
+    expect(result.invalid[0].row.share_code).toBe("ACCESS");
+    expect(result.valid).toHaveLength(1);
+    expect(result.valid[0]).toMatchObject({ ticker: "SAMBA", closingBid: "39.00", closingOffer: null });
+  });
+
+  it("strips GSE's inconsistent asterisk footnote-marker decoration from a share code (\"**ALW**\", \"PBC**\") to the real security code", () => {
+    const text = csv(
+      [
+        ["2026-08-17", "**ALW**", "", "", "", "0.10", "", "", "", "", "", "", ""],
+        ["2026-08-17", "PBC**", "", "", "", "1.20", "", "", "", "", "", "", ""],
+      ],
+      CANONICAL_HEADERS,
+    );
+    const rows = extractGseSecurityRows(parseCsv(text));
+    const result = validateGseSecurityRows(rows);
+    expect(result.invalid).toHaveLength(0);
+    expect(result.valid.map((r) => r.ticker)).toEqual(["ALW", "PBC"]);
+  });
+
   it("accepts Korbly's own documented snake_case template headers equally", () => {
     const text = csv(
       [["2026-08-17", "MTNGH", "", "", "", "2.50", "", "", "", "", "", "", ""]],
