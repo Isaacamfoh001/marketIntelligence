@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { describeDirection, DIRECTION_ARROW, SENTIMENT_TEXT_CLASS } from "@/lib/direction";
+import { CompanyLogo } from "./CompanyLogo";
 import type { CompanyLandingRow } from "@/lib/queries/companies";
 
 function formatGhs(value: number | null): string {
@@ -69,7 +70,8 @@ export function CompaniesTable({ rows }: { rows: CompanyLandingRow[] }) {
             {filtered.map((r) => (
               <tr key={r.ticker} className="border-b border-zinc-100 last:border-0 hover:bg-zinc-50 dark:border-zinc-800/50 dark:hover:bg-zinc-800/40">
                 <td className="whitespace-nowrap px-3 py-2.5 font-medium text-zinc-900 dark:text-zinc-100">
-                  <Link href={`/companies/${r.ticker}`} className="hover:underline">
+                  <Link href={`/companies/${r.ticker}`} className="flex items-center gap-2 hover:underline">
+                    <CompanyLogo ticker={r.ticker} size={22} />
                     {r.ticker}
                   </Link>
                 </td>

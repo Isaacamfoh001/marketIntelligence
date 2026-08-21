@@ -8,6 +8,7 @@
 import { getPrisma } from "../prisma";
 import { computeAllReturns, computeReturn, type DatedValue, type ReturnResult, type ReturnWindow } from "../returns";
 import { topGainers, topLosers, mostTraded, type RankableSecurity, type RankedSecurity, type MostTradedSecurity } from "../rankings";
+import { computeMarketBreadth, type MarketBreadth } from "../intelligence";
 
 export interface ChartPoint {
   date: string;
@@ -168,6 +169,11 @@ export function getLatestSecurityTradingDate(securities: SecuritySnapshot[]): st
   const dates = securities.map((s) => s.latestDate).filter((d): d is string => d != null);
   if (dates.length === 0) return null;
   return dates.reduce((a, b) => (b > a ? b : a));
+}
+
+/** Advancers/decliners/unchanged by 1D return (M8 §34) — reuses the same toRankable conversion Top Gainers/Losers already go through, so breadth counts exactly the securities those lists would. */
+export function getMarketBreadth(securities: SecuritySnapshot[]): MarketBreadth | null {
+  return computeMarketBreadth(toRankable(securities));
 }
 
 export { computeReturn };

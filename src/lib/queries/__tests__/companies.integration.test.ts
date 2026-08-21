@@ -9,10 +9,12 @@ import "dotenv/config";
 import { afterAll, describe, expect, it } from "vitest";
 import { getPrisma } from "../../prisma";
 import { importCompanyFinancials } from "../../ingestion/financials-provider";
-import { getAnnualFinancials, getLatestInterim, getLatestAnnualMetricValue, getCompanyRatios, getCompanyByTicker } from "../companies";
+import { getAnnualFinancials, getLatestInterim, getLatestAnnualMetricValue, getCompanyRatios, getCompanyByTicker, getCompanyHighlights } from "../companies";
 
 const db = getPrisma();
 const TICKER = "ZZQRY1";
+const BANK_TICKER = "ZZQRY2";
+const LOSS_TO_PROFIT_TICKER = "ZZQRY3";
 const createdRunIds: string[] = [];
 
 function csvBuffer(rows: string[]): Buffer {
@@ -41,14 +43,47 @@ async function seed() {
   return result;
 }
 
+async function seedBank() {
+  // OPERATING_INCOME (bank profile), not REVENUE — must never enter the
+  // Revenue Growth ranking, only PAT growth / ROE (M8 §35-36).
+  const rows = [
+    `${BANK_TICKER},ANNUAL,2024,2024-01-01,2024-12-31,Operating income,500,GHS,GHS_MILLIONS,TRUE,CONSOLIDATED`,
+    `${BANK_TICKER},ANNUAL,2024,2024-01-01,2024-12-31,Profit after tax,100,GHS,GHS_MILLIONS,TRUE,CONSOLIDATED`,
+    `${BANK_TICKER},ANNUAL,2024,2024-01-01,2024-12-31,Total equity,2000,GHS,GHS_MILLIONS,TRUE,CONSOLIDATED`,
+    `${BANK_TICKER},ANNUAL,2025,2025-01-01,2025-12-31,Operating income,650,GHS,GHS_MILLIONS,TRUE,CONSOLIDATED`,
+    `${BANK_TICKER},ANNUAL,2025,2025-01-01,2025-12-31,Profit after tax,150,GHS,GHS_MILLIONS,TRUE,CONSOLIDATED`,
+    `${BANK_TICKER},ANNUAL,2025,2025-01-01,2025-12-31,Total equity,2400,GHS,GHS_MILLIONS,TRUE,CONSOLIDATED`,
+  ];
+  const result = await importCompanyFinancials("query-fixture-bank.csv", csvBuffer(rows), { commit: true });
+  if (result.runId) createdRunIds.push(result.runId);
+}
+
+async function seedLossToProfit() {
+  // A loss year turning into a profit has no honest "% growth" — must be
+  // excluded from PAT growth ranking (M8 §35: positive-base guard).
+  const rows = [
+    `${LOSS_TO_PROFIT_TICKER},ANNUAL,2024,2024-01-01,2024-12-31,Revenue,300,GHS,GHS_MILLIONS,TRUE,CONSOLIDATED`,
+    `${LOSS_TO_PROFIT_TICKER},ANNUAL,2024,2024-01-01,2024-12-31,Profit after tax,-50,GHS,GHS_MILLIONS,TRUE,CONSOLIDATED`,
+    `${LOSS_TO_PROFIT_TICKER},ANNUAL,2025,2025-01-01,2025-12-31,Revenue,320,GHS,GHS_MILLIONS,TRUE,CONSOLIDATED`,
+    `${LOSS_TO_PROFIT_TICKER},ANNUAL,2025,2025-01-01,2025-12-31,Profit after tax,10,GHS,GHS_MILLIONS,TRUE,CONSOLIDATED`,
+  ];
+  const result = await importCompanyFinancials("query-fixture-loss.csv", csvBuffer(rows), { commit: true });
+  if (result.runId) createdRunIds.push(result.runId);
+}
+
+async function cleanupTicker(ticker: string) {
+  const company = await db.company.findUnique({ where: { ticker } });
+  if (!company) return;
+  const periods = await db.financialPeriod.findMany({ where: { companyId: company.id }, select: { id: true } });
+  await db.companyFinancialObservation.deleteMany({ where: { financialPeriodId: { in: periods.map((p) => p.id) } } });
+  await db.financialPeriod.deleteMany({ where: { companyId: company.id } });
+  await db.company.deleteMany({ where: { id: company.id } });
+}
+
 afterAll(async () => {
-  const company = await db.company.findUnique({ where: { ticker: TICKER } });
-  if (company) {
-    const periods = await db.financialPeriod.findMany({ where: { companyId: company.id }, select: { id: true } });
-    await db.companyFinancialObservation.deleteMany({ where: { financialPeriodId: { in: periods.map((p) => p.id) } } });
-    await db.financialPeriod.deleteMany({ where: { companyId: company.id } });
-    await db.company.deleteMany({ where: { id: company.id } });
-  }
+  await cleanupTicker(TICKER);
+  await cleanupTicker(BANK_TICKER);
+  await cleanupTicker(LOSS_TO_PROFIT_TICKER);
   await db.ingestionRun.deleteMany({ where: { id: { in: createdRunIds } } });
 });
 
@@ -154,5 +189,40 @@ describe("getCompanyRatios — market + financial join, missing-data handling", 
     } finally {
       await db.company.delete({ where: { id: empty.id } });
     }
+  });
+});
+
+describe("getCompanyHighlights — cross-company leaders, only where genuinely comparable", () => {
+  const EXTREME_TICKER = "ZZQRY4";
+
+  afterAll(async () => {
+    await cleanupTicker(EXTREME_TICKER);
+  });
+
+  it("never ranks a bank's OPERATING_INCOME growth in Revenue Growth (no REVENUE metric at all)", async () => {
+    await seedBank();
+    const highlights = await getCompanyHighlights();
+    expect(highlights.highestRevenueGrowth?.ticker).not.toBe(BANK_TICKER);
+  });
+
+  it("never ranks a loss-to-profit transition in PAT Growth (no honest positive-base percentage)", async () => {
+    await seedLossToProfit();
+    const highlights = await getCompanyHighlights();
+    expect(highlights.strongestPatGrowth?.ticker).not.toBe(LOSS_TO_PROFIT_TICKER);
+  });
+
+  it("surfaces the company with unambiguously the largest revenue/PAT growth as the leader", async () => {
+    const rows = [
+      `${EXTREME_TICKER},ANNUAL,2024,2024-01-01,2024-12-31,Revenue,100,GHS,GHS_MILLIONS,TRUE,CONSOLIDATED`,
+      `${EXTREME_TICKER},ANNUAL,2024,2024-01-01,2024-12-31,Profit after tax,10,GHS,GHS_MILLIONS,TRUE,CONSOLIDATED`,
+      `${EXTREME_TICKER},ANNUAL,2025,2025-01-01,2025-12-31,Revenue,100000,GHS,GHS_MILLIONS,TRUE,CONSOLIDATED`,
+      `${EXTREME_TICKER},ANNUAL,2025,2025-01-01,2025-12-31,Profit after tax,10000,GHS,GHS_MILLIONS,TRUE,CONSOLIDATED`,
+    ];
+    const result = await importCompanyFinancials("query-fixture-extreme.csv", csvBuffer(rows), { commit: true });
+    if (result.runId) createdRunIds.push(result.runId);
+
+    const highlights = await getCompanyHighlights();
+    expect(highlights.highestRevenueGrowth?.ticker).toBe(EXTREME_TICKER);
+    expect(highlights.strongestPatGrowth?.ticker).toBe(EXTREME_TICKER);
   });
 });

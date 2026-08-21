@@ -287,7 +287,7 @@ export interface CompanyRatios {
 }
 
 /** The prior year's ANNUAL value for `metricCode`, same statement scope as `current` — null if that year isn't in the system (never falls back to a different year or scope). */
-async function getPriorAnnualValue(companyId: string, metricCode: string, current: { period: PeriodRow }): Promise<number | null> {
+export async function getPriorAnnualValue(companyId: string, metricCode: string, current: { period: PeriodRow }): Promise<number | null> {
   const prisma = getPrisma();
   const obs = await prisma.companyFinancialObservation.findFirst({
     where: {
@@ -326,5 +326,97 @@ export async function getCompanyRatios(companyId: string, latestMarketPrice: num
     pb: latestMarketPrice && equity && shares ? computePB(latestMarketPrice, equity.value, shares.value) : null,
     dividendYield: latestMarketPrice && dps ? computeDividendYield(dps.value, latestMarketPrice) : null,
     priceDate,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Company Highlights (M8 Part B §35-36) — cross-company leaders, computed
+// only where the underlying metrics are genuinely comparable.
+//
+// Revenue Growth is scoped to companies whose primary top-line metric is
+// REVENUE — a bank's OPERATING_INCOME growth is never ranked alongside an
+// industrial's REVENUE growth as though they measured the same thing (M8
+// §36: "do not rank bank operating income against industrial revenue as
+// though they were identical"). PAT growth and ROE are genuinely
+// cross-sector comparable (bottom-line profit / return on equity), so
+// every company with the required data competes together.
+//
+// Growth % is only computed against a POSITIVE prior-year base — a loss
+// year turning into a profit (or vice versa) has no honest percentage
+// (M8 §35: "only calculate when metrics are genuinely comparable").
+// ---------------------------------------------------------------------------
+
+export interface CompanyHighlight {
+  ticker: string;
+  name: string;
+  value: number;
+}
+
+export interface CompanyHighlights {
+  highestRevenueGrowth: CompanyHighlight | null;
+  strongestPatGrowth: CompanyHighlight | null;
+  highestRoe: CompanyHighlight | null;
+  highestDividendYield: CompanyHighlight | null;
+}
+
+function topBy(candidates: CompanyHighlight[]): CompanyHighlight | null {
+  if (candidates.length === 0) return null;
+  return candidates.reduce((best, c) => (c.value > best.value ? c : best));
+}
+
+export async function getCompanyHighlights(): Promise<CompanyHighlights> {
+  const prisma = getPrisma();
+  const companies = await prisma.company.findMany({
+    where: { ticker: { not: null }, active: true },
+    include: { securities: { where: { active: true }, take: 1 } },
+  });
+
+  const revenueGrowth: CompanyHighlight[] = [];
+  const patGrowth: CompanyHighlight[] = [];
+  const roeCandidates: CompanyHighlight[] = [];
+  const dividendYieldCandidates: CompanyHighlight[] = [];
+
+  for (const company of companies) {
+    const ticker = company.ticker!;
+
+    const revenue = await getLatestAnnualMetricValue(company.id, "REVENUE");
+    if (revenue) {
+      const priorRevenue = await getPriorAnnualValue(company.id, "REVENUE", revenue);
+      if (priorRevenue !== null && priorRevenue > 0) {
+        revenueGrowth.push({ ticker, name: company.name, value: ((revenue.value - priorRevenue) / priorRevenue) * 100 });
+      }
+    }
+
+    const pat = await getLatestAnnualMetricValue(company.id, "PROFIT_AFTER_TAX");
+    if (pat) {
+      const priorPat = await getPriorAnnualValue(company.id, "PROFIT_AFTER_TAX", pat);
+      if (priorPat !== null && priorPat > 0) {
+        patGrowth.push({ ticker, name: company.name, value: ((pat.value - priorPat) / priorPat) * 100 });
+      }
+
+      const equity = await getLatestAnnualMetricValue(company.id, "TOTAL_EQUITY");
+      if (equity) {
+        const priorEquity = await getPriorAnnualValue(company.id, "TOTAL_EQUITY", equity);
+        const roe = computeROE(pat.value, equity.value, priorEquity);
+        if (roe) roeCandidates.push({ ticker, name: company.name, value: roe.value });
+      }
+    }
+
+    const security = company.securities[0];
+    if (security) {
+      const latestPriceRow = await prisma.securityPrice.findFirst({ where: { securityId: security.id }, orderBy: { tradingDate: "desc" } });
+      const dps = await getLatestAnnualMetricValue(company.id, "DIVIDEND_PER_SHARE");
+      if (latestPriceRow && dps) {
+        const yield_ = computeDividendYield(dps.value, Number(latestPriceRow.closeVwap));
+        if (yield_) dividendYieldCandidates.push({ ticker, name: company.name, value: yield_.value });
+      }
+    }
+  }
+
+  return {
+    highestRevenueGrowth: topBy(revenueGrowth),
+    strongestPatGrowth: topBy(patGrowth),
+    highestRoe: topBy(roeCandidates),
+    highestDividendYield: topBy(dividendYieldCandidates),
   };
 }

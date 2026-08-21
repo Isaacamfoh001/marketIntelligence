@@ -18,6 +18,8 @@ import {
   TREASURY_INSTRUMENTS,
   type PolicyDecisionRow,
 } from "@/lib/queries/market-data";
+import { evaluateInflationCondition, evaluateFxCondition, evaluateMonetaryPolicyCondition, evaluateShortTermRatesCondition } from "@/lib/intelligence";
+import { ConditionBadge } from "@/components/ConditionBadge";
 
 /** Policy decisions are already classified — no arithmetic needed for their direction. */
 function directionForDecision(type: PolicyDecisionRow["decisionType"]): Direction {
@@ -86,12 +88,47 @@ export default async function MacroRatesPage() {
   const [inflationLatest, inflationPrevious] = inflation.latestTwo;
   const [gdpLatest, gdpPrevious] = gdp.latestTwo;
 
-  const [fxLatest] = fx.latestTwo;
+  const [fxLatest, fxPrevious] = fx.latestTwo;
   const { latestDecision: mprLatestDecision, lastChange: mprLastChange } = mpr;
 
   const treasuryChartSeries = treasury
     .filter((t) => t.history.length > 0)
     .map((t) => ({ key: t.code, label: t.label, color: TREASURY_CHART_COLORS[t.code] ?? "#71717a", data: t.history }));
+
+  // Same deterministic dimension evaluators Overview's Market Condition uses
+  // (M8 §33) — a badge here always agrees with the Overview card for the
+  // same underlying data, never a second opinion.
+  const inflationCondition = evaluateInflationCondition({
+    latest: inflationLatest ? { observationDate: inflationLatest.observationDate, value: Number(inflationLatest.value) } : null,
+    previous: inflationPrevious ? { observationDate: inflationPrevious.observationDate, value: Number(inflationPrevious.value) } : null,
+    history: inflation.history,
+  });
+  const fxCondition = evaluateFxCondition({
+    latest: fxLatest ? { observationDate: fxLatest.observationDate, midRate: Number(fxLatest.midRate) } : null,
+    previous: fxPrevious ? { observationDate: fxPrevious.observationDate, midRate: Number(fxPrevious.midRate) } : null,
+    history: fx.history,
+  });
+  const monetaryPolicyCondition = evaluateMonetaryPolicyCondition({
+    latestDecision: mprLatestDecision
+      ? {
+          decisionDate: mprLatestDecision.decisionDate,
+          resultingRate: Number(mprLatestDecision.resultingRate),
+          decisionType: mprLatestDecision.decisionType,
+          changeBps: mprLatestDecision.changeBps,
+        }
+      : null,
+  });
+  const ratesCondition = evaluateShortTermRatesCondition(
+    TREASURY_INSTRUMENTS.map(({ code, label }) => {
+      const snapshot = treasury.find((t) => t.code === code);
+      const [latest, previous] = snapshot?.latestTwo ?? [];
+      return {
+        label,
+        latest: latest ? { observationDate: latest.observationDate, interestRate: Number(latest.interestRate) } : null,
+        previous: previous ? { observationDate: previous.observationDate, interestRate: Number(previous.interestRate) } : null,
+      };
+    }),
+  );
 
   return (
     <div className="space-y-8">
@@ -106,6 +143,7 @@ export default async function MacroRatesPage() {
       <section>
         <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
           Monetary Policy
+          <ConditionBadge result={monetaryPolicyCondition} />
         </h2>
         {mprLatestDecision ? (
           <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
@@ -187,6 +225,7 @@ export default async function MacroRatesPage() {
       <section>
         <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
           Treasury Bills
+          <ConditionBadge result={ratesCondition} />
         </h2>
         <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
           {TREASURY_INSTRUMENTS.map(({ code, label }) => {
@@ -266,6 +305,7 @@ export default async function MacroRatesPage() {
       <section>
         <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
           Foreign Exchange
+          <ConditionBadge result={fxCondition} />
         </h2>
         {fxLatest ? (
           <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
@@ -304,6 +344,7 @@ export default async function MacroRatesPage() {
       <section>
         <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
           Inflation
+          <ConditionBadge result={inflationCondition} />
         </h2>
         {inflationLatest ? (
           <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">

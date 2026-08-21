@@ -1,10 +1,11 @@
 import { CompaniesTable } from "@/components/CompaniesTable";
-import { getCompanyLandingRows } from "@/lib/queries/companies";
+import { CompanyHighlightsSection } from "@/components/CompanyHighlights";
+import { getCompanyLandingRows, getCompanyHighlights } from "@/lib/queries/companies";
 
 export const dynamic = "force-dynamic";
 
 export default async function CompaniesPage() {
-  const rows = await getCompanyLandingRows();
+  const [rows, highlights] = await Promise.all([getCompanyLandingRows(), getCompanyHighlights()]);
 
   return (
     <div className="space-y-6">
@@ -14,6 +15,13 @@ export default async function CompaniesPage() {
           Market performance and fundamental financial performance for Korbly&rsquo;s covered Ghana Stock Exchange companies.
         </p>
       </div>
+
+      {rows.length > 0 && (
+        <section>
+          <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Company Fundamentals</h2>
+          <CompanyHighlightsSection highlights={highlights} />
+        </section>
+      )}
 
       {rows.length === 0 ? (
         <div className="rounded border border-zinc-200 bg-white px-6 py-16 text-center dark:border-zinc-800 dark:bg-zinc-900">

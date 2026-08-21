@@ -8,7 +8,11 @@ import {
   getSecuritiesWithReturns,
   getMarketActivity,
   getLatestSecurityTradingDate,
+  getMarketBreadth,
 } from "@/lib/queries/equities";
+import { evaluateEquityMomentumCondition } from "@/lib/intelligence";
+import { computeReturn } from "@/lib/returns";
+import { ConditionBadge } from "@/components/ConditionBadge";
 
 export const dynamic = "force-dynamic";
 
@@ -133,6 +137,19 @@ export default async function EquitiesPage() {
   const hasAnySecurities = securitiesWithPrices.length > 0;
   const hasAnyIndexData = (gseCi?.latestTwo.length ?? 0) > 0 || (gseFsi?.latestTwo.length ?? 0) > 0 || marketSummary !== null;
 
+  // Equity intelligence (M8 §34) — only ever activates when GSE-CI actually
+  // has stored observations (M8 §39: missing GSE data is never treated as
+  // neutral momentum).
+  const [gseCiLatest] = gseCi?.latestTwo ?? [];
+  const equityCondition = evaluateEquityMomentumCondition({
+    latest: gseCiLatest ? { observationDate: gseCiLatest.observationDate, level: Number(gseCiLatest.level) } : null,
+    history: gseCi?.history ?? [],
+  });
+  const gseCiSeries = (gseCi?.history ?? []).map((h) => ({ date: new Date(`${h.date}T00:00:00.000Z`), value: h.value }));
+  const gseCi1M = computeReturn(gseCiSeries, "1M");
+  const gseCiYtd = computeReturn(gseCiSeries, "YTD");
+  const breadth = getMarketBreadth(securitiesWithPrices);
+
   return (
     <div className="space-y-8">
       <div>
@@ -178,6 +195,52 @@ export default async function EquitiesPage() {
             Latest trading date: {formatDate(latestTradingDate)}
           </p>
         )}
+      </section>
+
+      {/* ------------------------------------------------------------ */}
+      <section>
+        <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+          Market Intelligence
+        </h2>
+        <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+          <SectionCard>
+            <div className="flex items-center justify-between">
+              <p className="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">GSE-CI Momentum</p>
+              <ConditionBadge result={equityCondition} />
+            </div>
+            <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">{equityCondition.explanation}</p>
+            {(gseCi1M || gseCiYtd) && (
+              <p className="mt-2 text-[11px] text-zinc-400 dark:text-zinc-500">
+                {gseCi1M && `1M ${gseCi1M.pct >= 0 ? "+" : ""}${gseCi1M.pct.toFixed(2)}%`}
+                {gseCi1M && gseCiYtd && " · "}
+                {gseCiYtd && `YTD ${gseCiYtd.pct >= 0 ? "+" : ""}${gseCiYtd.pct.toFixed(2)}%`}
+              </p>
+            )}
+          </SectionCard>
+          <SectionCard>
+            <p className="mb-2 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Market Breadth</p>
+            {breadth ? (
+              <div className="flex items-center gap-6 text-sm">
+                <div>
+                  <div className="text-lg font-semibold text-emerald-600 dark:text-emerald-400">{breadth.advancers}</div>
+                  <div className="text-[11px] text-zinc-400 dark:text-zinc-500">Advancers</div>
+                </div>
+                <div>
+                  <div className="text-lg font-semibold text-red-600 dark:text-red-400">{breadth.decliners}</div>
+                  <div className="text-[11px] text-zinc-400 dark:text-zinc-500">Decliners</div>
+                </div>
+                <div>
+                  <div className="text-lg font-semibold text-zinc-500 dark:text-zinc-400">{breadth.unchanged}</div>
+                  <div className="text-[11px] text-zinc-400 dark:text-zinc-500">Unchanged</div>
+                </div>
+              </div>
+            ) : (
+              <p className="py-2 text-xs text-zinc-400 dark:text-zinc-500">
+                {hasAnySecurities ? "No securities have a computable 1-day return yet." : "Awaiting first official GSE import."}
+              </p>
+            )}
+          </SectionCard>
+        </div>
       </section>
 
       {/* ------------------------------------------------------------ */}

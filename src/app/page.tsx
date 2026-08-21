@@ -23,6 +23,21 @@ import {
   getMarketActivity,
   type MarketIndexSnapshot,
 } from "@/lib/queries/equities";
+import {
+  evaluateInflationCondition,
+  evaluateFxCondition,
+  evaluateMonetaryPolicyCondition,
+  evaluateShortTermRatesCondition,
+  evaluateEquityMomentumCondition,
+  buildMarketConditionSummary,
+  rankByMateriality,
+  INFLATION_NOISE_BAND_PP,
+  FX_NOISE_BAND_PCT,
+  RATES_NOISE_BAND_BPS,
+  EQUITY_NOISE_BAND_PCT,
+  type MaterialityCandidate,
+} from "@/lib/intelligence";
+import { MarketConditionSection } from "@/components/MarketConditionSection";
 
 function decisionLabel(type: PolicyDecisionRow["decisionType"]): string {
   return type === "HOLD" ? "HELD" : type;
@@ -321,11 +336,58 @@ export default async function OverviewPage() {
   const marketActivity = getMarketActivity(securitiesWithPrices, 5);
   const hasAnySecurities = securitiesWithPrices.length > 0;
 
+  // Explainable market-intelligence layer (M8 Part B) — pure recomputation
+  // over the same real observations already fetched above; see
+  // src/lib/intelligence/ for the deterministic rules each dimension uses.
+  const inflationResult = evaluateInflationCondition({
+    latest: inflationLatest ? { observationDate: inflationLatest.observationDate, value: Number(inflationLatest.value) } : null,
+    previous: inflationPrevious ? { observationDate: inflationPrevious.observationDate, value: Number(inflationPrevious.value) } : null,
+    history: inflation.history,
+  });
+  const fxResult = evaluateFxCondition({
+    latest: fxLatest ? { observationDate: fxLatest.observationDate, midRate: Number(fxLatest.midRate) } : null,
+    previous: fxPrevious ? { observationDate: fxPrevious.observationDate, midRate: Number(fxPrevious.midRate) } : null,
+    history: fx.history,
+  });
+  const monetaryPolicyResult = evaluateMonetaryPolicyCondition({
+    latestDecision: mprLatestDecision
+      ? {
+          decisionDate: mprLatestDecision.decisionDate,
+          resultingRate: Number(mprLatestDecision.resultingRate),
+          decisionType: mprLatestDecision.decisionType,
+          changeBps: mprLatestDecision.changeBps,
+        }
+      : null,
+  });
+  const ratesResult = evaluateShortTermRatesCondition(
+    TREASURY_INSTRUMENTS.map(({ code, label }) => {
+      const snapshot = treasuryByCode.get(code);
+      const [latest, previous] = snapshot?.latestTwo ?? [];
+      return {
+        label,
+        latest: latest ? { observationDate: latest.observationDate, interestRate: Number(latest.interestRate) } : null,
+        previous: previous ? { observationDate: previous.observationDate, interestRate: Number(previous.interestRate) } : null,
+      };
+    }),
+  );
+  const equityResult = evaluateEquityMomentumCondition({
+    latest: gseCiLatest ? { observationDate: gseCiLatest.observationDate, level: Number(gseCiLatest.level) } : null,
+    history: gseCi?.history ?? [],
+  });
+
+  const marketCondition = buildMarketConditionSummary({
+    inflation: inflationResult,
+    currency: fxResult,
+    monetaryPolicy: monetaryPolicyResult,
+    shortTermRates: ratesResult,
+    equityMomentum: equityResult,
+  });
+
   const treasuryChartSeries: RatesSeries[] = treasury
     .filter((t) => t.history.length > 0)
     .map((t) => ({ key: t.code, label: t.label, color: TREASURY_CHART_COLORS[t.code] ?? "#71717a", data: t.history }));
 
-  const changedItems: { key: string; node: React.ReactNode }[] = [];
+  const changedItems: { key: string; node: React.ReactNode; magnitude: number }[] = [];
 
   if (gseCiLatest && gseCiPrevious) {
     const level = Number(gseCiLatest.level);
@@ -334,6 +396,7 @@ export default async function OverviewPage() {
     const { arrow, sentiment } = describeDirection(level, prevLevel, "higherIsPositive");
     changedItems.push({
       key: "gse-ci",
+      magnitude: Math.abs(pct) / EQUITY_NOISE_BAND_PCT,
       node: (
         <>
           <span className="font-medium">GSE-CI</span>{" "}
@@ -355,6 +418,7 @@ export default async function OverviewPage() {
     const { arrow, sentiment } = describeDirection(rate, prevRate, "higherIsNegative");
     changedItems.push({
       key: "inflation",
+      magnitude: Math.abs(pp) / INFLATION_NOISE_BAND_PP,
       node: (
         <>
           <span className="font-medium">Inflation</span>{" "}
@@ -377,6 +441,7 @@ export default async function OverviewPage() {
     const cediLabel = direction === "up" ? "Cedi weakened" : direction === "down" ? "Cedi strengthened" : undefined;
     changedItems.push({
       key: "fx",
+      magnitude: Math.abs(pct) / FX_NOISE_BAND_PCT,
       node: (
         <>
           <span className="font-medium">USD/GHS</span>{" "}
@@ -402,6 +467,7 @@ export default async function OverviewPage() {
       const { arrow, sentiment } = describeDirection(interest, prevInterest, "neutral");
       changedItems.push({
         key: code,
+        magnitude: Math.abs(bps) / RATES_NOISE_BAND_BPS,
         node: (
           <>
             <span className="font-medium">{label} T-Bill</span>{" "}
@@ -414,8 +480,12 @@ export default async function OverviewPage() {
 
   if (mprLatestDecision) {
     const rate = Number(mprLatestDecision.resultingRate);
+    // A HOLD is the least "changed" thing on this list — still shown, but
+    // never competes for a top-5 slot against an actual rate move.
+    const mprMagnitude = mprLatestDecision.decisionType === "HOLD" ? 0 : Math.abs(mprLatestDecision.changeBps ?? RATES_NOISE_BAND_BPS) / RATES_NOISE_BAND_BPS;
     changedItems.push({
       key: "mpr",
+      magnitude: mprMagnitude,
       node:
         mprLatestDecision.decisionType === "HOLD" ? (
           <>
@@ -441,6 +511,14 @@ export default async function OverviewPage() {
         ),
     });
   }
+
+  // Rank by materiality (M8 §30-31): each candidate's own noise band, not a
+  // shared unit, so a 0.5pp inflation move is never compared to a 0.5% GSE
+  // move as though the scales were the same thing. Top 5, most-material first.
+  const changedItemsByKey = new Map(changedItems.map((item) => [item.key, item]));
+  const rankedChangedItems = rankByMateriality(changedItems.map((item): MaterialityCandidate => ({ key: item.key, absChange: item.magnitude, noiseBand: 1 })))
+    .map((key) => changedItemsByKey.get(key)!)
+    .slice(0, 5);
 
   return (
     <div className="space-y-6">
@@ -477,9 +555,9 @@ export default async function OverviewPage() {
           What Changed?
         </h2>
         <div className="rounded border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
-          {changedItems.length > 0 ? (
+          {rankedChangedItems.length > 0 ? (
             <ul className="space-y-1.5 text-sm text-zinc-700 dark:text-zinc-300">
-              {changedItems.map((item) => (
+              {rankedChangedItems.map((item) => (
                 <li key={item.key}>{item.node}</li>
               ))}
             </ul>
@@ -584,11 +662,7 @@ export default async function OverviewPage() {
         <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
           Market Condition
         </h2>
-        <div className="rounded border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-900">
-          <p className="text-sm text-zinc-400 dark:text-zinc-500">
-            Awaiting sufficient data for market-condition assessment
-          </p>
-        </div>
+        <MarketConditionSection summary={marketCondition} />
       </section>
 
       <section>

@@ -19,6 +19,7 @@ export const KNOWN_COMPANY_NAMES: Record<string, string> = {
   BOPP: "Benso Oil Palm Plantation PLC",
   SIC: "SIC Insurance Company PLC",
   ETI: "Ecobank Transnational Incorporated",
+  ADB: "Agricultural Development Bank PLC",
 };
 
 export const KNOWN_COMPANY_SECTORS: Record<string, string> = {
@@ -32,4 +33,5 @@ export const KNOWN_COMPANY_SECTORS: Record<string, string> = {
   BOPP: "Agriculture",
   SIC: "Insurance",
   ETI: "Banking",
+  ADB: "Banking",
 };

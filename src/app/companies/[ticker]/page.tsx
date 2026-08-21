@@ -5,6 +5,7 @@ import { describeDirection } from "@/lib/direction";
 import { DirectionText } from "@/components/DirectionText";
 import { RatesChart } from "@/components/RatesChart";
 import { FinancialBarChart } from "@/components/FinancialBarChart";
+import { CompanyLogo } from "@/components/CompanyLogo";
 import { getSecuritiesWithReturns } from "@/lib/queries/equities";
 import {
   getCompanyByTicker,
@@ -15,6 +16,7 @@ import {
   formatPeriodLabel,
 } from "@/lib/queries/companies";
 import { FINANCIAL_METRICS, type MetricPolarity } from "@/lib/financial-metrics";
+import { resolveFinancialProfile } from "@/lib/financial-profile";
 import type { RatioResult } from "@/lib/financial-ratios";
 
 export const dynamic = "force-dynamic";
@@ -95,7 +97,7 @@ export default async function CompanyExplorerPage({ params }: { params: Promise<
   const company = await getCompanyByTicker(ticker);
   if (!company) notFound();
 
-  const isBank = company.sector === "Banking";
+  const isBank = resolveFinancialProfile(company.sector) === "BANK";
   const snapshotMetrics = isBank ? BANK_SNAPSHOT : GENERAL_SNAPSHOT;
   const trendConfig = isBank ? BANK_TRENDS : GENERAL_TRENDS;
   // SHARES_OUTSTANDING isn't shown as its own snapshot/trend card, but is
@@ -117,21 +119,70 @@ export default async function CompanyExplorerPage({ params }: { params: Promise<
 
   const latestAnnualYear = annual.periods.length > 0 ? annual.periods[annual.periods.length - 1].fiscalYear : null;
 
+  // Insight strip (M8 §37) — concise computed YoY context, not commentary.
+  // Only ever built from two genuinely consecutive fiscal years for the
+  // same metric; a gap year (one side missing) yields no claim at all.
+  const primaryTopLineMetric = isBank ? "OPERATING_INCOME" : "REVENUE";
+  const yoyPct = (metricCode: string): { pct: number; year: number } | null => {
+    const series = annual.seriesByMetric[metricCode] ?? [];
+    if (series.length < 2) return null;
+    const latest = series[series.length - 1];
+    const prior = series[series.length - 2];
+    if (prior.fiscalYear !== latest.fiscalYear - 1 || prior.value <= 0) return null;
+    return { pct: ((latest.value - prior.value) / prior.value) * 100, year: latest.fiscalYear };
+  };
+  const insightStrip = [
+    { label: isBank ? "Op. Income" : "Revenue", change: yoyPct(primaryTopLineMetric) },
+    { label: "PAT", change: yoyPct("PROFIT_AFTER_TAX") },
+    { label: "EPS", change: yoyPct("EPS") },
+  ];
+  const hasInsightStrip = insightStrip.some((i) => i.change !== null) || ratios.roe !== null;
+
   return (
     <div className="space-y-8">
       <div>
         <Link href="/companies" className="text-xs text-zinc-400 hover:text-zinc-700 dark:text-zinc-500 dark:hover:text-zinc-300">
           ← Companies
         </Link>
-        <div className="mt-1 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-          <div>
-            <h1 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
-              {company.name} <span className="text-zinc-400 dark:text-zinc-500">{company.ticker}</span>
-            </h1>
-            <p className="mt-0.5 text-sm text-zinc-500 dark:text-zinc-400">{company.sector ?? "Sector not classified"}</p>
+        <div className="mt-1 flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
+          <div className="flex items-center gap-3">
+            <CompanyLogo ticker={company.ticker} size={40} />
+            <div>
+              <h1 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">{company.name}</h1>
+              <p className="mt-0.5 text-sm text-zinc-500 dark:text-zinc-400">
+                {company.ticker} · {company.sector ?? "Sector not classified"}
+              </p>
+            </div>
           </div>
         </div>
       </div>
+
+      {hasInsightStrip && (
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-2 rounded border border-zinc-200 bg-zinc-50 px-4 py-2.5 text-sm dark:border-zinc-800 dark:bg-zinc-900/50">
+          <span className="text-xs font-medium uppercase tracking-wide text-zinc-400 dark:text-zinc-500">
+            {latestAnnualYear ? `FY${latestAnnualYear}` : "—"}
+          </span>
+          {insightStrip.map(
+            ({ label, change }) =>
+              change && (
+                <span key={label} className="flex items-center gap-1.5">
+                  <span className="text-zinc-500 dark:text-zinc-400">{label}</span>
+                  <DirectionText
+                    arrow={describeDirection(change.pct, 0, "higherIsPositive", 1e-9).arrow}
+                    text={`${Math.abs(change.pct).toFixed(1)}%`}
+                    sentiment={describeDirection(change.pct, 0, "higherIsPositive", 1e-9).sentiment}
+                  />
+                </span>
+              ),
+          )}
+          {ratios.roe && (
+            <span className="flex items-center gap-1.5">
+              <span className="text-zinc-500 dark:text-zinc-400">ROE</span>
+              <span className="font-medium tabular-nums text-zinc-900 dark:text-zinc-100">{ratios.roe.value.toFixed(1)}%</span>
+            </span>
+          )}
+        </div>
+      )}
 
       {/* ------------------------------------------------------------ */}
       <section>
