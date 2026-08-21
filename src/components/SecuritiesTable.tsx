@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { describeDirection, DIRECTION_ARROW, SENTIMENT_TEXT_CLASS } from "@/lib/direction";
+import { CompanyLogo } from "@/components/CompanyLogo";
 import type { SecuritySnapshot } from "@/lib/queries/equities";
 
 const PAGE_SIZE = 25;
@@ -181,7 +182,12 @@ export function SecuritiesTable({ securities }: { securities: SecuritySnapshot[]
           <tbody>
             {pageRows.map((s) => (
               <tr key={s.securityId} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/50">
-                <td className="whitespace-nowrap px-3 py-2.5 font-medium text-zinc-900 dark:text-zinc-100">{s.ticker}</td>
+                <td className="whitespace-nowrap px-3 py-2.5 font-medium text-zinc-900 dark:text-zinc-100">
+                  <div className="flex items-center gap-2">
+                    <CompanyLogo ticker={s.ticker} size={18} />
+                    {s.ticker}
+                  </div>
+                </td>
                 <td className="max-w-[220px] truncate px-3 py-2.5 text-zinc-600 dark:text-zinc-400">{s.companyName}</td>
                 <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums text-zinc-900 dark:text-zinc-100">
                   {s.latestPrice !== null ? `GHS ${formatGhs(s.latestPrice)}` : "—"}

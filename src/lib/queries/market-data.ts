@@ -6,6 +6,7 @@
 // ---------------------------------------------------------------------------
 
 import { getPrisma } from "../prisma";
+import { ensureFreshUsdGhs } from "../ingestion/bog-fx-freshness";
 
 const FX_PAIR_CODE = "USDGHS";
 
@@ -32,6 +33,13 @@ export interface FxObservation {
 }
 
 export async function getUsdGhsSnapshot(): Promise<{ latestTwo: FxObservation[]; history: ChartPoint[] }> {
+  // Fresh-on-demand (M8.2 Part A): triggers a bounded BoG refresh only if
+  // the stored observation is stale and no refresh was attempted within
+  // the cooldown window — see bog-fx-freshness.ts. Always resolves
+  // (a skipped/failed refresh just leaves the prior observation in place),
+  // so the query below always reads whatever is freshest in the DB.
+  await ensureFreshUsdGhs();
+
   const prisma = getPrisma();
   const pair = await prisma.currencyPair.findUnique({ where: { code: FX_PAIR_CODE } });
   if (!pair) return { latestTwo: [], history: [] };
