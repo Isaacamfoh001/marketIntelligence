@@ -5,8 +5,8 @@
 // server query layer — and its `pg` dependency — into the browser bundle.
 // ---------------------------------------------------------------------------
 
-export function formatPeriodLabel(period: { periodType: string; fiscalYear: number; fiscalQuarter: number }): string {
-  if (period.periodType === "ANNUAL") return `FY${period.fiscalYear}`;
-  if (period.periodType === "HALF_YEAR") return `H${period.fiscalQuarter} ${period.fiscalYear}`;
-  return `Q${period.fiscalQuarter} ${period.fiscalYear}`;
+export function formatPeriodLabel(period: { period: string; fiscalYear: number }): string {
+  if (period.period === "ANNUAL") return `FY${period.fiscalYear}`;
+  const display = period.period === "NINE_MONTH" ? "9M" : period.period;
+  return `${display} ${period.fiscalYear}`;
 }

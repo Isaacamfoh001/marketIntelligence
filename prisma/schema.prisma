@@ -137,10 +137,20 @@ model IngestionRun {
   recordsAccepted Int?
   recordsRejected Int?
 
-  errorMessage String?
-  triggeredBy  String?
-  artifactName String?
-  checksum     String?
+  errorMessage      String?
+  triggeredBy       String?
+  artifactName      String?
+  checksum          String?
+  /// How the underlying SOURCE DOCUMENT was acquired — distinct from
+  /// `triggeredBy` (who/what ran the import) and from DataSource.provider
+  /// (who publishes it). M7.1 §39: never conflate acquisition mechanism
+  /// with publisher. Free text rather than an enum (values in practice:
+  /// "OFFICIAL_WEB_FETCH" — fetched from a first-party official URL and
+  /// transcribed/imported; "MANUAL_FILE_IMPORT" — a human supplied an
+  /// already-obtained file; "STRUCTURED_IMPORT" — CSV/Excel with no
+  /// separate source document, e.g. GSE market data. Null for domains
+  /// that predate this field.
+  acquisitionMethod String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -522,10 +532,22 @@ model Company {
 // Company Financials (M7)
 // ---------------------------------------------------------------------------
 
-enum FinancialPeriodType {
+/// Names the period directly rather than pairing a coarse "type" with a
+/// separately-interpreted numeric slot (M7.1 §17 fix — M7's original
+/// `periodType: HALF_YEAR` + `fiscalQuarter: 1|2` meaning "H1 or H2"
+/// worked but overloaded an integer's meaning by context; naming H1/H2/
+/// Q1-Q4/NINE_MONTH directly removes that indirection entirely, and adds
+/// NINE_MONTH — a real interim shape some issuers report — that the old
+/// convention had no slot for at all).
+enum FiscalPeriod {
   ANNUAL
-  HALF_YEAR
-  QUARTERLY
+  Q1
+  Q2
+  Q3
+  Q4
+  H1
+  H2
+  NINE_MONTH
 }
 
 /// Whether a statement covers the group (consolidated) or the parent
@@ -551,25 +573,22 @@ enum MetricUnit {
   COUNT
 }
 
-/// A single reporting period for one company. Deliberately NOT
-/// nullable on fiscalQuarter: Postgres treats multiple NULLs in a unique
-/// index as distinct, which would silently allow duplicate ANNUAL rows
-/// for the same company/year/scope. Convention instead: ANNUAL -> 0,
-/// HALF_YEAR -> 1 (H1) or 2 (H2), QUARTERLY -> 1-4.
+/// A single reporting period for one company. `period` alone fully
+/// identifies the period shape (ANNUAL/Q1-Q4/H1-H2/NINE_MONTH) — no
+/// separate numeric field to misinterpret.
 ///
 /// H1 2026 and FY 2025 are never the same kind of row (CLAUDE.md /
 /// PROJECT.md: never compare interim to annual as though equivalent) —
-/// periodType is part of identity, not just a label.
+/// `period` is part of identity, not just a label.
 model FinancialPeriod {
-  id                String              @id @default(cuid())
+  id                String         @id @default(cuid())
   companyId         String
-  periodType        FinancialPeriodType
+  period            FiscalPeriod
   fiscalYear        Int
-  fiscalQuarter     Int                 @default(0)
-  startDate         DateTime            @db.Date
-  endDate           DateTime            @db.Date
-  reportingCurrency String              @default("GHS")
-  statementScope    StatementScope      @default(CONSOLIDATED)
+  startDate         DateTime       @db.Date
+  endDate           DateTime       @db.Date
+  reportingCurrency String         @default("GHS")
+  statementScope    StatementScope @default(CONSOLIDATED)
   audited           Boolean?
 
   createdAt DateTime @default(now())
@@ -578,7 +597,7 @@ model FinancialPeriod {
   company      Company                       @relation(fields: [companyId], references: [id], onDelete: Restrict)
   observations CompanyFinancialObservation[]
 
-  @@unique([companyId, periodType, fiscalYear, fiscalQuarter, statementScope])
+  @@unique([companyId, period, fiscalYear, statementScope])
   @@index([companyId])
   @@index([fiscalYear])
 }

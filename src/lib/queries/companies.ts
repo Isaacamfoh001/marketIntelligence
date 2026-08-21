@@ -6,12 +6,14 @@
 // ---------------------------------------------------------------------------
 
 import { getPrisma } from "../prisma";
-import type { FinancialPeriodType, StatementScope } from "@/generated/prisma/enums";
+import type { FiscalPeriod, StatementScope } from "@/generated/prisma/enums";
 import { computeReturn, type DatedValue } from "../returns";
 import { computeROE, computeROA, computePE, computePB, computeDividendYield, type RatioResult } from "../financial-ratios";
 
 import { formatPeriodLabel } from "../financial-period-label";
 export { formatPeriodLabel } from "../financial-period-label";
+
+const INTERIM_PERIODS: FiscalPeriod[] = ["Q1", "Q2", "Q3", "Q4", "H1", "H2", "NINE_MONTH"];
 
 // ---------------------------------------------------------------------------
 // Period resolution — annual history prefers CONSOLIDATED over SEPARATE
@@ -22,9 +24,8 @@ export { formatPeriodLabel } from "../financial-period-label";
 
 interface PeriodRow {
   id: string;
-  periodType: FinancialPeriodType;
+  period: FiscalPeriod;
   fiscalYear: number;
-  fiscalQuarter: number;
   startDate: Date;
   endDate: Date;
   statementScope: StatementScope;
@@ -34,7 +35,7 @@ interface PeriodRow {
 async function getAnnualPeriods(companyId: string): Promise<PeriodRow[]> {
   const prisma = getPrisma();
   const periods = await prisma.financialPeriod.findMany({
-    where: { companyId, periodType: "ANNUAL" },
+    where: { companyId, period: "ANNUAL" },
     orderBy: { fiscalYear: "asc" },
   });
   const byYear = new Map<number, PeriodRow>();
@@ -47,19 +48,16 @@ async function getAnnualPeriods(companyId: string): Promise<PeriodRow[]> {
   return Array.from(byYear.values()).sort((a, b) => a.fiscalYear - b.fiscalYear);
 }
 
-/** Most recent HALF_YEAR or QUARTERLY period by end date, and its prior-year comparable (same periodType + fiscalQuarter, fiscalYear - 1) if one exists — never FY vs interim (M7 §15/§30). */
+/** Most recent interim (Q1-Q4/H1/H2/9M) period by end date, and its prior-year comparable (same `period`, fiscalYear - 1) if one exists — never FY vs interim (M7 §15/§30). */
 async function getLatestInterimPeriod(companyId: string): Promise<{ latest: PeriodRow; priorComparable: PeriodRow | null } | null> {
   const prisma = getPrisma();
   const interims = await prisma.financialPeriod.findMany({
-    where: { companyId, periodType: { in: ["HALF_YEAR", "QUARTERLY"] } },
+    where: { companyId, period: { in: INTERIM_PERIODS } },
     orderBy: { endDate: "desc" },
   });
   if (interims.length === 0) return null;
   const latest = interims[0];
-  const priorComparable =
-    interims.find(
-      (p) => p.periodType === latest.periodType && p.fiscalQuarter === latest.fiscalQuarter && p.fiscalYear === latest.fiscalYear - 1,
-    ) ?? null;
+  const priorComparable = interims.find((p) => p.period === latest.period && p.fiscalYear === latest.fiscalYear - 1) ?? null;
   return { latest, priorComparable };
 }
 
@@ -296,7 +294,7 @@ async function getPriorAnnualValue(companyId: string, metricCode: string, curren
       metric: { code: metricCode },
       financialPeriod: {
         companyId,
-        periodType: "ANNUAL",
+        period: "ANNUAL",
         fiscalYear: current.period.fiscalYear - 1,
         statementScope: current.period.statementScope,
       },

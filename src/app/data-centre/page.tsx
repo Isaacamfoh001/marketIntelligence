@@ -291,6 +291,7 @@ export default async function DataCentrePage() {
                   <th className="px-4 py-2.5 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Accepted</th>
                   <th className="px-4 py-2.5 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Rejected</th>
                   <th className="px-4 py-2.5 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Triggered By</th>
+                  <th className="px-4 py-2.5 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Acquisition</th>
                   <th className="px-4 py-2.5 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Outcome</th>
                   <th className="px-4 py-2.5 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Error</th>
                 </tr>
@@ -305,6 +306,7 @@ export default async function DataCentrePage() {
                     <td className="whitespace-nowrap px-4 py-2.5 text-zinc-600 dark:text-zinc-400">{run.recordsAccepted ?? "\u2014"}</td>
                     <td className="whitespace-nowrap px-4 py-2.5 text-zinc-600 dark:text-zinc-400">{run.recordsRejected ?? "\u2014"}</td>
                     <td className="whitespace-nowrap px-4 py-2.5 text-zinc-600 dark:text-zinc-400">{run.triggeredBy ?? "\u2014"}</td>
+                    <td className="whitespace-nowrap px-4 py-2.5 text-zinc-600 dark:text-zinc-400">{run.acquisitionMethod ?? "\u2014"}</td>
                     <td className="whitespace-nowrap px-4 py-2.5"><StatusBadge status={run.status} /></td>
                     <td className="max-w-[200px] truncate px-4 py-2.5 text-zinc-600 dark:text-zinc-400">
                       {run.errorMessage ?? "\u2014"}

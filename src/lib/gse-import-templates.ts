@@ -80,9 +80,9 @@ export const GSE_IMPORT_TEMPLATES: Record<GseDatasetType, GseImportTemplate> = {
     label: "Company Financials",
     description:
       "Powers the Companies landing page and Company Explorer — Revenue/Operating Income, PAT, EPS, Total Assets/Equity, dividends, and ratios (ROE/ROA/P/E/P/B/Dividend Yield). Long format: one row per company/period/metric, from an official financial statement.",
-    requiredHeaders: ["Ticker", "Period Type", "Fiscal Year", "Period Start", "Period End", "Metric", "Value", "Unit"],
-    requiredNote: "Fiscal Period also required unless Period Type is ANNUAL (e.g. H1/H2, Q1-Q4)",
-    optionalHeaders: ["Fiscal Period", "Currency", "Audited", "Statement Scope"],
+    requiredHeaders: ["Ticker", "Period", "Fiscal Year", "Period Start", "Period End", "Metric", "Value", "Unit"],
+    requiredNote: "Period is ANNUAL/FY, Q1-Q4, H1, H2, or 9M/NINE_MONTH",
+    optionalHeaders: ["Currency", "Audited", "Statement Scope"],
     templateFilename: "company-financials-template.csv",
   },
 };

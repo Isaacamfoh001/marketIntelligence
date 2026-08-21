@@ -33,6 +33,7 @@ import { extractFinancialRows, validateFinancialRows, type NormalisedFinancialRo
 import { startRun, completeRun, failRun } from "./ingestion-service";
 import { KNOWN_COMPANY_NAMES, KNOWN_COMPANY_SECTORS } from "../gse-known-companies";
 import { FINANCIAL_METRICS, unitScaleFactor } from "../financial-metrics";
+import { formatPeriodLabel } from "../financial-period-label";
 
 const DATA_SOURCE_NAME = "Ghana Stock Exchange — Listed Company Financial Statements";
 
@@ -110,7 +111,7 @@ async function ensureCompanyByTicker(ticker: string, cache: Map<string, string>)
 }
 
 function periodCacheKey(row: NormalisedFinancialRow): string {
-  return `${row.ticker}|${row.periodType}|${row.fiscalYear}|${row.fiscalQuarter}|${row.statementScope}`;
+  return `${row.ticker}|${row.period}|${row.fiscalYear}|${row.statementScope}`;
 }
 
 async function ensureFinancialPeriod(companyId: string, row: NormalisedFinancialRow, cache: Map<string, string>): Promise<string> {
@@ -121,11 +122,10 @@ async function ensureFinancialPeriod(companyId: string, row: NormalisedFinancial
   const db = getPrisma();
   const period = await db.financialPeriod.upsert({
     where: {
-      companyId_periodType_fiscalYear_fiscalQuarter_statementScope: {
+      companyId_period_fiscalYear_statementScope: {
         companyId,
-        periodType: row.periodType,
+        period: row.period,
         fiscalYear: row.fiscalYear,
-        fiscalQuarter: row.fiscalQuarter,
         statementScope: row.statementScope,
       },
     },
@@ -137,9 +137,8 @@ async function ensureFinancialPeriod(companyId: string, row: NormalisedFinancial
     },
     create: {
       companyId,
-      periodType: row.periodType,
+      period: row.period,
       fiscalYear: row.fiscalYear,
-      fiscalQuarter: row.fiscalQuarter,
       statementScope: row.statementScope,
       startDate: row.periodStart,
       endDate: row.periodEnd,
@@ -191,7 +190,7 @@ async function persistObservations(
     if (existing && Number(existing.value) !== Number(scaledValue)) {
       restatements.push({
         ticker: row.ticker,
-        periodLabel: `${row.periodType}${row.fiscalQuarter ? ` Q${row.fiscalQuarter}` : ""} ${row.fiscalYear}`,
+        periodLabel: formatPeriodLabel(row),
         metricCode: row.metricCode,
         previousValue: existing.value.toString(),
         newValue: scaledValue,
@@ -248,7 +247,7 @@ export interface FinancialsImportResult {
 export async function importCompanyFinancials(
   filename: string,
   buffer: Buffer,
-  opts: { commit: boolean; triggeredBy?: string } = { commit: false },
+  opts: { commit: boolean; triggeredBy?: string; acquisitionMethod?: string } = { commit: false },
 ): Promise<FinancialsImportResult> {
   if (!opts.commit) {
     try {
@@ -288,7 +287,12 @@ export async function importCompanyFinancials(
   }
 
   const dataSource = await ensureFinancialsDataSource();
-  const { runId } = await startRun({ dataSourceId: dataSource.id, triggeredBy: opts.triggeredBy ?? "cli", artifactName: filename });
+  const { runId } = await startRun({
+    dataSourceId: dataSource.id,
+    triggeredBy: opts.triggeredBy ?? "cli",
+    artifactName: filename,
+    acquisitionMethod: opts.acquisitionMethod ?? "MANUAL_FILE_IMPORT",
+  });
 
   try {
     const parsedFile = await parseImportFile(filename, buffer);

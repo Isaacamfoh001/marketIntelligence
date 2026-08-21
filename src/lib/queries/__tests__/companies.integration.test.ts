@@ -16,25 +16,25 @@ const TICKER = "ZZQRY1";
 const createdRunIds: string[] = [];
 
 function csvBuffer(rows: string[]): Buffer {
-  const header = "Ticker,Period Type,Fiscal Year,Fiscal Period,Period Start,Period End,Metric,Value,Currency,Unit,Audited,Statement Scope";
+  const header = "Ticker,Period,Fiscal Year,Period Start,Period End,Metric,Value,Currency,Unit,Audited,Statement Scope";
   return Buffer.from([header, ...rows].join("\n"), "utf-8");
 }
 
 async function seed() {
   const rows = [
-    `${TICKER},ANNUAL,2024,,2024-01-01,2024-12-31,Revenue,900,GHS,GHS_MILLIONS,TRUE,CONSOLIDATED`,
-    `${TICKER},ANNUAL,2024,,2024-01-01,2024-12-31,Profit after tax,150,GHS,GHS_MILLIONS,TRUE,CONSOLIDATED`,
-    `${TICKER},ANNUAL,2024,,2024-01-01,2024-12-31,Total equity,4000,GHS,GHS_MILLIONS,TRUE,CONSOLIDATED`,
-    `${TICKER},ANNUAL,2024,,2024-01-01,2024-12-31,Total assets,9000,GHS,GHS_MILLIONS,TRUE,CONSOLIDATED`,
-    `${TICKER},ANNUAL,2025,,2025-01-01,2025-12-31,Revenue,1000,GHS,GHS_MILLIONS,TRUE,CONSOLIDATED`,
-    `${TICKER},ANNUAL,2025,,2025-01-01,2025-12-31,Profit after tax,200,GHS,GHS_MILLIONS,TRUE,CONSOLIDATED`,
-    `${TICKER},ANNUAL,2025,,2025-01-01,2025-12-31,Total equity,4500,GHS,GHS_MILLIONS,TRUE,CONSOLIDATED`,
-    `${TICKER},ANNUAL,2025,,2025-01-01,2025-12-31,Total assets,9800,GHS,GHS_MILLIONS,TRUE,CONSOLIDATED`,
-    `${TICKER},ANNUAL,2025,,2025-01-01,2025-12-31,EPS,0.5,GHS,PER_SHARE_GHS,TRUE,CONSOLIDATED`,
-    `${TICKER},ANNUAL,2025,,2025-01-01,2025-12-31,Dividend per share,0.1,GHS,PER_SHARE_GHS,TRUE,CONSOLIDATED`,
-    `${TICKER},ANNUAL,2025,,2025-01-01,2025-12-31,Shares outstanding,400,GHS,GHS_MILLIONS,TRUE,CONSOLIDATED`,
-    `${TICKER},HALF_YEAR,2025,H1,2025-01-01,2025-06-30,Revenue,480,GHS,GHS_MILLIONS,FALSE,CONSOLIDATED`,
-    `${TICKER},HALF_YEAR,2026,H1,2026-01-01,2026-06-30,Revenue,540,GHS,GHS_MILLIONS,FALSE,CONSOLIDATED`,
+    `${TICKER},ANNUAL,2024,2024-01-01,2024-12-31,Revenue,900,GHS,GHS_MILLIONS,TRUE,CONSOLIDATED`,
+    `${TICKER},ANNUAL,2024,2024-01-01,2024-12-31,Profit after tax,150,GHS,GHS_MILLIONS,TRUE,CONSOLIDATED`,
+    `${TICKER},ANNUAL,2024,2024-01-01,2024-12-31,Total equity,4000,GHS,GHS_MILLIONS,TRUE,CONSOLIDATED`,
+    `${TICKER},ANNUAL,2024,2024-01-01,2024-12-31,Total assets,9000,GHS,GHS_MILLIONS,TRUE,CONSOLIDATED`,
+    `${TICKER},ANNUAL,2025,2025-01-01,2025-12-31,Revenue,1000,GHS,GHS_MILLIONS,TRUE,CONSOLIDATED`,
+    `${TICKER},ANNUAL,2025,2025-01-01,2025-12-31,Profit after tax,200,GHS,GHS_MILLIONS,TRUE,CONSOLIDATED`,
+    `${TICKER},ANNUAL,2025,2025-01-01,2025-12-31,Total equity,4500,GHS,GHS_MILLIONS,TRUE,CONSOLIDATED`,
+    `${TICKER},ANNUAL,2025,2025-01-01,2025-12-31,Total assets,9800,GHS,GHS_MILLIONS,TRUE,CONSOLIDATED`,
+    `${TICKER},ANNUAL,2025,2025-01-01,2025-12-31,EPS,0.5,GHS,PER_SHARE_GHS,TRUE,CONSOLIDATED`,
+    `${TICKER},ANNUAL,2025,2025-01-01,2025-12-31,Dividend per share,0.1,GHS,PER_SHARE_GHS,TRUE,CONSOLIDATED`,
+    `${TICKER},ANNUAL,2025,2025-01-01,2025-12-31,Shares outstanding,400,GHS,GHS_MILLIONS,TRUE,CONSOLIDATED`,
+    `${TICKER},H1,2025,2025-01-01,2025-06-30,Revenue,480,GHS,GHS_MILLIONS,FALSE,CONSOLIDATED`,
+    `${TICKER},H1,2026,2026-01-01,2026-06-30,Revenue,540,GHS,GHS_MILLIONS,FALSE,CONSOLIDATED`,
   ];
   const result = await importCompanyFinancials("query-fixture.csv", csvBuffer(rows), { commit: true });
   if (result.runId) createdRunIds.push(result.runId);
@@ -94,9 +94,9 @@ describe("getLatestInterim — H1 2026 vs its H1 2025 comparable, never vs FY202
 
     expect(interim).not.toBeNull();
     expect(interim!.latest.fiscalYear).toBe(2026);
-    expect(interim!.latest.periodType).toBe("HALF_YEAR");
+    expect(interim!.latest.period).toBe("H1");
     expect(interim!.priorComparable?.fiscalYear).toBe(2025);
-    expect(interim!.priorComparable?.periodType).toBe("HALF_YEAR");
+    expect(interim!.priorComparable?.period).toBe("H1");
     expect(interim!.latestValues.REVENUE).toBe(540_000_000);
     expect(interim!.priorValues.REVENUE).toBe(480_000_000);
   });
@@ -108,7 +108,7 @@ describe("getLatestAnnualMetricValue — never falls back to an interim period",
     const company = await getCompanyByTicker(TICKER);
     const revenue = await getLatestAnnualMetricValue(company!.id, "REVENUE");
     expect(revenue!.value).toBe(1_000_000_000);
-    expect(revenue!.period.periodType).toBe("ANNUAL");
+    expect(revenue!.period.period).toBe("ANNUAL");
     expect(revenue!.period.fiscalYear).toBe(2025);
   });
 

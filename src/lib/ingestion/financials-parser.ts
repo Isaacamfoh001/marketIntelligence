@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// Company Financials — manual/semi-automated import parser (M7).
+// Company Financials — manual/semi-automated import parser (M7, revised M7.1).
 //
 // Long-format template (CLAUDE.md/M7 §17): one row = one metric value for
 // one company/period, so an arbitrary set of metrics can be supplied
@@ -7,6 +7,13 @@
 // the GSE import parsers' pattern: canonical snake_case headers, plus
 // aliases for the human-readable labels a spreadsheet built from a real
 // statement is likely to use.
+//
+// M7.1 §17: a single `period` column (ANNUAL/FY, Q1-Q4, H1, H2, 9M) — not
+// M7's original two-column periodType+fiscalQuarter pair — so there is no
+// numeric convention to misinterpret and no ambiguous bare digit ("1"
+// could have meant Q1 or H1); every accepted token names the period shape
+// directly. See financials-provider.ts / schema.prisma for the same fix
+// on the persisted model.
 //
 // PDF is not parsed here — see financials-provider.ts header for why.
 // ---------------------------------------------------------------------------
@@ -18,9 +25,8 @@ import { resolveMetricCode, FINANCIAL_METRICS, VALID_METRIC_UNITS, type MetricUn
 
 const FIELD_ALIASES: Record<string, string[]> = {
   ticker: ["ticker", "share code", "symbol"],
-  period_type: ["period type", "type"],
+  period: ["period", "fiscal period", "period type", "reporting period"],
   fiscal_year: ["fiscal year", "year"],
-  fiscal_period: ["fiscal period", "period", "quarter", "half"],
   period_start: ["period start", "start date"],
   period_end: ["period end", "end date"],
   metric: ["metric", "line item"],
@@ -35,15 +41,15 @@ export interface RawFinancialRow {
   [field: string]: string | undefined;
 }
 
-export type FinancialPeriodType = "ANNUAL" | "HALF_YEAR" | "QUARTERLY";
+export type FiscalPeriod = "ANNUAL" | "Q1" | "Q2" | "Q3" | "Q4" | "H1" | "H2" | "NINE_MONTH";
 export type StatementScope = "CONSOLIDATED" | "SEPARATE";
+
+export const INTERIM_PERIODS: FiscalPeriod[] = ["Q1", "Q2", "Q3", "Q4", "H1", "H2", "NINE_MONTH"];
 
 export interface NormalisedFinancialRow {
   ticker: string;
-  periodType: FinancialPeriodType;
+  period: FiscalPeriod;
   fiscalYear: number;
-  /** 0 for ANNUAL, 1|2 for HALF_YEAR (H1/H2), 1-4 for QUARTERLY — see FinancialPeriod's schema comment for why this can never be null. */
-  fiscalQuarter: number;
   periodStart: Date;
   periodEnd: Date;
   metricCode: string;
@@ -80,17 +86,21 @@ export interface FinancialValidationResult {
 }
 
 const TICKER_RE = /^[A-Z0-9.]{1,15}$/;
-const PERIOD_TYPE_ALIASES: Record<string, FinancialPeriodType> = {
+
+const PERIOD_ALIASES: Record<string, FiscalPeriod> = {
   "ANNUAL": "ANNUAL",
   "FY": "ANNUAL",
-  "HALF YEAR": "HALF_YEAR",
-  "HALF_YEAR": "HALF_YEAR",
-  "HALFYEAR": "HALF_YEAR",
-  "SEMI ANNUAL": "HALF_YEAR",
-  "INTERIM": "HALF_YEAR",
-  "QUARTERLY": "QUARTERLY",
-  "QUARTER": "QUARTERLY",
+  "FULL YEAR": "ANNUAL",
+  "Q1": "Q1", "QUARTER 1": "Q1",
+  "Q2": "Q2", "QUARTER 2": "Q2",
+  "Q3": "Q3", "QUARTER 3": "Q3",
+  "Q4": "Q4", "QUARTER 4": "Q4",
+  "H1": "H1", "HALF 1": "H1", "FIRST HALF": "H1",
+  "H2": "H2", "HALF 2": "H2", "SECOND HALF": "H2",
+  "9M": "NINE_MONTH", "NM": "NINE_MONTH", "NINE MONTH": "NINE_MONTH", "NINE MONTHS": "NINE_MONTH",
 };
+const PERIOD_ALLOWED_LIST = "ANNUAL/FY, Q1, Q2, Q3, Q4, H1, H2, or 9M/NINE_MONTH";
+
 const SCOPE_ALIASES: Record<string, StatementScope> = {
   CONSOLIDATED: "CONSOLIDATED",
   GROUP: "CONSOLIDATED",
@@ -106,46 +116,18 @@ function normalizeToken(text: string): string {
   return text.trim().toUpperCase().replace(/[-_]+/g, " ").replace(/\s+/g, " ");
 }
 
-function parsePeriodType(raw: string | undefined, errors: string[]): FinancialPeriodType | null {
+function parsePeriod(raw: string | undefined, errors: string[]): FiscalPeriod | null {
   const token = normalizeToken(raw ?? "");
   if (token === "") {
-    errors.push("period_type is required");
+    errors.push("period is required");
     return null;
   }
-  const resolved = PERIOD_TYPE_ALIASES[token];
+  const resolved = PERIOD_ALIASES[token];
   if (!resolved) {
-    errors.push(`period_type must be ANNUAL, HALF_YEAR, or QUARTERLY: "${raw}"`);
+    errors.push(`period must be one of ${PERIOD_ALLOWED_LIST}: "${raw}"`);
     return null;
   }
   return resolved;
-}
-
-/** Returns the schema's 0/1-2/1-4 fiscalQuarter convention, validated against periodType. */
-function parseFiscalQuarter(raw: string | undefined, periodType: FinancialPeriodType, errors: string[]): number | null {
-  const token = normalizeToken(raw ?? "");
-
-  if (periodType === "ANNUAL") {
-    if (token !== "") {
-      errors.push(`fiscal_period must be blank for an ANNUAL period: "${raw}"`);
-      return null;
-    }
-    return 0;
-  }
-
-  if (periodType === "HALF_YEAR") {
-    if (token === "H1" || token === "1") return 1;
-    if (token === "H2" || token === "2") return 2;
-    errors.push(`fiscal_period must be H1 or H2 for a HALF_YEAR period: "${raw}"`);
-    return null;
-  }
-
-  // QUARTERLY
-  const match = /^Q?([1-4])$/.exec(token);
-  if (!match) {
-    errors.push(`fiscal_period must be Q1-Q4 for a QUARTERLY period: "${raw}"`);
-    return null;
-  }
-  return Number(match[1]);
 }
 
 function parseFiscalYear(raw: string | undefined, errors: string[]): number | null {
@@ -218,9 +200,8 @@ export function validateFinancialRows(rows: RawFinancialRow[]): FinancialValidat
       errors.push(`ticker is not a plausible ticker: "${tickerRaw}"`);
     }
 
-    const periodType = parsePeriodType(row.period_type, errors);
+    const period = parsePeriod(row.period, errors);
     const fiscalYear = parseFiscalYear(row.fiscal_year, errors);
-    const fiscalQuarter = periodType ? parseFiscalQuarter(row.fiscal_period, periodType, errors) : null;
 
     const startResult = parseGseFileDate(row.period_start ?? "", "period_start");
     if (startResult.error) errors.push(startResult.error.message);
@@ -253,9 +234,8 @@ export function validateFinancialRows(rows: RawFinancialRow[]): FinancialValidat
 
     valid.push({
       ticker: tickerRaw,
-      periodType: periodType!,
+      period: period!,
       fiscalYear: fiscalYear!,
-      fiscalQuarter: fiscalQuarter!,
       periodStart: startResult.date!,
       periodEnd: endResult.date!,
       metricCode: metricCode!,

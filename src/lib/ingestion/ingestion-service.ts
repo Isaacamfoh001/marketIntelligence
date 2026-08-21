@@ -12,6 +12,8 @@ export interface RunContext {
   triggeredBy?: string;
   artifactName?: string;
   checksum?: string;
+  /** How the underlying source document was acquired — see IngestionRun.acquisitionMethod in schema.prisma. */
+  acquisitionMethod?: string;
 }
 
 export interface StartRunResult {
@@ -38,6 +40,7 @@ export async function startRun(ctx: RunContext): Promise<StartRunResult> {
       triggeredBy: ctx.triggeredBy ?? "api",
       artifactName: ctx.artifactName ?? null,
       checksum: ctx.checksum ?? null,
+      acquisitionMethod: ctx.acquisitionMethod ?? null,
     },
   });
   return { runId: run.id };
