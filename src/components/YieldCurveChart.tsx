@@ -17,6 +17,17 @@ export interface YieldCurveChartPoint {
   yieldPct: number;
   instrumentLabel: string;
   isGovernmentBond: boolean;
+  /** Optional provenance shown in the tooltip (M7.3.1 §15D). */
+  observationDate?: string;
+  observationKind?: "AUCTION_PRIMARY" | "SECONDARY_MARKET";
+}
+
+function formatTenorDays(days: number): string {
+  return days < 365 ? `${days} days` : `${(days / 365.25).toFixed(1)} years`;
+}
+
+function formatDay(iso: string): string {
+  return new Date(`${iso}T00:00:00.000Z`).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
 }
 
 export function YieldCurveChart({ points, height = 240 }: { points: YieldCurveChartPoint[]; height?: number }) {
@@ -43,14 +54,18 @@ export function YieldCurveChart({ points, height = 240 }: { points: YieldCurveCh
               return (
                 <div className="rounded border border-zinc-200 bg-white px-2 py-1 text-xs shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
                   <div className="font-medium text-zinc-900 dark:text-zinc-100">{p.instrumentLabel}</div>
-                  <div className="text-zinc-500 dark:text-zinc-400">
-                    {p.tenorLabel} tenor · {p.yieldPct.toFixed(2)}% (observed)
-                  </div>
+                  <div className="tabular-nums text-zinc-900 dark:text-zinc-100">{p.yieldPct.toFixed(2)}% observed yield</div>
+                  <div className="text-zinc-500 dark:text-zinc-400">{formatTenorDays(p.tenorDays)} remaining</div>
+                  {p.observationDate && (
+                    <div className="text-zinc-500 dark:text-zinc-400">
+                      {p.observationKind === "AUCTION_PRIMARY" ? "Primary auction" : "Secondary trade"} · {formatDay(p.observationDate)}
+                    </div>
+                  )}
                 </div>
               );
             }}
           />
-          <Line type="monotone" dataKey="yieldPct" name="Yield" stroke="#3b82f6" strokeWidth={1.5} dot={{ r: 3 }} connectNulls={false} />
+          <Line type="linear" dataKey="yieldPct" name="Yield" stroke="#3b82f6" strokeWidth={1.5} dot={{ r: 3 }} connectNulls={false} />
         </LineChart>
       </ResponsiveContainer>
       <p className="mt-2 text-[11px] text-zinc-400 dark:text-zinc-500">

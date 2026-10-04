@@ -10,10 +10,10 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { formatBps, formatIsoDate, formatPct, formatTimeRemaining, issuerShortName, MATURING_SOON_DAYS, type SecurityLifecycle } from "@/lib/fixed-income";
+import { formatIsoDate, formatPct, formatTimeRemaining, issuerShortName, MATURING_SOON_DAYS, type SecurityLifecycle } from "@/lib/fixed-income";
 import type { WorkspaceSecurity } from "@/lib/queries/fixed-income";
 import { Segmented } from "./OpportunitiesTable";
-import { LifecycleBadge, Missing, NUM, ObservationCell, SecurityIdentity, TD, TH } from "./ui";
+import { BenchmarkCell, LifecycleBadge, MarketStatusCell, Missing, NUM, SecurityIdentity, TD, TH, TermsWarning, securityToMarketStatus } from "./ui";
 
 type LifecycleTab = "ACTIVE" | "MATURING_SOON" | "MATURED";
 type TypeFilter = "ALL" | "CORPORATE" | "SOVEREIGN";
@@ -105,7 +105,7 @@ export function SecurityUniverse({ securities }: { securities: WorkspaceSecurity
         {tab !== "MATURED" && (
           <label className="flex items-center gap-1.5 text-xs text-zinc-600 dark:text-zinc-400">
             <input type="checkbox" checked={quotedOnly} onChange={(e) => setQuotedOnly(e.target.checked)} />
-            With market observation
+            Has a market observation
           </label>
         )}
       </div>
@@ -155,7 +155,10 @@ export function SecurityUniverse({ securities }: { securities: WorkspaceSecurity
       {tab !== "MATURED" && rows.length > 0 && (
         <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-zinc-500 dark:text-zinc-400">
           <span>
-            {rows.length} {rows.length === 1 ? "security" : "securities"} · {rows.filter((r) => r.latestObservationDate === null).length} with terms only (no market quote)
+            {rows.length} {rows.length === 1 ? "security" : "securities"}: {rows.filter((r) => r.analyticsEligible).length} with a reliable market yield ·{" "}
+            {rows.filter((r) => r.latestObservationDate && !r.analyticsEligible).length} needing review ·{" "}
+            {rows.filter((r) => !r.latestObservationDate && r.noTradeRecordedSince).length} carried price only ·{" "}
+            {rows.filter((r) => !r.latestObservationDate && !r.noTradeRecordedSince).length} never quoted
           </span>
           {canCompare ? (
             <Link
@@ -176,16 +179,15 @@ export function SecurityUniverse({ securities }: { securities: WorkspaceSecurity
 function ActiveTable({ rows }: { rows: WorkspaceSecurity[] }) {
   return (
     <div className="overflow-x-auto rounded border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
-      <table className="w-full min-w-[860px] text-left text-sm">
+      <table className="w-full min-w-[780px] text-left text-sm">
         <thead>
           <tr className="border-b border-zinc-200 dark:border-zinc-800">
             <th className={TH}>Security</th>
-            <th className={`${TH} text-right`}>Coupon</th>
             <th className={`${TH} text-right`}>Maturity</th>
             <th className={`${TH} text-right`}>Price</th>
             <th className={`${TH} text-right`}>Observed YTM</th>
-            <th className={`${TH} text-right`}>Spread vs GoG</th>
-            <th className={`${TH} text-right`}>Observation</th>
+            <th className={`${TH} text-right`}>Benchmark</th>
+            <th className={`${TH} text-right`}>Last market observation</th>
           </tr>
         </thead>
         <tbody>
@@ -195,9 +197,7 @@ function ActiveTable({ rows }: { rows: WorkspaceSecurity[] }) {
               <tr key={s.instrumentCode} className={`border-b border-zinc-100 last:border-0 hover:bg-zinc-50 dark:border-zinc-800/50 dark:hover:bg-zinc-800/30 ${quoted ? "" : "text-zinc-500"}`}>
                 <td className={TD}>
                   <SecurityIdentity instrumentCode={s.instrumentCode} issuerName={s.issuerName} couponRatePct={s.couponRatePct} maturityDate={s.maturityDate} />
-                </td>
-                <td className={`${NUM} text-zinc-700 dark:text-zinc-300`}>
-                  {s.couponType === "FIXED" && s.couponRatePct !== null ? formatPct(s.couponRatePct) : s.couponType === "ZERO_COUPON" ? "Zero" : "Floating"}
+                  <TermsWarning issues={s.termsIssues} />
                 </td>
                 <td className={`${NUM} text-zinc-700 dark:text-zinc-300`}>
                   {formatIsoDate(s.maturityDate)}
@@ -207,34 +207,28 @@ function ActiveTable({ rows }: { rows: WorkspaceSecurity[] }) {
                   </div>
                 </td>
                 <td className={`${NUM} text-zinc-700 dark:text-zinc-300`}>
-                  {s.analytics.cleanPrice !== null ? (
+                  {quoted && s.analytics.cleanPrice !== null ? (
                     s.analytics.cleanPrice.toFixed(2)
                   ) : (
-                    <Missing short={quoted ? "Not reported" : "—"} reason={quoted ? "The observation reports a yield but no price." : "No market observation — price unknown."} />
+                    <Missing short={quoted ? "Not reported" : "—"} reason={quoted ? "The observation reports a yield but no price." : "No traded price — any price GFIM publishes is carried from an earlier, unknown date."} />
                   )}
                 </td>
-                <td className={`${NUM} font-semibold text-zinc-900 dark:text-zinc-100`}>
-                  {s.analytics.ytmPct !== null ? formatPct(s.analytics.ytmPct) : <Missing reason="Yield unavailable because no market price or yield has been observed. Scenario returns are available on the security page." />}
-                </td>
-                <td className={`${NUM} text-zinc-700 dark:text-zinc-300`}>
-                  {s.classification === "SOVEREIGN" ? (
-                    <span className="text-xs text-zinc-400 dark:text-zinc-500">Sovereign</span>
-                  ) : s.spreadBps !== null ? (
-                    <span className={s.benchmark?.isWideGap ? "text-amber-600 dark:text-amber-400" : ""} title={s.benchmark?.isWideGap ? "Wide tenor gap to benchmark — approximate" : undefined}>
-                      {formatBps(s.spreadBps)}
-                    </span>
-                  ) : s.benchmark ? (
-                    <Missing short={`GoG ${formatPct(s.benchmark.benchmark.yieldPct)}`} reason="Spread needs an observed yield. Shown: the nearest-tenor sovereign benchmark yield." />
+                <td className={`${NUM} font-semibold`}>
+                  {s.analytics.ytmPct === null ? (
+                    <Missing reason="No market yield: no trade or quote has been observed. Hypothetical scenario returns are on the security page." />
+                  ) : s.analyticsEligible ? (
+                    <span className="text-zinc-900 dark:text-zinc-100">{formatPct(s.analytics.ytmPct)}</span>
                   ) : (
-                    <Missing reason="Spread unavailable because no suitable sovereign benchmark exists." />
+                    <span className="cursor-help text-zinc-400 line-through decoration-zinc-400/60 dark:text-zinc-500" title="Withheld from analytics pending data-quality review — see the observation's flag.">
+                      {formatPct(s.analytics.ytmPct)}
+                    </span>
                   )}
+                </td>
+                <td className="whitespace-nowrap px-3 py-2">
+                  <BenchmarkCell ctx={s.benchmarkContext} />
                 </td>
                 <td className={`${TD} text-right`}>
-                  {quoted ? (
-                    <ObservationCell dateIso={s.latestObservationDate} kind={s.analytics.observationKind} freshness={s.observationFreshness} />
-                  ) : (
-                    <span className="text-xs text-zinc-400 dark:text-zinc-500" title="Contractual terms are known, but no market price or yield has been observed.">No market quote</span>
-                  )}
+                  <MarketStatusCell s={securityToMarketStatus(s)} />
                 </td>
               </tr>
             );

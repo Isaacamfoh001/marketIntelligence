@@ -13,7 +13,7 @@ import { describe, it, expect } from "vitest";
 import ExcelJS from "exceljs";
 import { extractSheetRows, extractAllSheets, validateTradingReportRows, extractReportDateFromWorkbook, isTradedRow, parseSourceDate } from "../ingestion/gfim-trading-report-parser";
 
-function addTitleRows(sheet: ExcelJS.Worksheet, label: string) {
+function addTitleRows(sheet: ExcelJS.Worksheet) {
   sheet.addRow([]);
   sheet.addRow(["GHANA FIXED INCOME MARKET"]);
   sheet.addRow([`Date: Friday, 02 October, 2026`]);
@@ -23,7 +23,7 @@ async function buildWorkbook(): Promise<ExcelJS.Workbook> {
   const wb = new ExcelJS.Workbook();
 
   const corp = wb.addWorksheet("CORPORATE   ");
-  addTitleRows(corp, "corp");
+  addTitleRows(corp);
   corp.addRow([
     "ISSUERS",
     "NO. ",
@@ -44,7 +44,7 @@ async function buildWorkbook(): Promise<ExcelJS.Workbook> {
   corp.addRow(["UNKNOWN ISSUER", 3, "ZZZ-BD-01/01/30", "ZZUNKNOWNISIN01", 90, 91, 1000, 2, 90, 91, 1000, new Date("2030-01-01")]); // unmatched ISIN
 
   const newGog = wb.addWorksheet("NEW GOG NOTES AND BONDS");
-  addTitleRows(newGog, "new gog");
+  addTitleRows(newGog);
   newGog.addRow([
     "NO.",
     "TENOR",
@@ -64,7 +64,7 @@ async function buildWorkbook(): Promise<ExcelJS.Workbook> {
   newGog.addRow([1, "4-YEAR BOND", "GOG-BD-02/09/30-A6156-2023-12.00", "GHGGOGI02204", 11.5, 11.8, 100.59, 195400, 1, 11.69, 11.69, 1431, new Date("2030-09-02")]);
 
   const oldGog = wb.addWorksheet("OLD GOG NOTES AND BONDS");
-  addTitleRows(oldGog, "old gog");
+  addTitleRows(oldGog);
   oldGog.addRow(["NO.", "TENOR", "SECURITY DESCRIPTION", "ISIN", "OPENING\nYIELD", "CLOSING\n YIELD", "END OF DAY CLOSING\n PRICE", "VOLUME", "NUMBER \nTRADED", "DAY LOW YIELD ", "DAY HIGH\n YIELD", "DAYS TO \nMATURITY", "MATURITY\nDATE", "APPLICABLE\nDATE"]);
   oldGog.addRow([1, "5-YEAR BOND", "GOG-BD-14/12/26-A5789-1777-21.00", "GHGGOG065145", 19.3, 19.5, 100.67, null, null, 19.5, 19.5, 73, new Date("2026-12-14")]);
   oldGog.addRow([2, null, "GOG-BD-00/00/00-NOTRADE", "GHGGOGNOTRADE1", null, null, null, null, null, null, null, 500, new Date("2028-01-01")]); // no trade

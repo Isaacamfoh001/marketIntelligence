@@ -7,7 +7,18 @@
 // ---------------------------------------------------------------------------
 
 import Link from "next/link";
-import { formatIsoDate, issuerShortName, securityShortLabel, type SecurityLifecycle } from "@/lib/fixed-income";
+import {
+  BENCHMARK_DATE_WINDOW_DAYS,
+  formatBps,
+  formatIsoDate,
+  formatPct,
+  issuerShortName,
+  MARKET_STATE_LABEL,
+  securityShortLabel,
+  type BenchmarkContext,
+  type MarketState,
+  type SecurityLifecycle,
+} from "@/lib/fixed-income";
 
 export const TH = "px-3 py-2 text-[11px] font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400";
 export const TD = "whitespace-nowrap px-3 py-2";
@@ -29,7 +40,7 @@ export function SectionHeading({ title, question, right }: { title: string; ques
   );
 }
 
-export function Stat({ label, value, sub, emphasis = false }: { label: string; value: React.ReactNode; sub?: React.ReactNode; emphasis?: boolean }) {
+export function Stat({ label, value, sub, emphasis = false }: { label: React.ReactNode; value: React.ReactNode; sub?: React.ReactNode; emphasis?: boolean }) {
   return (
     <div className="min-w-0">
       <div className="text-[11px] font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">{label}</div>
@@ -111,4 +122,175 @@ export function Missing({ reason, short = "—" }: { reason: string; short?: str
 
 export function signedTone(value: number): string {
   return value < 0 ? "text-red-600 dark:text-red-400" : "text-zinc-900 dark:text-zinc-100";
+}
+
+/**
+ * Data-quality badge (M7.3.1 §23) — rendered ONLY when attention is needed;
+ * a VALID observation shows nothing. The evidence is in the tooltip and
+ * accessible label so the reason is one hover away, never hidden.
+ */
+export function QualityBadge({ status, issues }: { status: "VALID" | "REVIEW" | "EXCLUDED" | null | undefined; issues?: { label: string; detail: string; severity: string }[] }) {
+  if (!status || status === "VALID") return null;
+  const relevant = (issues ?? []).filter((i) => i.severity !== "INFO");
+  const why = relevant.map((i) => i.detail).join(" ");
+  const label = status === "REVIEW" ? "Review required" : "Excluded from analytics";
+  return (
+    <span
+      title={why || label}
+      aria-label={`${label}${why ? `: ${why}` : ""}`}
+      className={`${PILL} cursor-help ${
+        status === "REVIEW" ? "bg-orange-50 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300" : "bg-zinc-200 text-zinc-700 dark:bg-zinc-700 dark:text-zinc-200"
+      }`}
+    >
+      {status === "REVIEW" ? "⚠ " : ""}
+      {relevant[0]?.label ?? label}
+    </span>
+  );
+}
+
+export interface MarketStatusProps {
+  latestObservationDate: string | null;
+  observationKind: "AUCTION_PRIMARY" | "SECONDARY_MARKET" | null;
+  observationFreshness: "CURRENT" | "STALE" | "MISSING";
+  quality: { status: "VALID" | "REVIEW" | "EXCLUDED"; issues: { label: string; detail: string; severity: string }[] } | null;
+  carriedPrice: { cleanPrice: number | null; asOf: string } | null;
+  noTradeRecordedSince: string | null;
+}
+
+/**
+ * What the market last said about a security, in one cell: a dated trade
+ * (with kind/freshness and any quality flag), "no trade since…" for a
+ * security GFIM only carries a price for, or "no market quote".
+ */
+export function MarketStatusCell({ s, align = "right" }: { s: MarketStatusProps; align?: "left" | "right" }) {
+  const justify = align === "right" ? "items-end" : "items-start";
+  if (s.latestObservationDate) {
+    return (
+      <div className={`flex flex-col gap-0.5 ${justify}`}>
+        <span className="text-xs text-zinc-700 dark:text-zinc-300">
+          <span className="text-zinc-400 dark:text-zinc-500">{s.observationKind === "AUCTION_PRIMARY" ? "Auction " : "Traded "}</span>
+          {formatIsoDate(s.latestObservationDate)}
+        </span>
+        <span className="flex flex-wrap gap-1">
+          <ObservationKindBadge kind={s.observationKind} />
+          <FreshnessBadge freshness={s.observationFreshness} />
+          <QualityBadge status={s.quality?.status} issues={s.quality?.issues} />
+        </span>
+      </div>
+    );
+  }
+  if (s.noTradeRecordedSince) {
+    const tip = `GFIM keeps publishing ${s.carriedPrice?.cleanPrice != null ? `a closing price of ${s.carriedPrice.cleanPrice.toFixed(2)}` : "a closing price"}, but reports no trade in any daily report since at least ${formatIsoDate(s.noTradeRecordedSince)}. It is carried from an earlier, unknown date and is not used as a market price.`;
+    return (
+      <div className={`flex flex-col gap-0.5 ${justify}`} title={tip}>
+        <span className="cursor-help text-xs text-zinc-500 dark:text-zinc-400">No trade since ≥ {formatIsoDate(s.noTradeRecordedSince)}</span>
+        {s.carriedPrice?.cleanPrice != null && <span className="text-[10px] text-zinc-400 dark:text-zinc-500">carried price {s.carriedPrice.cleanPrice.toFixed(2)} · not a quote</span>}
+      </div>
+    );
+  }
+  return <span className="text-xs text-zinc-400 dark:text-zinc-500" title="Contractual terms are known, but no market price or yield has ever been observed.">No market quote</span>;
+}
+
+export function securityToMarketStatus(s: {
+  latestObservationDate: string | null;
+  analytics: { observationKind: "AUCTION_PRIMARY" | "SECONDARY_MARKET" | null; quality: MarketStatusProps["quality"] };
+  observationFreshness: "CURRENT" | "STALE" | "MISSING";
+  carriedPrice: { cleanPrice: number | null; asOf: string } | null;
+  noTradeRecordedSince: string | null;
+}): MarketStatusProps {
+  return {
+    latestObservationDate: s.latestObservationDate,
+    observationKind: s.analytics.observationKind,
+    observationFreshness: s.observationFreshness,
+    quality: s.analytics.quality,
+    carriedPrice: s.carriedPrice,
+    noTradeRecordedSince: s.noTradeRecordedSince,
+  };
+}
+
+/** Terms-conflict marker next to a security's name — scenario returns rely on these terms too. */
+export function TermsWarning({ issues }: { issues: { code: string; label: string; detail: string; severity: string }[] }) {
+  const material = issues.filter((i) => i.severity !== "INFO");
+  if (material.length === 0) return null;
+  return (
+    <span title={material.map((i) => i.detail).join(" ")} aria-label={material.map((i) => `${i.label}: ${i.detail}`).join(" ")} className={`${PILL} cursor-help bg-orange-50 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300`}>
+      ⚠ {material.map((i) => i.label).join(", ")}
+    </span>
+  );
+}
+
+const STATE_STYLE: Record<MarketState, string> = {
+  RECENT: "bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400",
+  STALE: "bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400",
+  NEEDS_REVIEW: "bg-orange-50 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300",
+  CARRIED_ONLY: "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300",
+  NO_QUOTE: "bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400",
+};
+
+/** The one compact market-state badge (M7.3.2 §10): Recent · Stale · Needs review · Carried price — not a quote · No market quote. */
+export function MarketStateChip({ state }: { state: MarketState }) {
+  return <span className={`${PILL} ${STATE_STYLE[state]}`}>{state === "NEEDS_REVIEW" ? "⚠ " : ""}{MARKET_STATE_LABEL[state]}</span>;
+}
+
+const kindWord = (kind: "AUCTION_PRIMARY" | "SECONDARY_MARKET") => (kind === "SECONDARY_MARKET" ? "secondary trade" : "primary auction");
+
+/**
+ * Benchmark context (M7.3.2 §8). The two things this UI must never blur:
+ *   OBSERVED SPREAD   — the corporate actually traded; compared with a date-matched government observation.
+ *   REFERENCE GoG YIELD — no reliable corporate observation; today's nearest-tenor government yield shown as
+ *                         context for hypothetical scenarios ONLY. There is no spread.
+ * `compact` fits a table cell; the full form is for cards and the security page.
+ */
+export function BenchmarkCell({ ctx, compact = true, align = "right" }: { ctx: BenchmarkContext; compact?: boolean; align?: "left" | "right" }) {
+  const text = align === "right" ? "text-right" : "text-left";
+  const tag = "text-[9px] font-semibold uppercase tracking-wide";
+  switch (ctx.type) {
+    case "SOVEREIGN":
+      return <span className="text-xs text-zinc-400 dark:text-zinc-500">Sovereign benchmark</span>;
+    case "OBSERVED_SPREAD":
+      return (
+        <div
+          className={text}
+          title={`${ctx.label} · ${kindWord(ctx.kind)} ${formatIsoDate(ctx.date)} · ${ctx.observationGapDays} days from this trade · tenor gap ${ctx.tenorGapDays} days${ctx.isWideGap ? " — wide gap, approximate" : ""}`}
+        >
+          <div className={`${tag} text-emerald-700 dark:text-emerald-400`}>Observed spread</div>
+          <div className="text-base font-semibold tabular-nums text-zinc-900 dark:text-zinc-100">{formatBps(ctx.spreadBps)}</div>
+          <div className={`text-[10px] ${ctx.isWideGap ? "text-amber-600 dark:text-amber-400" : "text-zinc-500 dark:text-zinc-400"}`}>
+            vs {compact ? "GoG" : ctx.label} at {formatPct(ctx.yieldPct)} · {formatIsoDate(ctx.date)}
+            {ctx.isWideGap ? " · wide tenor gap" : ""}
+          </div>
+          {!compact && (
+            <div className="text-[10px] text-zinc-400 dark:text-zinc-500">
+              {ctx.label} · {kindWord(ctx.kind)} · {ctx.observationGapDays}d from the trade · {ctx.tenorGapDays}d tenor gap
+            </div>
+          )}
+        </div>
+      );
+    case "REFERENCE_ONLY":
+      return (
+        <div
+          className={text}
+          title={`No reliable market yield for this security, so there is NO observed spread. Today's nearest-tenor government yield (${ctx.label}, ${kindWord(ctx.kind)} ${formatIsoDate(ctx.date)}, tenor gap ${ctx.tenorGapDays} days) is context for hypothetical scenarios only.`}
+        >
+          <div className={`${tag} text-zinc-500 dark:text-zinc-400`}>Reference GoG yield</div>
+          <div className="text-base font-medium tabular-nums text-zinc-700 dark:text-zinc-300">{formatPct(ctx.yieldPct)}</div>
+          <div className="text-[10px] text-zinc-500 dark:text-zinc-400">nearest tenor · {formatIsoDate(ctx.date)}</div>
+          <div className="text-[10px] italic text-zinc-400 dark:text-zinc-500">context for scenarios · no observed spread</div>
+          {!compact && (
+            <div className="text-[10px] text-zinc-400 dark:text-zinc-500">
+              {ctx.label} · {kindWord(ctx.kind)} · {ctx.tenorGapDays}d tenor gap{ctx.isWideGap ? " (wide)" : ""}
+            </div>
+          )}
+        </div>
+      );
+    case "NO_DATE_MATCHED_BENCHMARK":
+      return (
+        <div className={text} title={`Suitable benchmark unavailable: no reliable Government of Ghana observation within ${BENCHMARK_DATE_WINDOW_DAYS} days of this trade, so no spread is shown.`}>
+          <div className={`${tag} text-zinc-500 dark:text-zinc-400`}>Observed spread</div>
+          <span className="cursor-help text-xs text-zinc-400 dark:text-zinc-500">No date-matched benchmark</span>
+        </div>
+      );
+    case "UNAVAILABLE":
+      return <Missing short="Unavailable" reason="No reliable market yield and no suitable government benchmark." />;
+  }
 }

@@ -183,3 +183,42 @@ export function sensitivityChartPrices(observedCleanPrice: number | null): numbe
   for (let p = lo; p <= hi + 1e-9; p += 0.5) prices.push(Math.round(p * 2) / 2);
   return prices;
 }
+
+/**
+ * The hypothetical clean price at which the annualized hold-to-maturity
+ * return equals `targetReturnPct` — answers "how much can we pay and still
+ * earn X?" (M7.3.2 §7). Uses the SAME engine as every other scenario: it
+ * bisects over computePriceScenario(...).returnPct (strictly decreasing in
+ * price), so it can never disagree with the scenario table. Null when the
+ * target is unreachable within the supported price bracket, or the bond
+ * cannot be analysed.
+ */
+export function findPriceForReturn(terms: BondTerms, settlementDate: Date, targetReturnPct: number, charges: TransactionCharges): number | null {
+  if (!Number.isFinite(targetReturnPct)) return null;
+  const returnAt = (price: number): number | null => {
+    const s = computePriceScenario(terms, settlementDate, price, charges);
+    return s.ok ? s.returnPct : null;
+  };
+  // Widest bracket on which the solver is defined (very low prices imply yields beyond its range; very high ones, below −99%).
+  const firstDefined = (candidates: number[]): { price: number; ret: number } | null => {
+    for (const price of candidates) {
+      const ret = returnAt(price);
+      if (ret !== null) return { price, ret };
+    }
+    return null;
+  };
+  const low = firstDefined([1, 5, 10, 20, 40]);
+  const high = firstDefined([300, 200, 150, 120]);
+  // Return falls as price rises: the target must lie between the return at the highest price and at the lowest.
+  if (!low || !high || targetReturnPct > low.ret || targetReturnPct < high.ret) return null;
+  let lo = low.price;
+  let hi = high.price;
+  for (let i = 0; i < 60; i++) {
+    const mid = (lo + hi) / 2;
+    const r = returnAt(mid);
+    if (r === null) return null;
+    if (r > targetReturnPct) lo = mid;
+    else hi = mid;
+  }
+  return (lo + hi) / 2;
+}

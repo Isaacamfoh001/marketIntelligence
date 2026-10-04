@@ -139,7 +139,7 @@ describe("relative-value hardening (M7.3.1)", () => {
     expect(comparability(4683, [709, 4500])).toBe("SIMILAR_YIELD_AND_TENOR");
   });
 
-  it("findInYieldRange tiers by tenor proximity to the selected securities, then yield", () => {
+  it("findInYieldRange tiers by tenor proximity, then recent before stale, then yield", () => {
     const order = findInYieldRange(universe, 23.5, 23.5, new Set(), 150, [709]).map((r) => r.instrumentCode);
     expect(order).toEqual(["GOG-MAY28", "LGH-OCT27", "STALE-1", "GOG-2039"]);
   });
@@ -148,5 +148,12 @@ describe("relative-value hardening (M7.3.1)", () => {
     const a = findComparables(target, universe, "SIMILAR_RETURN").map((r) => r.instrumentCode);
     const b = findComparables(target, [...universe].reverse(), "SIMILAR_RETURN").map((r) => r.instrumentCode);
     expect(a).toEqual(b);
+  });
+});
+
+describe("findInYieldRange freshness ordering (M7.3.1)", () => {
+  it("lists a recent observation before a stale one with a higher yield in the same tenor tier", () => {
+    const rows = [row({ instrumentCode: "STALE-HI", ytmPct: 30, tenorDays: 150, freshness: "STALE" }), row({ instrumentCode: "RECENT-LO", ytmPct: 24, tenorDays: 600, freshness: "CURRENT" })];
+    expect(findInYieldRange(rows, 24, 30, new Set(), 100, [400]).map((r) => r.instrumentCode)).toEqual(["RECENT-LO", "STALE-HI"]);
   });
 });

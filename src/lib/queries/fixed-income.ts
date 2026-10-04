@@ -27,6 +27,7 @@ import { observationFreshness, type Freshness } from "../freshness";
 import { TREASURY_INSTRUMENTS, getTreasurySnapshot } from "./market-data";
 import {
   assessObservationQuality,
+  benchmarkLabeller,
   buildSecurityAnalytics,
   buildSovereignYieldCurve,
   classifyInstrument,
@@ -34,6 +35,7 @@ import {
   computeDuration,
   computeSpreadBps,
   daysBetween,
+  describeBenchmarkContext,
   isWithinCurveWindow,
   observationAgeDays,
   selectBenchmarkForObservation,
@@ -41,6 +43,7 @@ import {
   toValuationDate,
   treasuryBillToBondTerms,
   CURVE_MAX_AGE_DAYS,
+  type BenchmarkContext,
   type BenchmarkSelection,
   type BondTerms,
   type ComparableRow,
@@ -475,7 +478,7 @@ export async function getSovereignYieldCurve(settlementDate: Date = toValuationD
 // comparables, shared by the landing page, Compare, and Security Detail.
 // ---------------------------------------------------------------------------
 
-export interface WorkspaceSecurity extends FixedIncomeSecurityRow {
+export interface BenchmarkedSecurity extends FixedIncomeSecurityRow {
   /**
    * Date-matched sovereign benchmark for an eligible CORPORATE market
    * observation (null for sovereigns, matured, unquoted, ineligible, or
@@ -489,6 +492,17 @@ export interface WorkspaceSecurity extends FixedIncomeSecurityRow {
   currentBenchmark: BenchmarkSelection | null;
 }
 
+export interface WorkspaceSecurity extends BenchmarkedSecurity {
+  /**
+   * How the benchmark figures may be presented (M7.3.2 §8): an OBSERVED
+   * SPREAD (date-matched, the corporate really traded) or a REFERENCE
+   * government yield (context only — no spread exists). Derived from the
+   * fields above by describeBenchmarkContext; labelled with the full universe
+   * so a benchmark bond reads "GoG 19.25% Jan-27", not a database string.
+   */
+  benchmarkContext: BenchmarkContext;
+}
+
 export interface FixedIncomeWorkspace {
   valuationDateIso: string;
   securities: WorkspaceSecurity[];
@@ -497,7 +511,7 @@ export interface FixedIncomeWorkspace {
   comparables: ComparableRow[];
 }
 
-export function attachBenchmarks(row: FixedIncomeSecurityRow, pool: YieldCurvePoint[], valuationIso: string): WorkspaceSecurity {
+export function attachBenchmarks(row: FixedIncomeSecurityRow, pool: YieldCurvePoint[], valuationIso: string): BenchmarkedSecurity {
   if (row.classification !== "CORPORATE" || row.lifecycle === "MATURED") return { ...row, benchmark: null, spreadBps: null, currentBenchmark: null };
   const currentBenchmark = selectBenchmarkForObservation(row.analytics.tenorDays, valuationIso, pool);
   if (!row.analyticsEligible || !row.latestObservationDate) return { ...row, benchmark: null, spreadBps: null, currentBenchmark };
@@ -507,7 +521,7 @@ export function attachBenchmarks(row: FixedIncomeSecurityRow, pool: YieldCurvePo
   return { ...row, benchmark, spreadBps, currentBenchmark };
 }
 
-function toComparableRow(s: WorkspaceSecurity): ComparableRow {
+function toComparableRow(s: BenchmarkedSecurity): ComparableRow {
   return {
     instrumentCode: s.instrumentCode,
     instrumentName: s.instrumentName,
@@ -571,7 +585,11 @@ export async function getFixedIncomeWorkspace(valuationDate: Date = toValuationD
   const valuationIso = isoDay(valuationDate);
   const universe = await getFixedIncomeUniverse(valuationDate);
   const curve = await buildSovereignCurve(valuationDate, universe);
-  const securities = universe.map((row) => attachBenchmarks(row, curve.pool, valuationIso));
+  const labelOf = benchmarkLabeller(universe);
+  const securities = universe.map((row): WorkspaceSecurity => {
+    const attached = attachBenchmarks(row, curve.pool, valuationIso);
+    return { ...attached, benchmarkContext: describeBenchmarkContext(attached, labelOf) };
+  });
   const comparables = [...securities.map(toComparableRow), ...(await treasuryBillComparables(valuationDate))];
   return { valuationDateIso: valuationIso, securities, curve: curve.points, excludedCurvePoints: curve.excluded, comparables };
 }

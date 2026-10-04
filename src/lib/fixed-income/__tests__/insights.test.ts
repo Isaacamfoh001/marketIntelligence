@@ -112,6 +112,11 @@ describe("buildSecurityInsights (M7.3 §20)", () => {
     expect(fact.text).toContain("Coupon conflict");
   });
 
+  it("still surfaces a terms conflict for a matured security — the maturity itself may be disputed", () => {
+    const conflict = { code: "MATURITY_CONFLICT" as const, severity: "REVIEW" as const, label: "Maturity conflict", detail: "The source states maturity 2027-04-08, but the Securities Master holds 2026-04-08." };
+    expect(ids(input({ lifecycle: "MATURED", tenorDays: 0, termsIssues: [conflict] }))).toEqual(["matured", "terms-MATURITY_CONFLICT"]);
+  });
+
   it("reports only the matured fact for a matured security", () => {
     expect(ids(input({ lifecycle: "MATURED", tenorDays: 0 }))).toEqual(["matured"]);
   });

@@ -1,7 +1,7 @@
-import Link from "next/link";
 import { getFixedIncomeWorkspace } from "@/lib/queries/fixed-income";
-import { formatIsoDate, toValuationDate } from "@/lib/fixed-income";
+import { buildYieldLandscape, formatIsoDate, toValuationDate } from "@/lib/fixed-income";
 import { CompareTool } from "@/components/fixed-income/CompareTool";
+import { FixedIncomeNav } from "@/components/fixed-income/FixedIncomeNav";
 
 export const dynamic = "force-dynamic";
 
@@ -12,7 +12,9 @@ function asList(value: string | string[] | undefined): string[] {
 
 export default async function FixedIncomeComparePage({ searchParams }: { searchParams: Promise<{ [key: string]: string | string[] | undefined }> }) {
   const params = await searchParams;
-  const workspace = await getFixedIncomeWorkspace(toValuationDate(new Date()));
+  const valuationDate = toValuationDate(new Date());
+  const workspace = await getFixedIncomeWorkspace(valuationDate);
+  const landscape = buildYieldLandscape(workspace.securities, workspace.comparables, valuationDate);
 
   const outstanding = workspace.securities.filter((s) => s.lifecycle !== "MATURED");
   const bills = workspace.comparables.filter((c) => c.instrumentType === "TREASURY_BILL");
@@ -27,14 +29,11 @@ export default async function FixedIncomeComparePage({ searchParams }: { searchP
 
   return (
     <div className="space-y-6">
+      <FixedIncomeNav asOf={formatIsoDate(workspace.valuationDateIso)} />
       <div>
-        <Link href="/fixed-income" className="text-xs text-zinc-400 hover:text-zinc-700 dark:text-zinc-500 dark:hover:text-zinc-300">
-          ← Fixed Income
-        </Link>
-        <h1 className="mt-1 text-lg font-semibold text-zinc-900 dark:text-zinc-100">Compare &amp; Return Scenarios</h1>
+        <h1 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">Compare &amp; Return Scenarios</h1>
         <p className="mt-1 max-w-3xl text-sm text-zinc-500 dark:text-zinc-400">
-          What return would each bond deliver at different purchase prices, how does that compare with what the market last traded, and where else can similar yields be found?
-          All figures use the same engine as each security&rsquo;s page, as of {formatIsoDate(workspace.valuationDateIso)}.
+          What return would each bond deliver at different purchase prices, what did the market last trade it at, and where else can a similar yield be found?
         </p>
       </div>
 
@@ -47,6 +46,7 @@ export default async function FixedIncomeComparePage({ searchParams }: { searchP
           securities={outstanding}
           bills={bills}
           comparables={workspace.comparables}
+          landscape={landscape}
           valuationDateIso={workspace.valuationDateIso}
           initialCodes={initialCodes}
           initialIssuers={initialIssuers}

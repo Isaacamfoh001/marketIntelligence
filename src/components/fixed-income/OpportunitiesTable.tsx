@@ -1,24 +1,27 @@
 "use client";
 
 // ---------------------------------------------------------------------------
-// Current Opportunities (M7.3 §6) — outstanding securities that have a
-// usable market observation (an observed price or yield), so they are
-// actually analyzable today. Securities with known terms but no quote are
+// Reliable observed yields (M7.3 §6 "Current Opportunities", hardened in
+// M7.3.1, renamed in M7.3.2: a high yield is not an "opportunity" — it can
+// reflect credit risk, illiquidity or an old quote) — outstanding
+// securities whose latest market observation is a real, analytics-eligible
+// trade/quote (never a carried price or a print withheld for data-quality
+// review), so they are actually analyzable today. Securities with known terms but no quote are
 // deliberately NOT ranked here alongside quoted ones; they remain one click
 // away in the Securities Universe below. Sorting is by a single displayed
 // column — never a composite score or a recommendation.
 // ---------------------------------------------------------------------------
 
 import { useMemo, useState } from "react";
-import { formatBps, formatIsoDate, formatPct, formatTimeRemaining } from "@/lib/fixed-income";
+import { formatIsoDate, formatPct, formatTimeRemaining } from "@/lib/fixed-income";
 import type { WorkspaceSecurity } from "@/lib/queries/fixed-income";
-import { LifecycleBadge, Missing, NUM, ObservationCell, SecurityIdentity, TD, TH } from "./ui";
+import { BenchmarkCell, LifecycleBadge, MarketStatusCell, Missing, NUM, SecurityIdentity, TD, TH, securityToMarketStatus } from "./ui";
 
 type SortKey = "maturity" | "ytm" | "spread" | "price";
 type TypeFilter = "ALL" | "CORPORATE" | "SOVEREIGN";
 
 export function OpportunitiesTable({ securities }: { securities: WorkspaceSecurity[] }) {
-  const [type, setType] = useState<TypeFilter>("CORPORATE");
+  const [type, setType] = useState<TypeFilter>("ALL");
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: "maturity", dir: 1 });
   const [recentOnly, setRecentOnly] = useState(true);
 
@@ -56,33 +59,33 @@ export function OpportunitiesTable({ securities }: { securities: WorkspaceSecuri
           value={type}
           onChange={setType}
           options={[
+            { value: "ALL", label: "All" },
             { value: "CORPORATE", label: "Corporate" },
             { value: "SOVEREIGN", label: "Government" },
-            { value: "ALL", label: "All" },
           ]}
         />
         <label className="flex items-center gap-1.5 text-xs text-zinc-600 dark:text-zinc-400">
           <input type="checkbox" checked={recentOnly} onChange={(e) => setRecentOnly(e.target.checked)} />
-          Recent observations only
+          Traded in the last 10 days only
         </label>
         <span className="text-xs text-zinc-400 dark:text-zinc-500">{rows.length} securities</span>
       </div>
 
       {rows.length === 0 ? (
         <p className="rounded border border-zinc-200 bg-white px-4 py-6 text-center text-sm text-zinc-400 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-500">
-          No outstanding securities in this group have a {recentOnly ? "recent " : ""}market observation.
+          No outstanding securities in this group have a {recentOnly ? "recent, " : ""}reliable market observation{recentOnly ? " — untick the filter to include older trades" : ""}.
         </p>
       ) : (
         <div className="overflow-x-auto rounded border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
-          <table className="w-full min-w-[860px] text-left text-sm">
+          <table className="w-full min-w-[820px] text-left text-sm">
             <thead>
               <tr className="border-b border-zinc-200 dark:border-zinc-800">
                 <th className={TH}>Security</th>
                 {header("ytm", "Observed YTM")}
-                {header("spread", "Spread vs GoG")}
+                {header("spread", "Benchmark")}
                 {header("price", "Price")}
                 {header("maturity", "Maturity")}
-                <th className={`${TH} text-right`}>Observation</th>
+                <th className={`${TH} text-right`}>Last market observation</th>
               </tr>
             </thead>
             <tbody>
@@ -91,24 +94,12 @@ export function OpportunitiesTable({ securities }: { securities: WorkspaceSecuri
                   <td className={TD}>
                     <SecurityIdentity instrumentCode={s.instrumentCode} issuerName={s.issuerName} couponRatePct={s.couponRatePct} maturityDate={s.maturityDate} />
                   </td>
-                  <td className={`${NUM} text-base font-semibold text-zinc-900 dark:text-zinc-100`}>
+                  <td className={`${NUM} text-lg font-semibold text-zinc-900 dark:text-zinc-100`}>
                     {formatPct(s.analytics.ytmPct!)}
                     <div className="text-[10px] font-normal text-zinc-400 dark:text-zinc-500">{s.analytics.ytmSource === "SOURCE_QUOTED" ? "source-quoted" : "solved from price"}</div>
                   </td>
-                  <td className={`${NUM} text-zinc-700 dark:text-zinc-300`}>
-                    {s.classification === "SOVEREIGN" ? (
-                      <Missing short="Sovereign" reason="Government securities are the benchmark — no sovereign spread applies." />
-                    ) : s.spreadBps !== null && s.benchmark ? (
-                      <>
-                        {formatBps(s.spreadBps)}
-                        <div className={`text-[10px] ${s.benchmark.isWideGap ? "text-amber-600 dark:text-amber-400" : "text-zinc-400 dark:text-zinc-500"}`}>
-                          vs {formatPct(s.benchmark.benchmark.yieldPct)}
-                          {s.benchmark.isWideGap ? " · wide tenor gap" : ""}
-                        </div>
-                      </>
-                    ) : (
-                      <Missing reason="Spread unavailable because no suitable sovereign benchmark exists." />
-                    )}
+                  <td className="whitespace-nowrap px-3 py-2">
+                    <BenchmarkCell ctx={s.benchmarkContext} />
                   </td>
                   <td className={`${NUM} text-zinc-700 dark:text-zinc-300`}>
                     {s.analytics.cleanPrice !== null ? s.analytics.cleanPrice.toFixed(2) : <Missing short="Not reported" reason="The observation reports a yield but no price." />}
@@ -121,7 +112,7 @@ export function OpportunitiesTable({ securities }: { securities: WorkspaceSecuri
                     </div>
                   </td>
                   <td className={`${TD} text-right`}>
-                    <ObservationCell dateIso={s.latestObservationDate} kind={s.analytics.observationKind} freshness={s.observationFreshness} />
+                    <MarketStatusCell s={securityToMarketStatus(s)} />
                   </td>
                 </tr>
               ))}

@@ -14,6 +14,8 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import {
+  comparability,
+  COMPARABILITY_LABEL,
   findComparables,
   relativeValue,
   COMPARABLE_FILTER_LABEL,
@@ -91,7 +93,8 @@ export function FindAlternatives({
                 <th className={`${TH} text-right`}>Observed YTM</th>
                 <th className={`${TH} text-right`}>vs reference</th>
                 <th className={`${TH} text-right`}>Maturity · tenor diff.</th>
-                <th className={`${TH} text-right`}>Spread vs GoG</th>
+                <th className={`${TH} text-right`}>Mod. duration</th>
+                <th className={`${TH} text-right`}>Observed spread vs GoG</th>
                 <th className={`${TH} text-right`}>Observation</th>
               </tr>
             </thead>
@@ -116,6 +119,7 @@ export function FindAlternatives({
                           {r.classification === "SOVEREIGN" ? (isBill ? "Sovereign · T-bill" : "Sovereign") : "Corporate"}
                         </span>
                       </div>
+                      <div className="text-[10px] text-zinc-500 dark:text-zinc-400">{COMPARABILITY_LABEL[comparability(r.tenorDays, [target.tenorDays])]}</div>
                       {!isBill && <div className="font-mono text-[11px] text-zinc-400 dark:text-zinc-500">{r.instrumentCode}</div>}
                     </td>
                     <td className={`${NUM} font-semibold text-zinc-900 dark:text-zinc-100`}>{formatPct(r.ytmPct!)}</td>
@@ -128,8 +132,9 @@ export function FindAlternatives({
                         {formatTimeRemaining(r.tenorDays)} · <span className="text-zinc-600 dark:text-zinc-400">{formatTenorDiff(rv.tenorDiffDays)}</span>
                       </div>
                     </td>
+                    <td className={`${NUM} text-zinc-600 dark:text-zinc-400`}>{r.modifiedDurationYears !== null ? `${r.modifiedDurationYears.toFixed(2)}y` : "—"}</td>
                     <td className={`${NUM} text-zinc-600 dark:text-zinc-400`}>
-                      {r.classification === "SOVEREIGN" ? <span className="text-xs text-zinc-400 dark:text-zinc-500">n/a</span> : r.spreadBps !== null ? formatBps(r.spreadBps) : <Missing reason="No suitable sovereign benchmark." />}
+                      {r.classification === "SOVEREIGN" ? <span className="text-xs text-zinc-400 dark:text-zinc-500">n/a</span> : r.spreadBps !== null ? formatBps(r.spreadBps) : <Missing reason="Suitable benchmark unavailable within 31 days of this trade." />}
                     </td>
                     <td className={`${TD} text-right`}>
                       <ObservationCell dateIso={r.observationDate} kind={r.observationKind} freshness={r.freshness} />
@@ -142,8 +147,8 @@ export function FindAlternatives({
         </div>
       )}
       <p className="text-[11px] text-zinc-400 dark:text-zinc-500">
-        Relative-value information only — a similar or higher yield is not a judgement that a security is better. Yields compare observations of different dates, markets
-        (primary auction vs secondary trade) and credit risk; check each row&apos;s observation and badge.
+        Potential comparables only — a similar or higher yield is not a judgement that a security is better or equivalent. Similar-tenor alternatives are listed first;
+        only observations that passed every data-quality check appear. Yields compare different dates, markets (primary auction vs secondary trade) and credit risk.
       </p>
     </div>
   );

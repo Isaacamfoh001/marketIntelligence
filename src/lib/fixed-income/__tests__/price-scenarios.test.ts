@@ -7,6 +7,7 @@ import {
   sensitivityChartPrices,
   toEffectiveAnnualPct,
   DEFAULT_SCENARIO_PRICES,
+  findPriceForReturn,
 } from "../price-scenarios";
 import { priceFromYield } from "../pricing";
 import { DEFAULT_PURCHASE_CHARGES, NO_CHARGES } from "../transaction-costs";
@@ -190,5 +191,30 @@ describe("sensitivityChartPrices", () => {
   it("extends to cover a deeply discounted observed price", () => {
     const p = sensitivityChartPrices(40.96);
     expect(p[0]).toBeLessThanOrEqual(35.96);
+  });
+});
+
+describe("findPriceForReturn", () => {
+  it("round-trips through the scenario engine: pricing at the found price reproduces the target return", () => {
+    const settlement = d("2026-10-04");
+    for (const target of [10, 18, 24, 30]) {
+      const price = findPriceForReturn(LONG_BOND, settlement, target, DEFAULT_PURCHASE_CHARGES);
+      expect(price).not.toBeNull();
+      const s = computePriceScenario(LONG_BOND, settlement, price!, DEFAULT_PURCHASE_CHARGES);
+      expect(s.ok && s.returnPct).toBeCloseTo(target, 4);
+    }
+  });
+
+  it("a higher target return requires a lower purchase price, and charges lower the affordable price", () => {
+    const settlement = d("2026-10-04");
+    const at20 = findPriceForReturn(LONG_BOND, settlement, 20, NO_CHARGES)!;
+    const at25 = findPriceForReturn(LONG_BOND, settlement, 25, NO_CHARGES)!;
+    expect(at25).toBeLessThan(at20);
+    expect(findPriceForReturn(LONG_BOND, settlement, 20, DEFAULT_PURCHASE_CHARGES)!).toBeLessThan(at20);
+  });
+
+  it("is null for a matured bond or a non-finite target (never a fabricated price)", () => {
+    expect(findPriceForReturn(LONG_BOND, d("2029-01-01"), 20, NO_CHARGES)).toBeNull();
+    expect(findPriceForReturn(LONG_BOND, d("2026-10-04"), Number.NaN, NO_CHARGES)).toBeNull();
   });
 });

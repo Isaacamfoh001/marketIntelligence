@@ -133,7 +133,8 @@ export const SIMILAR_RETURN_BAND_BPS = 100;
  * [lowPct − band, highPct + band] — the deterministic answer to "can we get
  * similar returns elsewhere in the market?". Sorted by comparability tier
  * (within COMPARABLE_TENOR_BAND_DAYS of any of `referenceTenorDays` first),
- * then YTM descending — factual orderings, not a ranking of merit.
+ * then recent observations before stale ones, then YTM descending —
+ * factual orderings, not a ranking of merit.
  * Excludes matured rows, rows without a YTM, quality-failed observations,
  * and `excludeCodes` (the securities being compared).
  */
@@ -150,5 +151,5 @@ export function findInYieldRange(
   const tier = (r: ComparableRow) => (referenceTenorDays.length > 0 && comparability(r.tenorDays, referenceTenorDays) === "SIMILAR_YIELD_DIFFERENT_TENOR" ? 1 : 0);
   return universe
     .filter((r) => !excludeCodes.has(r.instrumentCode) && isEligible(r) && r.ytmPct! >= lo && r.ytmPct! <= hi)
-    .sort((a, b) => tier(a) - tier(b) || b.ytmPct! - a.ytmPct! || tieBreak(a, b));
+    .sort((a, b) => tier(a) - tier(b) || Number(a.freshness !== "CURRENT") - Number(b.freshness !== "CURRENT") || b.ytmPct! - a.ytmPct! || tieBreak(a, b));
 }

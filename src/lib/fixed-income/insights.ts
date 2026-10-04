@@ -60,6 +60,10 @@ export function buildSecurityInsights(input: InsightInput): SecurityInsight[] {
   // --- Maturity ---------------------------------------------------------
   if (input.lifecycle === "MATURED") {
     out.push({ id: "matured", tone: "caution", text: `Matured on ${formatIsoDate(input.maturityDateIso)} — shown for historical research only; no remaining cash flows.` });
+    // A terms conflict can mean the "maturity" itself is disputed — never hide it behind the matured label.
+    for (const issue of (input.termsIssues ?? []).filter((i) => i.severity !== "INFO")) {
+      out.push({ id: `terms-${issue.code}`, tone: "caution", text: `${issue.label}: ${issue.detail}` });
+    }
     return out;
   }
   out.push({
