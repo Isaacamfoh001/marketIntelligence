@@ -26,7 +26,7 @@ export const FIXED_INCOME_IMPORT_TEMPLATES: Record<FixedIncomeDatasetType, Fixed
       "Contractual terms for a government or corporate bond — issuer, maturity, coupon. Powers the Fixed Income Universe, Security Analysis, and Yield Curve. One row per instrument; re-importing an instrument_code updates it in place and reports any changed term as a restatement.",
     requiredHeaders: ["Instrument Code", "Instrument Name", "Issuer Name", "Instrument Type", "Issue Date", "Maturity Date", "Coupon Type"],
     requiredNote: "Coupon Rate and Coupon Frequency are required for FIXED coupon type, and must be blank for ZERO_COUPON",
-    optionalHeaders: ["Ticker", "Currency", "Coupon Rate", "Coupon Frequency", "Face Value", "Status"],
+    optionalHeaders: ["ISIN", "Ticker", "Currency", "Coupon Rate", "Coupon Frequency", "Face Value", "Status"],
     templateFilename: "fixed-income-securities-template.csv",
   },
   "fixed-income-observations": {
@@ -34,8 +34,8 @@ export const FIXED_INCOME_IMPORT_TEMPLATES: Record<FixedIncomeDatasetType, Fixed
     label: "Fixed Income Market Observations",
     description:
       "A date's clean price and/or yield for an existing fixed-income security (import the Securities Master first). Powers YTM, duration, DV01, the price/yield history chart, and the sovereign spread. A row must supply at least Clean Price or Yield.",
-    requiredHeaders: ["Instrument Code", "Observation Date"],
-    requiredNote: "plus at least one of Clean Price or Yield",
+    requiredHeaders: ["Instrument Code", "Observation Date", "Observation Kind"],
+    requiredNote: "plus at least one of Clean Price or Yield. Observation Kind must be AUCTION_PRIMARY or SECONDARY_MARKET — never left ambiguous",
     optionalHeaders: ["Clean Price", "Yield", "Volume Traded"],
     templateFilename: "fixed-income-observations-template.csv",
   },

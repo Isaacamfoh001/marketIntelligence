@@ -86,3 +86,28 @@ describe("validateFixedIncomeSecurityRows — corporate fixed-rate bond", () => 
     expect(result.invalid).toHaveLength(1);
   });
 });
+
+describe("validateFixedIncomeSecurityRows — ISIN (M7.1)", () => {
+  const HEADER_WITH_ISIN = `${HEADER},ISIN`;
+
+  it("accepts a well-formed 12-character ISIN", () => {
+    const csv = `${HEADER_WITH_ISIN}\nGHCKCP073272,Kasapreko 2027 Bond,Kasapreko Company PLC,KASA,CORPORATE_BOND,GHS,2024-01-29,2027-01-29,FIXED,26,SEMI_ANNUAL,100,ACTIVE,GHCKCP073272`;
+    const result = validateFixedIncomeSecurityRows(parseCsvRows(csv));
+    expect(result.invalid).toEqual([]);
+    expect(result.valid[0].isin).toBe("GHCKCP073272");
+  });
+
+  it("leaves isin null when the column is blank", () => {
+    const csv = `${HEADER_WITH_ISIN}\nX1,X Bond,X Co,,CORPORATE_BOND,GHS,2024-01-01,2027-01-01,FIXED,20,ANNUAL,100,ACTIVE,`;
+    const result = validateFixedIncomeSecurityRows(parseCsvRows(csv));
+    expect(result.invalid).toEqual([]);
+    expect(result.valid[0].isin).toBeNull();
+  });
+
+  it("rejects a malformed ISIN rather than silently storing it", () => {
+    const csv = `${HEADER_WITH_ISIN}\nX1,X Bond,X Co,,CORPORATE_BOND,GHS,2024-01-01,2027-01-01,FIXED,20,ANNUAL,100,ACTIVE,NOT-AN-ISIN`;
+    const result = validateFixedIncomeSecurityRows(parseCsvRows(csv));
+    expect(result.invalid).toHaveLength(1);
+    expect(result.invalid[0].errors.join(" ")).toMatch(/isin does not match/);
+  });
+});

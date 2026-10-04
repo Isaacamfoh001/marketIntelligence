@@ -21,7 +21,8 @@ import { parseGseFileDate } from "./gse-file-date";
 import { findHeader, normalizeHeader, type ParsedFile } from "./file-parse";
 
 const FIELD_ALIASES: Record<string, string[]> = {
-  instrument_code: ["instrument code", "security code", "isin", "code"],
+  instrument_code: ["instrument code", "security code", "security description", "code"],
+  isin: ["isin"],
   instrument_name: ["instrument name", "security name", "name"],
   issuer_name: ["issuer name", "issuer"],
   ticker: ["ticker", "share code", "symbol"],
@@ -47,6 +48,7 @@ export type NormalisedSecurityStatus = "ACTIVE" | "MATURED" | "CALLED" | "DEFAUL
 
 export interface NormalisedFixedIncomeSecurityRow {
   instrumentCode: string;
+  isin: string | null;
   instrumentName: string;
   issuerName: string;
   ticker: string | null;
@@ -153,6 +155,16 @@ export function validateFixedIncomeSecurityRows(rows: RawFixedIncomeSecurityRow[
     const tickerRaw = (row.ticker ?? "").trim().toUpperCase();
     const ticker = tickerRaw === "" ? null : tickerRaw;
 
+    const isinRaw = (row.isin ?? "").trim().toUpperCase();
+    let isin: string | null = null;
+    if (isinRaw !== "") {
+      if (!/^[A-Z]{2}[A-Z0-9]{9}[0-9]$/.test(isinRaw)) {
+        errors.push(`isin does not match the standard 12-character ISIN format: "${isinRaw}"`);
+      } else {
+        isin = isinRaw;
+      }
+    }
+
     const instrumentTypeToken = normalizeToken(row.instrument_type ?? "");
     const instrumentType = INSTRUMENT_TYPE_ALIASES[instrumentTypeToken];
     if (instrumentTypeToken === "") errors.push("instrument_type is required");
@@ -231,6 +243,7 @@ export function validateFixedIncomeSecurityRows(rows: RawFixedIncomeSecurityRow[
 
     valid.push({
       instrumentCode,
+      isin,
       instrumentName,
       issuerName,
       ticker,

@@ -6,45 +6,72 @@ function parseCsvRows(csv: string) {
   return extractFixedIncomeObservationRows(parseCsv(csv));
 }
 
-const HEADER = "Instrument Code,Observation Date,Clean Price,Yield,Volume Traded";
+const HEADER = "Instrument Code,Observation Date,Clean Price,Yield,Volume Traded,Observation Kind";
 
 describe("validateFixedIncomeObservationRows", () => {
   it("accepts a row with both price and yield", () => {
-    const csv = `${HEADER}\nKASA-BND-2027,2026-01-15,97.5,23.1,500000`;
+    const csv = `${HEADER}\nKASA-BND-2027,2026-01-15,97.5,23.1,500000,SECONDARY_MARKET`;
     const result = validateFixedIncomeObservationRows(parseCsvRows(csv));
     expect(result.invalid).toEqual([]);
-    expect(result.valid[0]).toMatchObject({ instrumentCode: "KASA-BND-2027", cleanPrice: "97.5", sourceYieldPct: "23.1", volumeTradedGhs: "500000" });
+    expect(result.valid[0]).toMatchObject({
+      instrumentCode: "KASA-BND-2027",
+      cleanPrice: "97.5",
+      sourceYieldPct: "23.1",
+      volumeTradedGhs: "500000",
+      observationKind: "SECONDARY_MARKET",
+    });
   });
 
   it("accepts a row with only price", () => {
-    const csv = `${HEADER}\nKASA-BND-2027,2026-01-15,97.5,,`;
+    const csv = `${HEADER}\nKASA-BND-2027,2026-01-15,97.5,,,SECONDARY_MARKET`;
     const result = validateFixedIncomeObservationRows(parseCsvRows(csv));
     expect(result.invalid).toEqual([]);
     expect(result.valid[0].sourceYieldPct).toBeNull();
   });
 
   it("accepts a row with only yield", () => {
-    const csv = `${HEADER}\nKASA-BND-2027,2026-01-15,,23.1,`;
+    const csv = `${HEADER}\nKASA-BND-2027,2026-01-15,,23.1,,AUCTION_PRIMARY`;
     const result = validateFixedIncomeObservationRows(parseCsvRows(csv));
     expect(result.invalid).toEqual([]);
     expect(result.valid[0].cleanPrice).toBeNull();
+    expect(result.valid[0].observationKind).toBe("AUCTION_PRIMARY");
+  });
+
+  it("accepts the AUCTION alias for observation_kind", () => {
+    const csv = `${HEADER}\nKASA-BND-2027,2026-01-15,,23.1,,AUCTION`;
+    const result = validateFixedIncomeObservationRows(parseCsvRows(csv));
+    expect(result.invalid).toEqual([]);
+    expect(result.valid[0].observationKind).toBe("AUCTION_PRIMARY");
   });
 
   it("rejects a row with neither price nor yield", () => {
-    const csv = `${HEADER}\nKASA-BND-2027,2026-01-15,,,`;
+    const csv = `${HEADER}\nKASA-BND-2027,2026-01-15,,,,SECONDARY_MARKET`;
     const result = validateFixedIncomeObservationRows(parseCsvRows(csv));
     expect(result.invalid).toHaveLength(1);
     expect(result.invalid[0].errors.join(" ")).toMatch(/at least one of clean_price or source_yield/);
   });
 
   it("rejects a non-positive clean_price", () => {
-    const csv = `${HEADER}\nKASA-BND-2027,2026-01-15,0,,`;
+    const csv = `${HEADER}\nKASA-BND-2027,2026-01-15,0,,,SECONDARY_MARKET`;
     const result = validateFixedIncomeObservationRows(parseCsvRows(csv));
     expect(result.invalid).toHaveLength(1);
   });
 
   it("rejects a missing observation_date", () => {
-    const csv = `${HEADER}\nKASA-BND-2027,,97.5,,`;
+    const csv = `${HEADER}\nKASA-BND-2027,,97.5,,,SECONDARY_MARKET`;
+    const result = validateFixedIncomeObservationRows(parseCsvRows(csv));
+    expect(result.invalid).toHaveLength(1);
+  });
+
+  it("rejects a missing observation_kind", () => {
+    const csv = `${HEADER}\nKASA-BND-2027,2026-01-15,97.5,,,`;
+    const result = validateFixedIncomeObservationRows(parseCsvRows(csv));
+    expect(result.invalid).toHaveLength(1);
+    expect(result.invalid[0].errors.join(" ")).toMatch(/observation_kind is required/);
+  });
+
+  it("rejects an unrecognised observation_kind", () => {
+    const csv = `${HEADER}\nKASA-BND-2027,2026-01-15,97.5,,,BOGUS`;
     const result = validateFixedIncomeObservationRows(parseCsvRows(csv));
     expect(result.invalid).toHaveLength(1);
   });

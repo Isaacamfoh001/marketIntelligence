@@ -122,6 +122,7 @@ async function persistSecurities(
     await db.fixedIncomeSecurity.upsert({
       where: { instrumentCode: row.instrumentCode },
       update: {
+        isin: row.isin,
         instrumentName: row.instrumentName,
         issuerName: row.issuerName,
         companyId,
@@ -141,6 +142,7 @@ async function persistSecurities(
       },
       create: {
         instrumentCode: row.instrumentCode,
+        isin: row.isin,
         instrumentName: row.instrumentName,
         issuerName: row.issuerName,
         companyId,

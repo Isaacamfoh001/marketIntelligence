@@ -30,7 +30,7 @@ function securitiesCsv(rows: string[]): Buffer {
 }
 
 function observationsCsv(rows: string[]): Buffer {
-  const header = "Instrument Code,Observation Date,Clean Price,Yield,Volume Traded";
+  const header = "Instrument Code,Observation Date,Clean Price,Yield,Volume Traded,Observation Kind";
   return Buffer.from([header, ...rows].join("\n"), "utf-8");
 }
 
@@ -47,7 +47,7 @@ beforeAll(async () => {
 
   const observations = await importFixedIncomeObservations(
     "seed-obs.csv",
-    observationsCsv([`${CORP_CODE},2026-06-01,92.5,,100000`, `${GOV_CODE},2026-06-01,98,,50000`]),
+    observationsCsv([`${CORP_CODE},2026-06-01,92.5,,100000,SECONDARY_MARKET`, `${GOV_CODE},2026-06-01,98,,50000,SECONDARY_MARKET`]),
     { commit: true },
   );
   if (observations.runId) createdRunIds.push(observations.runId);

@@ -201,7 +201,8 @@ export async function ingestBogTreasury(): Promise<TreasuryIngestResult> {
 // Historical backfill (best-effort, one AJAX call per tenor)
 // ---------------------------------------------------------------------------
 
-function extractNonce(html: string): string {
+/** Exported for reuse by bog-government-bonds-provider.ts, which needs the same historical AJAX mechanism to reach rows beyond the main page's ~10-row recent window. */
+export function extractNonce(html: string): string {
   const match = /wdtNonceFrontendServerSide_\d+"\s+name="wdtNonceFrontendServerSide_\d+"\s+value="([a-f0-9]+)"/.exec(html);
   if (!match) {
     throw new Error("Could not find the wpDataTables nonce on the Treasury Bill Rates page — page structure may have changed");
@@ -209,7 +210,7 @@ function extractNonce(html: string): string {
   return match[1];
 }
 
-function extractTableId(html: string): string {
+export function extractTableId(html: string): string {
   const match = /"tableWpId":(\d+)/.exec(html);
   if (!match) {
     throw new Error("Could not find the wpDataTables table id on the Treasury Bill Rates page — page structure may have changed");

@@ -19,10 +19,13 @@ import { computeCurrentYield, computeYtm } from "./yield";
 import { daysBetween } from "./cashflow";
 import type { BondTerms, FixedIncomeUnavailableReason } from "./types";
 
+export type ObservationKind = "AUCTION_PRIMARY" | "SECONDARY_MARKET";
+
 export interface ObservationInput {
   observationDate: Date;
   cleanPrice: number | null;
   sourceYieldPct: number | null;
+  observationKind: ObservationKind;
 }
 
 export type YtmSource = "SOLVED_FROM_PRICE" | "SOURCE_QUOTED";
@@ -36,6 +39,9 @@ export interface SecurityAnalytics {
   currentYieldPct: number | null;
   ytmPct: number | null;
   ytmSource: YtmSource | null;
+  /** Which kind of observation the YTM/price/yield above is based on — null only when there is no observation at all. Never conflate an auction clearing rate with a secondary-market trade (M7.1 §8). */
+  observationKind: ObservationKind | null;
+  observationDate: string | null;
   macaulayDurationYears: number | null;
   modifiedDurationYears: number | null;
   dv01: number | null;
@@ -54,6 +60,8 @@ function emptyAnalytics(tenorDays: number, isMatured: boolean, reason: FixedInco
     currentYieldPct: null,
     ytmPct: null,
     ytmSource: null,
+    observationKind: null,
+    observationDate: null,
     macaulayDurationYears: null,
     modifiedDurationYears: null,
     dv01: null,
@@ -120,6 +128,8 @@ export function buildSecurityAnalytics(terms: BondTerms, observation: Observatio
     currentYieldPct,
     ytmPct,
     ytmSource,
+    observationKind: observation.observationKind,
+    observationDate: observation.observationDate.toISOString().slice(0, 10),
     macaulayDurationYears: duration?.macaulayDurationYears ?? null,
     modifiedDurationYears: duration?.modifiedDurationYears ?? null,
     dv01: duration?.dv01 ?? null,

@@ -15,16 +15,19 @@ import { parseGseFileDate } from "./gse-file-date";
 import { findHeader, normalizeHeader, type ParsedFile } from "./file-parse";
 
 const FIELD_ALIASES: Record<string, string[]> = {
-  instrument_code: ["instrument code", "security code", "isin", "code"],
+  instrument_code: ["instrument code", "security code", "security description", "code"],
   observation_date: ["observation date", "trading date", "date"],
   clean_price: ["clean price", "price"],
   source_yield: ["yield", "source yield", "yield pct", "quoted yield"],
   volume_traded: ["volume traded", "volume", "value traded"],
+  observation_kind: ["observation kind", "kind", "source type", "rate type"],
 };
 
 export interface RawFixedIncomeObservationRow {
   [field: string]: string | undefined;
 }
+
+export type NormalisedObservationKind = "AUCTION_PRIMARY" | "SECONDARY_MARKET";
 
 export interface NormalisedFixedIncomeObservationRow {
   instrumentCode: string;
@@ -32,6 +35,7 @@ export interface NormalisedFixedIncomeObservationRow {
   cleanPrice: string | null;
   sourceYieldPct: string | null;
   volumeTradedGhs: string | null;
+  observationKind: NormalisedObservationKind;
 }
 
 export function mapFixedIncomeObservationColumns(rawHeaders: string[]): Record<string, string | null> {
@@ -55,6 +59,21 @@ export function extractFixedIncomeObservationRows(file: ParsedFile): RawFixedInc
 }
 
 const INSTRUMENT_CODE_RE = /^[A-Z0-9][A-Z0-9._-]{0,39}$/;
+
+const OBSERVATION_KIND_ALIASES: Record<string, NormalisedObservationKind> = {
+  AUCTION: "AUCTION_PRIMARY",
+  "AUCTION PRIMARY": "AUCTION_PRIMARY",
+  PRIMARY: "AUCTION_PRIMARY",
+  "PRIMARY ISSUANCE": "AUCTION_PRIMARY",
+  SECONDARY: "SECONDARY_MARKET",
+  "SECONDARY MARKET": "SECONDARY_MARKET",
+  MARKET: "SECONDARY_MARKET",
+  TRADE: "SECONDARY_MARKET",
+};
+
+function normalizeToken(text: string): string {
+  return text.trim().toUpperCase().replace(/[-_]+/g, " ").replace(/\s+/g, " ");
+}
 
 export interface FixedIncomeObservationValidationResult {
   valid: NormalisedFixedIncomeObservationRow[];
@@ -104,6 +123,15 @@ export function validateFixedIncomeObservationRows(rows: RawFixedIncomeObservati
       else volumeTradedGhs = parsed.value!;
     }
 
+    const observationKindToken = normalizeToken(row.observation_kind ?? "");
+    let observationKind: NormalisedObservationKind | null = null;
+    if (observationKindToken === "") {
+      errors.push("observation_kind is required (AUCTION_PRIMARY or SECONDARY_MARKET) — never left ambiguous whether a rate is a primary auction result or a secondary-market trade");
+    } else {
+      observationKind = OBSERVATION_KIND_ALIASES[observationKindToken] ?? null;
+      if (!observationKind) errors.push(`observation_kind must be AUCTION_PRIMARY or SECONDARY_MARKET: "${row.observation_kind}"`);
+    }
+
     if (errors.length > 0) {
       invalid.push({ row, errors, rowNumber });
       return;
@@ -115,6 +143,7 @@ export function validateFixedIncomeObservationRows(rows: RawFixedIncomeObservati
       cleanPrice,
       sourceYieldPct,
       volumeTradedGhs,
+      observationKind: observationKind!,
     });
   });
 

@@ -30,7 +30,7 @@ function securitiesCsv(rows: string[]): Buffer {
 }
 
 function observationsCsv(rows: string[]): Buffer {
-  const header = "Instrument Code,Observation Date,Clean Price,Yield,Volume Traded";
+  const header = "Instrument Code,Observation Date,Clean Price,Yield,Volume Traded,Observation Kind";
   return Buffer.from([header, ...rows].join("\n"), "utf-8");
 }
 
@@ -95,7 +95,7 @@ describe("importFixedIncomeSecurities — commit", () => {
 
 describe("importFixedIncomeObservations", () => {
   it("rejects an observation for an instrument code with no matching security", async () => {
-    const buffer = observationsCsv(["ZZ-UNKNOWN-CODE,2026-01-15,97.5,,"]);
+    const buffer = observationsCsv(["ZZ-UNKNOWN-CODE,2026-01-15,97.5,,,SECONDARY_MARKET"]);
     const result = await trackedImport(importFixedIncomeObservations("unknown.csv", buffer, { commit: true }));
 
     expect(result.unknownInstruments).toHaveLength(1);
@@ -108,7 +108,7 @@ describe("importFixedIncomeObservations", () => {
   });
 
   it("persists an observation and is idempotent across a re-run with the same values", async () => {
-    const buffer = observationsCsv([`${TEST_CODES[0]},2026-02-10,95.25,21.4,750000`]);
+    const buffer = observationsCsv([`${TEST_CODES[0]},2026-02-10,95.25,21.4,750000,SECONDARY_MARKET`]);
     const first = await trackedImport(importFixedIncomeObservations("obs-1.csv", buffer, { commit: true }));
     expect(first.inserted).toBe(1);
 

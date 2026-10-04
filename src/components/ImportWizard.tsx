@@ -318,6 +318,7 @@ function FixedIncomeSecurityPreviewTable({ rows }: { rows: NormalisedFixedIncome
         <thead>
           <tr className="border-b border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900/60">
             <th className="px-3 py-2 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Instrument</th>
+            <th className="px-3 py-2 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">ISIN</th>
             <th className="px-3 py-2 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Issuer</th>
             <th className="px-3 py-2 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Type</th>
             <th className="px-3 py-2 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Maturity</th>
@@ -329,6 +330,7 @@ function FixedIncomeSecurityPreviewTable({ rows }: { rows: NormalisedFixedIncome
           {rows.map((r, i) => (
             <tr key={i} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/50">
               <td className="whitespace-nowrap px-3 py-2 font-medium text-zinc-900 dark:text-zinc-100">{r.instrumentCode}</td>
+              <td className="whitespace-nowrap px-3 py-2 text-zinc-600 dark:text-zinc-400">{r.isin ?? "—"}</td>
               <td className="whitespace-nowrap px-3 py-2 text-zinc-600 dark:text-zinc-400">{r.issuerName}</td>
               <td className="whitespace-nowrap px-3 py-2 text-zinc-600 dark:text-zinc-400">{r.instrumentType}</td>
               <td className="whitespace-nowrap px-3 py-2 text-zinc-600 dark:text-zinc-400">{formatDate(r.maturityDate)}</td>
@@ -354,6 +356,7 @@ function FixedIncomeObservationPreviewTable({ rows }: { rows: NormalisedFixedInc
             <th className="px-3 py-2 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Date</th>
             <th className="px-3 py-2 text-right text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Clean Price</th>
             <th className="px-3 py-2 text-right text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Yield</th>
+            <th className="px-3 py-2 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Kind</th>
             <th className="px-3 py-2 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Status</th>
           </tr>
         </thead>
@@ -364,6 +367,7 @@ function FixedIncomeObservationPreviewTable({ rows }: { rows: NormalisedFixedInc
               <td className="whitespace-nowrap px-3 py-2 text-zinc-600 dark:text-zinc-400">{formatDate(r.observationDate)}</td>
               <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums text-zinc-900 dark:text-zinc-100">{r.cleanPrice ?? "—"}</td>
               <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums text-zinc-900 dark:text-zinc-100">{r.sourceYieldPct ? `${r.sourceYieldPct}%` : "—"}</td>
+              <td className="whitespace-nowrap px-3 py-2 text-zinc-600 dark:text-zinc-400">{r.observationKind === "AUCTION_PRIMARY" ? "Primary Auction" : "Secondary Market"}</td>
               <td className="whitespace-nowrap px-3 py-2 text-emerald-600 dark:text-emerald-400">✓ Valid</td>
             </tr>
           ))}

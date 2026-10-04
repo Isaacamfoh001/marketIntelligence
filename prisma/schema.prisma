@@ -116,6 +116,17 @@ enum FixedIncomeSecurityStatus {
   DEFAULTED
 }
 
+/// Distinguishes WHERE a price/yield observation came from — never
+/// interchangeable (M7.1 §8/§9): a primary-auction clearing rate (set by
+/// BoG at issuance, competing bids) and a secondary-market traded
+/// price/yield (set by subsequent buyers/sellers) answer different
+/// questions, and conflating them would misrepresent what a stored number
+/// actually means.
+enum ObservationKind {
+  AUCTION_PRIMARY
+  SECONDARY_MARKET
+}
+
 /// Observation frequency for macro series.
 enum MacroFrequency {
   DAILY
@@ -387,6 +398,17 @@ model TreasuryInstrument {
 /// discountRate is retained rather than discarded — a row missing either
 /// is rejected during validation, never stored with a fabricated value.
 /// `tenderNumber` preserves BoG's own auction identifier for traceability.
+///
+/// Verified convention (M7.1 §9, src/lib/treasury-rate-convention.ts):
+/// discountRate is the annualized discount off FACE value (what the
+/// auction clears on); interestRate is the annualized return on the PRICE
+/// PAID ("interest rate equivalent" / true yield), always >= discountRate.
+/// interestRate is the field comparable to a coupon bond's YTM — both
+/// measure annualized return on amount invested — and is therefore the
+/// correct (and already-used) field for the Fixed Income sovereign yield
+/// curve and spread comparisons. discountRate is never used for that
+/// purpose. See treasury-rate-convention.test.ts for verification against
+/// every TreasuryRate row in the database.
 model TreasuryRate {
   id              String   @id @default(cuid())
   instrumentId    String
@@ -810,6 +832,10 @@ model SecurityPrice {
 model FixedIncomeSecurity {
   id             String  @id @default(cuid())
   instrumentCode String  @unique
+  /// International Securities Identification Number, when the issuer/
+  /// exchange has published one (M7.1 §4). Nullable — never fabricated
+  /// when a source doesn't supply it.
+  isin           String? @unique
   instrumentName String
   issuerName     String
   companyId      String?
@@ -860,9 +886,13 @@ model FixedIncomeObservation {
   securityId      String
   observationDate DateTime @db.Date
 
-  cleanPrice      Decimal? @db.Decimal(12, 4)
-  sourceYieldPct  Decimal? @db.Decimal(9, 4)
-  volumeTradedGhs Decimal? @db.Decimal(20, 2)
+  cleanPrice      Decimal?        @db.Decimal(12, 4)
+  sourceYieldPct  Decimal?        @db.Decimal(9, 4)
+  volumeTradedGhs Decimal?        @db.Decimal(20, 2)
+  /// Primary auction clearing rate vs. secondary-market trade — see
+  /// ObservationKind. Required: every observation must state which kind
+  /// it is, never left ambiguous (M7.1 §8).
+  observationKind ObservationKind
 
   sourceId       String
   ingestionRunId String

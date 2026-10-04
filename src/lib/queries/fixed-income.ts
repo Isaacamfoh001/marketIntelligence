@@ -34,6 +34,7 @@ import {
 export interface FixedIncomeSecurityRow {
   id: string;
   instrumentCode: string;
+  isin: string | null;
   instrumentName: string;
   issuerName: string;
   companyTicker: string | null;
@@ -51,6 +52,32 @@ export interface FixedIncomeSecurityRow {
   analytics: SecurityAnalytics;
 }
 
+interface SecurityWithCompany {
+  id: string;
+  instrumentCode: string;
+  isin: string | null;
+  instrumentName: string;
+  issuerName: string;
+  company: { ticker: string | null } | null;
+  instrumentType: "GOVERNMENT_BOND" | "CORPORATE_BOND";
+  classification: FixedIncomeClassification;
+  currency: string;
+  issueDate: Date;
+  maturityDate: Date;
+  couponType: "FIXED" | "FLOATING" | "ZERO_COUPON";
+  couponRatePct: unknown;
+  couponFrequency: "ANNUAL" | "SEMI_ANNUAL" | "QUARTERLY" | "MONTHLY" | null;
+  faceValue: unknown;
+  status: "ACTIVE" | "MATURED" | "CALLED" | "DEFAULTED";
+}
+interface ObservationRowShape {
+  observationDate: Date;
+  cleanPrice: unknown;
+  sourceYieldPct: unknown;
+  observationKind: "AUCTION_PRIMARY" | "SECONDARY_MARKET";
+}
+type ObservationRow = ObservationRowShape | null;
+
 function toBondTerms(security: { issueDate: Date; maturityDate: Date; couponType: string; couponRatePct: unknown; couponFrequency: string | null; faceValue: unknown }): BondTerms {
   return {
     issueDate: security.issueDate,
@@ -59,6 +86,44 @@ function toBondTerms(security: { issueDate: Date; maturityDate: Date; couponType
     couponRatePct: security.couponRatePct !== null ? Number(security.couponRatePct) : null,
     couponFrequency: security.couponFrequency as BondTerms["couponFrequency"],
     faceValue: Number(security.faceValue),
+  };
+}
+
+/** The ONE place a FixedIncomeSecurity + its latest observation become a FixedIncomeSecurityRow — reused by both the universe listing and the single-security lookup so they can never compute analytics differently. */
+function toSecurityRow(sec: SecurityWithCompany, latestObservation: ObservationRow, settlementDate: Date): FixedIncomeSecurityRow {
+  const terms = toBondTerms(sec);
+  const analytics = buildSecurityAnalytics(
+    terms,
+    latestObservation
+      ? {
+          observationDate: latestObservation.observationDate,
+          cleanPrice: latestObservation.cleanPrice !== null ? Number(latestObservation.cleanPrice) : null,
+          sourceYieldPct: latestObservation.sourceYieldPct !== null ? Number(latestObservation.sourceYieldPct) : null,
+          observationKind: latestObservation.observationKind,
+        }
+      : null,
+    settlementDate,
+  );
+
+  return {
+    id: sec.id,
+    instrumentCode: sec.instrumentCode,
+    isin: sec.isin,
+    instrumentName: sec.instrumentName,
+    issuerName: sec.issuerName,
+    companyTicker: sec.company?.ticker ?? null,
+    instrumentType: sec.instrumentType,
+    classification: sec.classification,
+    currency: sec.currency,
+    issueDate: sec.issueDate.toISOString().slice(0, 10),
+    maturityDate: sec.maturityDate.toISOString().slice(0, 10),
+    couponType: sec.couponType,
+    couponRatePct: sec.couponRatePct !== null ? Number(sec.couponRatePct) : null,
+    couponFrequency: sec.couponFrequency,
+    faceValue: Number(sec.faceValue),
+    status: sec.status,
+    latestObservationDate: latestObservation ? latestObservation.observationDate.toISOString().slice(0, 10) : null,
+    analytics,
   };
 }
 
@@ -76,39 +141,7 @@ export async function getFixedIncomeUniverse(settlementDate: Date = new Date()):
         where: { securityId: sec.id },
         orderBy: { observationDate: "desc" },
       });
-
-      const terms = toBondTerms(sec);
-      const analytics = buildSecurityAnalytics(
-        terms,
-        latestObservation
-          ? {
-              observationDate: latestObservation.observationDate,
-              cleanPrice: latestObservation.cleanPrice !== null ? Number(latestObservation.cleanPrice) : null,
-              sourceYieldPct: latestObservation.sourceYieldPct !== null ? Number(latestObservation.sourceYieldPct) : null,
-            }
-          : null,
-        settlementDate,
-      );
-
-      return {
-        id: sec.id,
-        instrumentCode: sec.instrumentCode,
-        instrumentName: sec.instrumentName,
-        issuerName: sec.issuerName,
-        companyTicker: sec.company?.ticker ?? null,
-        instrumentType: sec.instrumentType,
-        classification: sec.classification,
-        currency: sec.currency,
-        issueDate: sec.issueDate.toISOString().slice(0, 10),
-        maturityDate: sec.maturityDate.toISOString().slice(0, 10),
-        couponType: sec.couponType,
-        couponRatePct: sec.couponRatePct !== null ? Number(sec.couponRatePct) : null,
-        couponFrequency: sec.couponFrequency,
-        faceValue: Number(sec.faceValue),
-        status: sec.status,
-        latestObservationDate: latestObservation ? latestObservation.observationDate.toISOString().slice(0, 10) : null,
-        analytics,
-      };
+      return toSecurityRow(sec, latestObservation, settlementDate);
     }),
   );
 }
@@ -126,38 +159,7 @@ export async function getFixedIncomeSecurityByCode(instrumentCode: string, settl
     orderBy: { observationDate: "desc" },
   });
 
-  const terms = toBondTerms(sec);
-  const analytics = buildSecurityAnalytics(
-    terms,
-    latestObservation
-      ? {
-          observationDate: latestObservation.observationDate,
-          cleanPrice: latestObservation.cleanPrice !== null ? Number(latestObservation.cleanPrice) : null,
-          sourceYieldPct: latestObservation.sourceYieldPct !== null ? Number(latestObservation.sourceYieldPct) : null,
-        }
-      : null,
-    settlementDate,
-  );
-
-  return {
-    id: sec.id,
-    instrumentCode: sec.instrumentCode,
-    instrumentName: sec.instrumentName,
-    issuerName: sec.issuerName,
-    companyTicker: sec.company?.ticker ?? null,
-    instrumentType: sec.instrumentType,
-    classification: sec.classification,
-    currency: sec.currency,
-    issueDate: sec.issueDate.toISOString().slice(0, 10),
-    maturityDate: sec.maturityDate.toISOString().slice(0, 10),
-    couponType: sec.couponType,
-    couponRatePct: sec.couponRatePct !== null ? Number(sec.couponRatePct) : null,
-    couponFrequency: sec.couponFrequency,
-    faceValue: Number(sec.faceValue),
-    status: sec.status,
-    latestObservationDate: latestObservation ? latestObservation.observationDate.toISOString().slice(0, 10) : null,
-    analytics,
-  };
+  return toSecurityRow(sec, latestObservation, settlementDate);
 }
 
 export interface FixedIncomeObservationPoint {

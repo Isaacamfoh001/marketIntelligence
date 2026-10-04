@@ -17,26 +17,28 @@ describe("buildSecurityAnalytics", () => {
   const settlement = d("2025-06-15");
 
   it("solves YTM from a clean price observation", () => {
-    const result = buildSecurityAnalytics(BOND, { observationDate: settlement, cleanPrice: 95, sourceYieldPct: null }, settlement);
+    const result = buildSecurityAnalytics(BOND, { observationDate: settlement, cleanPrice: 95, sourceYieldPct: null, observationKind: "SECONDARY_MARKET" }, settlement);
     expect(result.ytmSource).toBe("SOLVED_FROM_PRICE");
     expect(result.ytmPct).not.toBeNull();
     expect(result.ytmPct!).toBeGreaterThan(20); // below par -> YTM above coupon
     expect(result.currentYieldPct).not.toBeNull();
     expect(result.macaulayDurationYears).not.toBeNull();
     expect(result.dv01).not.toBeNull();
+    expect(result.observationKind).toBe("SECONDARY_MARKET");
   });
 
   it("uses a source-quoted yield directly when no price is given, without computing current yield", () => {
-    const result = buildSecurityAnalytics(BOND, { observationDate: settlement, cleanPrice: null, sourceYieldPct: 23.5 }, settlement);
+    const result = buildSecurityAnalytics(BOND, { observationDate: settlement, cleanPrice: null, sourceYieldPct: 23.5, observationKind: "AUCTION_PRIMARY" }, settlement);
     expect(result.ytmSource).toBe("SOURCE_QUOTED");
     expect(result.ytmPct).toBe(23.5);
     expect(result.currentYieldPct).toBeNull();
     expect(result.dirtyPrice).toBeNull();
     expect(result.macaulayDurationYears).not.toBeNull(); // duration still computable from yield alone
+    expect(result.observationKind).toBe("AUCTION_PRIMARY");
   });
 
   it("is MATURED once past maturity, regardless of observation presence", () => {
-    const result = buildSecurityAnalytics(BOND, { observationDate: settlement, cleanPrice: 95, sourceYieldPct: null }, d("2028-06-15"));
+    const result = buildSecurityAnalytics(BOND, { observationDate: settlement, cleanPrice: 95, sourceYieldPct: null, observationKind: "SECONDARY_MARKET" }, d("2028-06-15"));
     expect(result.isMatured).toBe(true);
     expect(result.unavailableReason).toBe("MATURED");
     expect(result.ytmPct).toBeNull();

@@ -93,6 +93,7 @@ export default async function FixedIncomeSecurityPage({ params }: { params: Prom
             <h1 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">{security.instrumentName}</h1>
             <p className="mt-0.5 text-sm text-zinc-500 dark:text-zinc-400">
               {security.instrumentCode} · {security.issuerName} · {security.classification === "SOVEREIGN" ? "Government Bond" : "Corporate Bond"}
+              {security.isin && security.isin !== security.instrumentCode && <> · ISIN {security.isin}</>}
               {security.status !== "ACTIVE" && <span className="ml-2 rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">{security.status}</span>}
             </p>
           </div>
@@ -117,6 +118,7 @@ export default async function FixedIncomeSecurityPage({ params }: { params: Prom
               sub={security.couponFrequency ? COUPON_FREQUENCY_LABEL[security.couponFrequency] : security.couponType === "ZERO_COUPON" ? "No periodic coupon" : undefined}
             />
             <StatBlock label="Face Value" value={`GHS ${security.faceValue.toFixed(2)}`} sub="per 100 par-quoting convention" />
+            <StatBlock label="ISIN" value={security.isin ?? "—"} />
             <StatBlock label="Currency" value={security.currency} />
             <StatBlock label="Coupon Type" value={security.couponType.replace("_", " ")} />
             <StatBlock label="Status" value={security.status} />
@@ -126,7 +128,20 @@ export default async function FixedIncomeSecurityPage({ params }: { params: Prom
 
       {/* ------------------------------------------------------------ */}
       <section>
-        <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Latest Market Data &amp; Yield Analytics</h2>
+        <h2 className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+          Latest Market Data &amp; Yield Analytics
+          {security.analytics.observationKind && (
+            <span
+              className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium normal-case tracking-normal ${
+                security.analytics.observationKind === "AUCTION_PRIMARY"
+                  ? "bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400"
+                  : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"
+              }`}
+            >
+              {security.analytics.observationKind === "AUCTION_PRIMARY" ? "Primary Auction" : "Secondary Market"}
+            </span>
+          )}
+        </h2>
         {security.analytics.unavailableReason ? (
           <SectionCard>
             <p className="text-sm text-zinc-400 dark:text-zinc-500">{security.analytics.unavailableMessage}</p>
