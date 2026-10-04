@@ -3,7 +3,9 @@ import { notFound } from "next/navigation";
 import { getFixedIncomeWorkspace, getFixedIncomeObservationHistory, getFixedIncomeObservationRecords, type WorkspaceSecurity } from "@/lib/queries/fixed-income";
 import {
   BENCHMARK_DATE_WINDOW_DAYS,
+  buildDecisionSupport,
   buildSecurityInsights,
+  comparePeerYield,
   computeBreakEvenCleanPrice,
   computePriceSensitivity,
   COUPON_FREQUENCY_LABEL,
@@ -26,7 +28,9 @@ import { InvestmentCalculator } from "@/components/fixed-income/InvestmentCalcul
 import { FindAlternatives } from "@/components/fixed-income/FindAlternatives";
 import { PriceSensitivity } from "@/components/fixed-income/PriceSensitivity";
 import { FixedIncomeNav } from "@/components/fixed-income/FixedIncomeNav";
-import { Card, FreshnessBadge, HypotheticalBadge, LifecycleBadge, ObservationKindBadge, QualityBadge, SectionHeading, Stat } from "@/components/fixed-income/ui";
+import { DecisionPanel } from "@/components/fixed-income/DecisionPanel";
+import { HashDisclosure } from "@/components/fixed-income/HashDisclosure";
+import { Card, FreshnessBadge, HypotheticalBadge, LifecycleBadge, Methodology, ObservationKindBadge, QualityBadge, SectionHeading, SPREAD_METHOD_LONG, SPREAD_METHOD_SHORT, Stat } from "@/components/fixed-income/ui";
 
 export const dynamic = "force-dynamic";
 
@@ -39,6 +43,7 @@ export const dynamic = "force-dynamic";
 // ---------------------------------------------------------------------------
 
 const ANCHORS = [
+  ["analyst", "Analyst view"],
   ["market", "What the market did"],
   ["returns", "Return scenarios"],
   ["relative", "Relative value"],
@@ -100,6 +105,17 @@ export default async function FixedIncomeSecurityPage({ params }: { params: Prom
     scenarios: defaultScenarios.ok ? defaultScenarios.scenarios : [],
     breakEvenCleanPrice: breakEven.ok ? breakEven.breakEvenCleanPrice : null,
     sensitivityBpsPerPoint: sensitivityBps,
+  });
+
+  // Facts the analyst panel already states — dropped from the key-facts list so nothing is said twice.
+  const COVERED_BY_ANALYST_PANEL = new Set(["maturity", "observation-age", "withheld", "spread", "benchmark-gap", "no-spread", "no-benchmark", "no-observation", "no-trade"]);
+  const keyFacts = insights.filter((i) => !COVERED_BY_ANALYST_PANEL.has(i.id) && !i.id.startsWith("terms-"));
+
+  const peer = reliable && security.classification === "SOVEREIGN" && analytics.observationKind === "SECONDARY_MARKET" && analytics.ytmPct !== null ? comparePeerYield(security.instrumentCode, security.latestObservationDate!, analytics.ytmPct, workspace.sovereignPool) : null;
+  const support = buildDecisionSupport({
+    security,
+    peer,
+    issuerSiblingCount: workspace.securities.filter((s) => s.issuerName === security.issuerName && s.instrumentCode !== security.instrumentCode && s.lifecycle !== "MATURED").length,
   });
 
   // --- Alternatives reference: reliable observed YTM, else hypothetical par return
@@ -179,7 +195,15 @@ export default async function FixedIncomeSecurityPage({ params }: { params: Prom
         )}
       </div>
 
-      {/* ------------------------------------------------------------ 2. What is the market saying? */}
+      {/* ------------------------------------------------------------ 2. Analyst view */}
+      {!isMatured && (
+        <section id="analyst" className="scroll-mt-4">
+          <SectionHeading title="Analyst view" question="What is known, what stands out, what is not known, and what to investigate — built from stored facts only." />
+          <DecisionPanel support={support} isCorporate={isCorporate} freshness={security.observationFreshness} observationKind={analytics.observationKind} />
+        </section>
+      )}
+
+      {/* ------------------------------------------------------------ 3. What is the market saying? */}
       <section id="market" className="scroll-mt-4">
         <SectionHeading title="What the market last did" question="The latest real market observation — price, yield, date, and whether it can be relied on." />
         <div className="grid grid-cols-1 items-start gap-3 lg:grid-cols-5">
@@ -245,9 +269,10 @@ export default async function FixedIncomeSecurityPage({ params }: { params: Prom
             )}
           </Card>
           <Card className="lg:col-span-2">
-            <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Key facts</p>
+            <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Price &amp; return facts</p>
+            {keyFacts.length === 0 && <p className="text-sm text-zinc-500 dark:text-zinc-400">No price or return facts apply — see the analyst view above.</p>}
             <ul className="space-y-1.5">
-              {insights.map((i) => (
+              {keyFacts.map((i) => (
                 <li key={i.id} className="flex gap-2 text-sm">
                   <span aria-hidden className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${i.tone === "caution" ? "bg-amber-500" : "bg-zinc-300 dark:bg-zinc-600"}`} />
                   <span className={i.tone === "caution" ? "text-zinc-900 dark:text-zinc-100" : "text-zinc-600 dark:text-zinc-400"}>{i.text}</span>
@@ -328,10 +353,16 @@ export default async function FixedIncomeSecurityPage({ params }: { params: Prom
               ) : (
                 <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
                   <div>
-                    <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-emerald-700 dark:text-emerald-400">Observed spread · date-matched</p>
+                    <p className="mb-0.5 text-xs font-semibold uppercase tracking-wide text-emerald-700 dark:text-emerald-400">Observed spread · date-matched</p>
+                    <p className="mb-2 text-[11px] text-zinc-500 dark:text-zinc-400">{SPREAD_METHOD_SHORT}</p>
                     {benchmark && spreadBps !== null ? (
                       <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
-                        <Stat label="Spread vs GoG" emphasis value={formatBps(spreadBps)} sub={`${formatPct(analytics.ytmPct!)} − ${formatPct(benchmark.benchmark.yieldPct)}`} />
+                        <Stat
+                          label="Spread vs GoG"
+                          emphasis
+                          value={formatBps(spreadBps)}
+                          sub={`${formatPct(analytics.ytmPct!)} (${formatIsoDate(security.latestObservationDate!)}) − ${formatPct(benchmark.benchmark.yieldPct)} (${formatIsoDate(benchmark.benchmark.observationDate)})`}
+                        />
                         <Stat
                           label="Benchmark"
                           value={benchmarkLabel(benchmark, workspace.securities)}
@@ -346,6 +377,9 @@ export default async function FixedIncomeSecurityPage({ params }: { params: Prom
                             </span>
                           }
                         />
+                        <Methodology summary="How is this calculated?" className="col-span-full">
+                          <p>{SPREAD_METHOD_LONG}</p>
+                        </Methodology>
                       </div>
                     ) : (
                       <p className="text-sm text-zinc-500 dark:text-zinc-400">
@@ -380,9 +414,11 @@ export default async function FixedIncomeSecurityPage({ params }: { params: Prom
                       <p className="text-sm text-zinc-500 dark:text-zinc-400">Suitable benchmark unavailable.</p>
                     )}
                     {currentBenchmark && (
-                      <p className="mt-2 text-xs text-zinc-400 dark:text-zinc-500">
-                        A reference yield is today&apos;s nearest-tenor government figure ({currentBenchmark.tenorGapDays} days of tenor gap) shown to set hypothetical returns against. It is only a spread when this security itself has a reliable, date-matched observation (left).
-                      </p>
+                      <Methodology summary="Why is this not a spread?" className="mt-2">
+                        <p>
+                          A reference yield is today&apos;s nearest-tenor government figure ({currentBenchmark.tenorGapDays} days of tenor gap) shown to set hypothetical returns against. It is only a spread when this security itself has a reliable, date-matched observation (left).
+                        </p>
+                      </Methodology>
                     )}
                   </div>
                 </div>
@@ -423,7 +459,7 @@ export default async function FixedIncomeSecurityPage({ params }: { params: Prom
       {/* ------------------------------------------------------------ 8. Technical & provenance */}
       <section id="evidence" className="scroll-mt-4">
         <SectionHeading title="Data quality & provenance" question="Identifiers, terms checks, and exactly where each observation came from." />
-        <details className="rounded border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
+        <HashDisclosure id="evidence" className="rounded border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
           <summary className="cursor-pointer px-4 py-2.5 text-sm font-medium text-zinc-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500 dark:text-zinc-300">
             Show identifiers, quality checks and observation records ({records.length})
           </summary>
@@ -500,7 +536,7 @@ export default async function FixedIncomeSecurityPage({ params }: { params: Prom
               </div>
             )}
           </div>
-        </details>
+        </HashDisclosure>
       </section>
     </div>
   );

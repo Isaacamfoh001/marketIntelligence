@@ -17,6 +17,7 @@
 // ---------------------------------------------------------------------------
 
 import { securityShortLabel } from "./format";
+import { daysBetween } from "./cashflow";
 import { observationAgeDays } from "./lifecycle";
 import type { BenchmarkSelection } from "./benchmark";
 import type { ComparableRow } from "./comparables";
@@ -55,6 +56,8 @@ export interface IntelligenceSecurity {
     cleanPrice: number | null;
     observationKind: "AUCTION_PRIMARY" | "SECONDARY_MARKET" | null;
     ytmSource: "SOLVED_FROM_PRICE" | "SOURCE_QUOTED" | null;
+    /** The source's own published yield, independent of the solved one (null when the source publishes none, as GFIM's CORPORATE sheet). */
+    sourceQuotedYieldPct: number | null;
     quality: { status: "VALID" | "REVIEW" | "EXCLUDED"; issues: ObservationIssue[] } | null;
   };
   carriedPrice: { cleanPrice: number | null; asOf: string } | null;
@@ -164,8 +167,16 @@ export interface LandscapePoint {
   issuerName: string;
   /** Null for Treasury bills (no security page). */
   href: string | null;
-  /** Remaining tenor as of the valuation date (a T-bill: its full auction tenor). */
-  tenorDays: number;
+  /**
+   * Remaining tenor AT THE OBSERVATION: maturity date − observation date. This
+   * is the x-coordinate. An observed yield describes the security as it was
+   * when it traded, so measuring its tenor from today would plot a months-old
+   * yield against a shorter life it did not have when it was observed. (A
+   * T-bill's auction date → maturity is its full auction tenor.)
+   */
+  tenorAtObservationDays: number;
+  /** Remaining tenor as of the valuation date — NOT plotted; used only to line the point up with the comparable universe, which is measured today. */
+  tenorTodayDays: number;
   yieldPct: number;
   couponRatePct: number | null;
   maturityDate: string;
@@ -197,6 +208,11 @@ export interface YieldLandscape {
   withheld: WithheldObservation[];
   /** Outstanding securities with no market observation to plot (carried price only, or never quoted) — counted, not drawn. */
   notPlotted: { carriedOnly: number; neverQuoted: number };
+}
+
+/** Whole days from an observation date to the security's maturity — the remaining tenor the market was pricing at that observation (never below 0). */
+export function remainingTenorAtObservationDays(maturityDateIso: string, observationDateIso: string): number {
+  return Math.max(0, daysBetween(new Date(`${observationDateIso}T00:00:00.000Z`), new Date(`${maturityDateIso}T00:00:00.000Z`)));
 }
 
 function materialIssues(issues: ObservationIssue[]): ObservationIssue[] {
@@ -237,7 +253,8 @@ export function buildYieldLandscape(securities: IntelligenceSecurity[], bills: C
         label,
         issuerName: s.issuerName,
         href: `/fixed-income/${encodeURIComponent(s.instrumentCode)}`,
-        tenorDays: s.analytics.tenorDays,
+        tenorAtObservationDays: remainingTenorAtObservationDays(s.maturityDate, s.latestObservationDate!),
+        tenorTodayDays: s.analytics.tenorDays,
         yieldPct: s.analytics.ytmPct,
         couponRatePct: s.couponRatePct,
         maturityDate: s.maturityDate,
@@ -261,7 +278,8 @@ export function buildYieldLandscape(securities: IntelligenceSecurity[], bills: C
       label: b.instrumentName.replace(" Treasury Bill", " T-bill"),
       issuerName: b.issuerName,
       href: null,
-      tenorDays: b.tenorDays,
+      tenorAtObservationDays: remainingTenorAtObservationDays(b.maturityDate, b.observationDate),
+      tenorTodayDays: b.tenorDays,
       yieldPct: b.ytmPct,
       couponRatePct: null,
       maturityDate: b.maturityDate,

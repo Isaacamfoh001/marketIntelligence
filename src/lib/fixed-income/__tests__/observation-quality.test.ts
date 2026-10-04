@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { assessObservationQuality, parseSourceDescription, YIELD_MISMATCH_THRESHOLD_BPS, type QualityInput } from "../observation-quality";
+import { assessObservationQuality, findDuplicatedVolumes, parseSourceDescription, YIELD_MISMATCH_THRESHOLD_BPS, type QualityInput } from "../observation-quality";
 import { buildSecurityAnalytics } from "../security-analytics";
 import type { BondTerms } from "../types";
 
@@ -127,5 +127,77 @@ describe("buildSecurityAnalytics — observation-date solving (M7.3.1)", () => {
     expect(a.ytmPct).toBeNull();
     expect(a.quality?.status).toBe("EXCLUDED");
     expect(a.cleanPrice).toBe(91.6202); // still visible for provenance
+  });
+});
+
+describe("DUPLICATED_VOLUME — GFIM 28 Aug 2026 Cocoa Board copy error (M7.4 forensic finding)", () => {
+  // The source CORPORATE sheet printed 36,065 GHS / 1 trade on all three Cocoa bonds, with closing prices 99.161 / 51.2586 / 29.9665.
+  const row = (key: string, label: string, date: string, volume: number, trades: number, issuer = "GHANA COCOA BOARD") => ({
+    securityKey: key,
+    label,
+    issuerName: issuer,
+    observationDate: date,
+    volumeTradedGhs: volume,
+    numberOfTrades: trades,
+    tradeStatus: "TRADED" as const,
+  });
+  const cocoa = [row("c26", "Cocoa Aug-26", "2026-08-28", 36065, 1), row("c27", "Cocoa Aug-27", "2026-08-28", 36065, 1), row("c28", "Cocoa Aug-28", "2026-08-28", 36065, 1)];
+
+  it("flags the same non-round volume and trade count on several securities of one issuer on one day", () => {
+    const dups = findDuplicatedVolumes(cocoa);
+    expect(dups.get("c28|2026-08-28")).toEqual(["Cocoa Aug-26", "Cocoa Aug-27"]);
+    expect(dups.size).toBe(3);
+  });
+
+  it("does not flag round-lot coincidences, different issuers, different days, or a single security", () => {
+    expect(findDuplicatedVolumes([row("a", "A", "2026-02-12", 250000, 1), row("b", "B", "2026-02-12", 250000, 1)]).size).toBe(0);
+    expect(findDuplicatedVolumes([row("a", "A", "2026-08-28", 36065, 1), row("b", "B", "2026-08-28", 36065, 1, "OTHER ISSUER")]).size).toBe(0);
+    expect(findDuplicatedVolumes([row("a", "A", "2026-08-28", 36065, 1), row("b", "B", "2026-08-29", 36065, 1)]).size).toBe(0);
+    expect(findDuplicatedVolumes([row("a", "A", "2026-08-28", 36065, 1)]).size).toBe(0);
+  });
+
+  it("ignores carried (NOT_TRADED) rows — they repeat old prints by design", () => {
+    expect(findDuplicatedVolumes(cocoa.map((r) => ({ ...r, tradeStatus: "NOT_TRADED" as const }))).size).toBe(0);
+  });
+
+  const COCOA_28: BondTerms = { issueDate: d("2023-08-28"), maturityDate: d("2028-08-28"), couponType: "FIXED", couponRatePct: 13, couponFrequency: "SEMI_ANNUAL", faceValue: 100 };
+  it("withholds the duplicated observation from analytics as REVIEW — it is not silently dropped or edited", () => {
+    const q = assessObservationQuality({
+      terms: COCOA_28,
+      observationDate: d("2026-08-28"),
+      tradeStatus: "TRADED",
+      cleanPrice: 29.9665,
+      sourceYieldPct: null,
+      sourceMaturityDate: d("2028-08-28"),
+      sourceSecurityDescription: "CMB-BD-28/08/28-A6301-1675-13.00",
+      duplicatedVolumeWith: ["Cocoa Aug-26", "Cocoa Aug-27"],
+    });
+    expect(q.status).toBe("REVIEW");
+    expect(q.analyticsEligible).toBe(false);
+    expect(q.issues.map((i) => i.code)).toEqual(["DUPLICATED_VOLUME"]);
+    expect(q.issues[0].detail).toContain("Cocoa Aug-26");
+  });
+
+  it("a genuine, consistent Cocoa trade with no duplication stays VALID (a low-yield corporate print is not suspicious by itself)", () => {
+    const q = assessObservationQuality({
+      terms: COCOA_28,
+      observationDate: d("2026-10-01"),
+      tradeStatus: "TRADED",
+      cleanPrice: 102.9572,
+      sourceYieldPct: null,
+      sourceMaturityDate: d("2028-08-28"),
+      sourceSecurityDescription: "CMB-BD-28/08/28-A6301-1675-13.00",
+      duplicatedVolumeWith: [],
+    });
+    expect(q.status).toBe("VALID");
+  });
+});
+
+describe("Extreme-but-consistent government prints stay VALID (M7.4 forensic finding)", () => {
+  // GoG 19.75% Mar-2032 traded 11 Aug 2026 at 37.1857; GFIM's own closing yield 58.59%. Price and source yield agree, terms agree.
+  const GOG_MAR32: BondTerms = { issueDate: d("2017-04-03"), maturityDate: d("2032-03-15"), couponType: "FIXED", couponRatePct: 19.75, couponFrequency: "SEMI_ANNUAL", faceValue: 100 };
+  it("a 58.7% yield from a self-consistent trade is kept — strange is not invalid", () => {
+    const q = assessObservationQuality({ terms: GOG_MAR32, observationDate: d("2026-08-11"), tradeStatus: "TRADED", cleanPrice: 37.1857, sourceYieldPct: 58.59, sourceMaturityDate: d("2032-03-15"), sourceSecurityDescription: "GOG-BD-15/03/32-A4430-1531-19.75" });
+    expect(q.status).toBe("VALID");
   });
 });

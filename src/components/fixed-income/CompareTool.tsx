@@ -44,7 +44,7 @@ import {
   type YieldLandscape as YieldLandscapeData,
 } from "@/lib/fixed-income";
 import type { WorkspaceSecurity } from "@/lib/queries/fixed-income";
-import { Segmented } from "./OpportunitiesTable";
+import { Segmented } from "./ReliableYieldsTable";
 import { ReturnVsPriceChart } from "./ReturnVsPriceChart";
 import { YieldLandscape, type HypotheticalMarker } from "./YieldLandscape";
 import { BenchmarkCell, HypotheticalBadge, LifecycleBadge, MarketStatusCell, Missing, NUM, ObservationCell, SecurityIdentity, TD, TH, TermsWarning, securityToMarketStatus, signedTone } from "./ui";

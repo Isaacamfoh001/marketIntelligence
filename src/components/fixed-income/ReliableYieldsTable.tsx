@@ -1,9 +1,9 @@
 "use client";
 
 // ---------------------------------------------------------------------------
-// Reliable observed yields (M7.3 §6 "Current Opportunities", hardened in
-// M7.3.1, renamed in M7.3.2: a high yield is not an "opportunity" — it can
-// reflect credit risk, illiquidity or an old quote) — outstanding
+// Reliable observed yields (M7.3 §6, hardened in M7.3.1; renamed in M7.3.2
+// and the file renamed in M7.4: a high yield says nothing about merit — it
+// can reflect credit risk, illiquidity or an old quote) — outstanding
 // securities whose latest market observation is a real, analytics-eligible
 // trade/quote (never a carried price or a print withheld for data-quality
 // review), so they are actually analyzable today. Securities with known terms but no quote are
@@ -20,7 +20,7 @@ import { BenchmarkCell, LifecycleBadge, MarketStatusCell, Missing, NUM, Security
 type SortKey = "maturity" | "ytm" | "spread" | "price";
 type TypeFilter = "ALL" | "CORPORATE" | "SOVEREIGN";
 
-export function OpportunitiesTable({ securities }: { securities: WorkspaceSecurity[] }) {
+export function ReliableYieldsTable({ securities }: { securities: WorkspaceSecurity[] }) {
   const [type, setType] = useState<TypeFilter>("ALL");
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: "maturity", dir: 1 });
   const [recentOnly, setRecentOnly] = useState(true);

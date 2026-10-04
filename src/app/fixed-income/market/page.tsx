@@ -2,7 +2,7 @@ import Link from "next/link";
 import { getFixedIncomeWorkspace } from "@/lib/queries/fixed-income";
 import { BENCHMARK_DATE_WINDOW_DAYS, CURVE_MAX_AGE_DAYS, formatIsoDate, toValuationDate } from "@/lib/fixed-income";
 import { YieldCurveChart } from "@/components/YieldCurveChart";
-import { OpportunitiesTable } from "@/components/fixed-income/OpportunitiesTable";
+import { ReliableYieldsTable } from "@/components/fixed-income/ReliableYieldsTable";
 import { SecurityUniverse } from "@/components/fixed-income/SecurityUniverse";
 import { FixedIncomeNav } from "@/components/fixed-income/FixedIncomeNav";
 import { Card, SectionHeading } from "@/components/fixed-income/ui";
@@ -40,7 +40,7 @@ export default async function FixedIncomeMarketPage() {
 
       <section id="observed-yields">
         <SectionHeading title="Reliable Observed Yields" question="Outstanding securities whose latest market yield is a real, quality-checked observation. A higher yield is not a better opportunity — it can reflect credit risk, illiquidity or an old quote." />
-        <OpportunitiesTable securities={reliable} />
+        <ReliableYieldsTable securities={reliable} />
         <p className="mt-2 text-[11px] text-zinc-400 dark:text-zinc-500">
           Observed YTM is solved from the traded price at its trade date, gross of tax and charges. An observed spread compares a corporate trade with a Government of Ghana observation within{" "}
           {BENCHMARK_DATE_WINDOW_DAYS} days of the same trade. Securities without a reliable quote are in the universe above — open one for hypothetical purchase-price scenarios.

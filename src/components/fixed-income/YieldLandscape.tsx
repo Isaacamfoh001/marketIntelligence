@@ -17,8 +17,11 @@
 //     never an observation, labelled as such in marker, tooltip and legend
 //
 // Clicking a point opens its intelligence card with a drill-down to the
-// security. Axis: square-root scaled maturity so the short end (where most
-// Ghana instruments sit) stays legible without hiding long-dated points.
+// security. X axis: REMAINING TENOR AT OBSERVATION (maturity date − the date
+// the yield was observed), square-root scaled so the short end (where most
+// Ghana instruments sit) stays legible. A hypothetical return (Compare) is
+// the one exception — it is "if bought today", so its tenor is measured from
+// today and the tooltip says so.
 // ---------------------------------------------------------------------------
 
 import { useMemo, useState } from "react";
@@ -38,7 +41,7 @@ import {
   type LandscapePoint,
   type WithheldObservation,
 } from "@/lib/fixed-income";
-import { BenchmarkCell, FreshnessBadge, ObservationKindBadge } from "./ui";
+import { BenchmarkCell, FreshnessBadge, Methodology, ObservationKindBadge } from "./ui";
 
 export const GROUP_COLOR: Record<LandscapeGroup, string> = {
   TBILL: "#0ea5e9",
@@ -103,13 +106,17 @@ function PointTooltip({ d }: { d: Datum }) {
         <div className="tabular-nums text-zinc-900 dark:text-zinc-100">
           {formatPct(d.hypo.returnPct)} <span className="text-zinc-500 dark:text-zinc-400">annualized return if bought at {d.hypo.price}</span>
         </div>
-        <div className="text-zinc-500 dark:text-zinc-400">{formatTimeRemaining(d.hypo.tenorDays)} remaining</div>
+        <div className="text-zinc-500 dark:text-zinc-400">{formatTimeRemaining(d.hypo.tenorDays)} remaining from today</div>
       </div>
     );
   }
   const p = d.point!;
+  const isBill = p.group === "TBILL";
   return (
-    <div className="max-w-[17rem] rounded border border-zinc-200 bg-white px-2.5 py-1.5 text-xs shadow-sm dark:border-zinc-700 dark:bg-zinc-900">
+    <div className="max-w-[18rem] rounded border border-zinc-200 bg-white px-2.5 py-1.5 text-xs shadow-sm dark:border-zinc-700 dark:bg-zinc-900">
+      <div className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: GROUP_COLOR[p.group] }}>
+        {isBill ? "Government · Treasury bill" : p.group === "GOVERNMENT" ? "Government bond" : "Corporate bond"}
+      </div>
       <div className="font-medium text-zinc-900 dark:text-zinc-100">{p.label}</div>
       <div className="text-zinc-500 dark:text-zinc-400">
         {p.issuerName}
@@ -120,9 +127,10 @@ function PointTooltip({ d }: { d: Datum }) {
         {p.cleanPrice !== null && <span className="text-zinc-500 dark:text-zinc-400"> · price {p.cleanPrice.toFixed(2)}</span>}
       </div>
       <div className="text-zinc-500 dark:text-zinc-400">
-        {p.observationKind === "AUCTION_PRIMARY" ? "Primary auction" : "Secondary trade"} {formatIsoDate(p.observationDate)}
+        {p.observationKind === "AUCTION_PRIMARY" ? "Auction" : "Trade"} date {formatIsoDate(p.observationDate)}
         {p.ageDays !== null ? ` · ${p.ageDays}d ago` : ""} · {p.freshness === "CURRENT" ? "recent" : <span className="font-medium text-amber-600 dark:text-amber-400">stale</span>}
       </div>
+      <div className="text-zinc-500 dark:text-zinc-400">Remaining tenor at observation: {formatTimeRemaining(p.tenorAtObservationDays)}</div>
       {p.termsConflict && <div className="text-orange-600 dark:text-orange-400">⚠ Terms conflict: {p.termsConflict}</div>}
       <div className="mt-0.5 text-[10px] text-zinc-400 dark:text-zinc-500">Click for details</div>
     </div>
@@ -163,14 +171,14 @@ export function YieldLandscape({
     () =>
       (["TBILL", "GOVERNMENT", "CORPORATE"] as LandscapeGroup[]).map((g) => ({
         group: g,
-        data: shown.filter((p) => p.group === g).map<Datum>((p) => ({ x: p.tenorDays / DAYS_PER_YEAR, y: p.yieldPct, point: p })),
+        data: shown.filter((p) => p.group === g).map<Datum>((p) => ({ x: p.tenorAtObservationDays / DAYS_PER_YEAR, y: p.yieldPct, point: p })),
       })),
     [shown],
   );
   const hypoData = useMemo(() => hypotheticals.map<Datum>((h) => ({ x: h.tenorDays / DAYS_PER_YEAR, y: h.returnPct, hypo: h })), [hypotheticals]);
 
   const allY = [...shown.map((p) => p.yieldPct), ...hypotheticals.map((h) => h.returnPct)];
-  const maxX = Math.max(1, ...shown.map((p) => p.tenorDays / DAYS_PER_YEAR), ...hypotheticals.map((h) => h.tenorDays / DAYS_PER_YEAR));
+  const maxX = Math.max(1, ...shown.map((p) => p.tenorAtObservationDays / DAYS_PER_YEAR), ...hypotheticals.map((h) => h.tenorDays / DAYS_PER_YEAR));
   const yMax = Math.max(10, Math.ceil((Math.max(0, ...allY) + 2) / 5) * 5);
   const minY = Math.min(0, ...allY);
   const yMin = minY < 0 ? Math.floor(minY / 5) * 5 : 0;
@@ -236,7 +244,7 @@ export function YieldLandscape({
                   axisLine={{ stroke: "#71717a33" }}
                   tickLine={false}
                   allowDataOverflow
-                  label={{ value: "Time to maturity (compressed scale)", position: "insideBottom", offset: -12, fontSize: 10, fill: "#71717a" }}
+                  label={{ value: "Remaining tenor at observation (compressed scale)", position: "insideBottom", offset: -12, fontSize: 10, fill: "#71717a" }}
                 />
                 <YAxis
                   type="number"
@@ -312,9 +320,12 @@ export function YieldLandscape({
             </span>
           )}
         </div>
-        <p className="mt-1 text-[11px] text-zinc-400 dark:text-zinc-500">
-          Each point is one security at its own latest observation date — not a synchronised curve, and nothing is interpolated. Maturity is measured from today; the yield was observed on the date shown.
-        </p>
+        <Methodology summary="How to read this chart" className="mt-1.5">
+          <p>
+            Each point is one security at its own latest observation — not a synchronised curve, and nothing is interpolated. Horizontal position is the tenor the security had on its observation date, not today; vertical position is the yield observed that day.
+          </p>
+          <p>Securities at a similar height yielded similarly on their own dates. Similar yield is not similar credit or liquidity risk.</p>
+        </Methodology>
 
         {(withheld.length > 0 || notPlotted.carriedOnly > 0 || notPlotted.neverQuoted > 0) && (
           <details className="mt-2 rounded border border-zinc-200 text-xs dark:border-zinc-800">
@@ -428,8 +439,8 @@ function SelectedCard({
         <div>
           <dt className="text-zinc-400 dark:text-zinc-500">{p.group === "TBILL" ? "Tenor" : "Maturity"}</dt>
           <dd className="text-zinc-800 dark:text-zinc-200">
-            {p.group === "TBILL" ? formatTimeRemaining(p.tenorDays) : formatIsoDate(p.maturityDate)}
-            {p.group !== "TBILL" && <span className="text-zinc-400 dark:text-zinc-500"> · {formatTimeRemaining(p.tenorDays)}</span>}
+            {p.group === "TBILL" ? formatTimeRemaining(p.tenorAtObservationDays) : formatIsoDate(p.maturityDate)}
+            {p.group !== "TBILL" && <span className="text-zinc-400 dark:text-zinc-500"> · {formatTimeRemaining(p.tenorAtObservationDays)} at observation</span>}
           </dd>
         </div>
         <div>
@@ -449,7 +460,7 @@ function SelectedCard({
 
       {p.group === "CORPORATE" && (
         <div className="mt-3 border-t border-zinc-100 pt-3 dark:border-zinc-800">
-          <BenchmarkCell ctx={p.benchmark} compact={false} align="left" />
+          <BenchmarkCell ctx={p.benchmark} compact={false} align="left" observed={{ yieldPct: p.yieldPct, date: p.observationDate }} />
         </div>
       )}
 
@@ -458,7 +469,7 @@ function SelectedCard({
           <div className="text-[11px] font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Potential comparables</div>
           <ul className="mt-1 space-y-1">
             {similar.map((r) => {
-              const tier = comparability(r.tenorDays, [p.tenorDays]);
+              const tier = comparability(r.tenorDays, [p.tenorTodayDays]);
               const clickable = plottedIds.has(r.instrumentCode);
               const diff = Math.round((r.ytmPct! - p.yieldPct) * 100);
               return (

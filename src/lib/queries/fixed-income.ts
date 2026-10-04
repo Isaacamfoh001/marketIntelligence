@@ -28,6 +28,8 @@ import { TREASURY_INSTRUMENTS, getTreasurySnapshot } from "./market-data";
 import {
   assessObservationQuality,
   benchmarkLabeller,
+  findDuplicatedVolumes,
+  securityShortLabel,
   buildSecurityAnalytics,
   buildSovereignYieldCurve,
   classifyInstrument,
@@ -63,6 +65,28 @@ export interface CarriedPrice {
   sourceYieldPct: number | null;
   /** The latest report date on which the source re-printed this carried price. */
   asOf: string;
+}
+
+/** A real (TRADED / reported) market observation that passed every data-quality check, with its yield solved at its own date. */
+export interface ReliableTrade {
+  date: string;
+  cleanPrice: number | null;
+  ytmPct: number;
+}
+
+/**
+ * Trading history facts (M7.4) — only what the stored observations support.
+ * `tradeDays` counts dates with a real trade (carried prices excluded), in
+ * the history we hold; it is NOT a lifetime count.
+ */
+export interface TradeHistoryFacts {
+  tradeDays: number;
+  reliableTradeDays: number;
+  firstTradeDate: string | null;
+  /** The newest reliable trade (may be older than the market observation when that one is withheld). */
+  latestReliableTrade: ReliableTrade | null;
+  /** The newest reliable trade strictly BEFORE `latestReliableTrade`. */
+  previousReliableTrade: ReliableTrade | null;
 }
 
 export interface FixedIncomeSecurityRow {
@@ -112,6 +136,7 @@ export interface FixedIncomeSecurityRow {
   termsIssues: ObservationIssue[];
   /** Contractual terms in the shape the analytics engine consumes (passed to client-side scenario/calculator components). */
   terms: BondTerms;
+  tradeHistory: TradeHistoryFacts;
 }
 
 interface SecurityWithCompany {
@@ -143,6 +168,8 @@ interface ObservationRowShape {
   numberOfTrades: number | null;
   sourceSecurityDescription: string | null;
   sourceMaturityDate: Date | null;
+  /** Other securities of the same issuer printed with the identical report volume on this date (source copy error — see findDuplicatedVolumes). */
+  duplicatedVolumeWith: string[];
 }
 
 const num = (v: unknown): number | null => (v !== null && v !== undefined ? Number(v) : null);
@@ -160,6 +187,36 @@ function toBondTerms(security: { issueDate: Date; maturityDate: Date; couponType
 }
 
 const TERMS_ISSUE_CODES = new Set(["MATURITY_CONFLICT", "COUPON_CONFLICT", "MATURITY_DATE_ADJUSTMENT"]);
+
+/** Reliable-trade facts from a security's observations (newest first), each yield solved at its own trade date exactly as the curve pool does. */
+function buildTradeHistory(terms: BondTerms, observationsDesc: ObservationRowShape[], settlementDate: Date): TradeHistoryFacts {
+  const trades = observationsDesc.filter((o) => o.tradeStatus !== "NOT_TRADED" && o.observationDate.getTime() <= settlementDate.getTime());
+  const reliable: ReliableTrade[] = [];
+  for (const o of trades) {
+    const quality = assessObservationQuality({
+      terms,
+      observationDate: o.observationDate,
+      tradeStatus: o.tradeStatus,
+      cleanPrice: num(o.cleanPrice),
+      sourceYieldPct: num(o.sourceYieldPct),
+      sourceMaturityDate: o.sourceMaturityDate,
+      sourceSecurityDescription: o.sourceSecurityDescription,
+      duplicatedVolumeWith: o.duplicatedVolumeWith,
+    });
+    if (!quality.analyticsEligible) continue;
+    const price = num(o.cleanPrice);
+    const solved = price !== null ? solveObservedYtm(terms, o.observationDate, price) : null;
+    const ytmPct = solved ? (solved.ok ? solved.ytmPct : null) : num(o.sourceYieldPct);
+    if (ytmPct !== null) reliable.push({ date: isoDay(o.observationDate), cleanPrice: price, ytmPct });
+  }
+  return {
+    tradeDays: trades.length,
+    reliableTradeDays: reliable.length,
+    firstTradeDate: trades.length > 0 ? isoDay(trades[trades.length - 1].observationDate) : null,
+    latestReliableTrade: reliable[0] ?? null,
+    previousReliableTrade: reliable[1] ?? null,
+  };
+}
 
 /**
  * The ONE place a FixedIncomeSecurity + its observations (newest first)
@@ -182,6 +239,7 @@ function toSecurityRow(sec: SecurityWithCompany, observationsDesc: ObservationRo
           tradeStatus: market.tradeStatus,
           sourceMaturityDate: market.sourceMaturityDate,
           sourceSecurityDescription: market.sourceSecurityDescription,
+          duplicatedVolumeWith: market.duplicatedVolumeWith,
         }
       : null,
     settlementDate,
@@ -239,12 +297,40 @@ function toSecurityRow(sec: SecurityWithCompany, observationsDesc: ObservationRo
     noTradeRecordedSince,
     termsIssues,
     terms,
+    tradeHistory: buildTradeHistory(terms, observationsDesc, settlementDate),
   };
 }
 
 const SECURITY_INCLUDE = { company: { select: { ticker: true } } } as const;
 
+/** `securityKey|date` → the other securities showing the identical report volume (a GFIM copy error). Loaded across ALL securities because the duplicates are on sibling instruments. */
+async function loadDuplicatedVolumeIndex(): Promise<Map<string, string[]>> {
+  const rows = await getPrisma().fixedIncomeObservation.findMany({
+    where: { tradeStatus: "TRADED", volumeTradedGhs: { not: null }, numberOfTrades: { not: null } },
+    select: {
+      securityId: true,
+      observationDate: true,
+      volumeTradedGhs: true,
+      numberOfTrades: true,
+      tradeStatus: true,
+      security: { select: { issuerName: true, couponRatePct: true, maturityDate: true } },
+    },
+  });
+  return findDuplicatedVolumes(
+    rows.map((r) => ({
+      securityKey: r.securityId,
+      label: securityShortLabel(r.security.issuerName, num(r.security.couponRatePct), isoDay(r.security.maturityDate)),
+      issuerName: r.security.issuerName,
+      observationDate: isoDay(r.observationDate),
+      volumeTradedGhs: num(r.volumeTradedGhs),
+      numberOfTrades: r.numberOfTrades,
+      tradeStatus: r.tradeStatus,
+    })),
+  );
+}
+
 async function observationsBySecurity(securityIds: string[]): Promise<Map<string, ObservationRowShape[]>> {
+  const duplicates = await loadDuplicatedVolumeIndex();
   const rows = await getPrisma().fixedIncomeObservation.findMany({
     where: { securityId: { in: securityIds } },
     orderBy: { observationDate: "desc" },
@@ -264,7 +350,7 @@ async function observationsBySecurity(securityIds: string[]): Promise<Map<string
   const map = new Map<string, ObservationRowShape[]>();
   for (const r of rows) {
     const list = map.get(r.securityId) ?? [];
-    list.push(r);
+    list.push({ ...r, duplicatedVolumeWith: duplicates.get(`${r.securityId}|${isoDay(r.observationDate)}`) ?? [] });
     map.set(r.securityId, list);
   }
   return map;
@@ -409,6 +495,7 @@ async function buildSovereignCurve(settlementDate: Date, universe: FixedIncomeSe
         sourceYieldPct: num(o.sourceYieldPct),
         sourceMaturityDate: o.sourceMaturityDate,
         sourceSecurityDescription: o.sourceSecurityDescription,
+        duplicatedVolumeWith: o.duplicatedVolumeWith,
       });
       if (!quality.analyticsEligible) continue;
       const price = num(o.cleanPrice);
@@ -503,9 +590,20 @@ export interface WorkspaceSecurity extends BenchmarkedSecurity {
   benchmarkContext: BenchmarkContext;
 }
 
+/** The latest two BoG auction results of one bill tenor (rates as % p.a., e.g. 11.59 = 11.59%). */
+export interface BillAuctionPair {
+  code: string;
+  label: string;
+  latest: { date: string; ratePct: number } | null;
+  previous: { date: string; ratePct: number } | null;
+}
+
 export interface FixedIncomeWorkspace {
   valuationDateIso: string;
   securities: WorkspaceSecurity[];
+  /** Every eligible sovereign observation in history (bond trades + T-bill auctions) — the pool behind benchmarks and the peer-dispersion check. */
+  sovereignPool: YieldCurvePoint[];
+  billAuctions: BillAuctionPair[];
   curve: YieldCurvePoint[];
   excludedCurvePoints: ExcludedCurvePoint[];
   comparables: ComparableRow[];
@@ -581,6 +679,21 @@ async function treasuryBillComparables(settlementDate: Date): Promise<Comparable
   return billRows;
 }
 
+async function treasuryBillAuctions(valuationIso: string): Promise<BillAuctionPair[]> {
+  const snapshot = await getTreasurySnapshot();
+  return TREASURY_INSTRUMENTS.map(({ code, label }) => {
+    const rows = (snapshot.find((t) => t.code === code)?.history ?? []).filter((r) => r.date <= valuationIso);
+    const latest = rows[rows.length - 1];
+    const previous = rows[rows.length - 2];
+    return {
+      code,
+      label,
+      latest: latest ? { date: latest.date, ratePct: latest.value } : null,
+      previous: previous ? { date: previous.date, ratePct: previous.value } : null,
+    };
+  });
+}
+
 export async function getFixedIncomeWorkspace(valuationDate: Date = toValuationDate(new Date())): Promise<FixedIncomeWorkspace> {
   const valuationIso = isoDay(valuationDate);
   const universe = await getFixedIncomeUniverse(valuationDate);
@@ -591,7 +704,15 @@ export async function getFixedIncomeWorkspace(valuationDate: Date = toValuationD
     return { ...attached, benchmarkContext: describeBenchmarkContext(attached, labelOf) };
   });
   const comparables = [...securities.map(toComparableRow), ...(await treasuryBillComparables(valuationDate))];
-  return { valuationDateIso: valuationIso, securities, curve: curve.points, excludedCurvePoints: curve.excluded, comparables };
+  return {
+    valuationDateIso: valuationIso,
+    securities,
+    sovereignPool: curve.pool,
+    billAuctions: await treasuryBillAuctions(valuationIso),
+    curve: curve.points,
+    excludedCurvePoints: curve.excluded,
+    comparables,
+  };
 }
 
 /** Comparable rows (bonds + Treasury bills), computed exactly as the workspace does. */

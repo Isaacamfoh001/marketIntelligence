@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildYieldLandscape, describeBenchmarkContext, describeMarketState, summarizeSegment, benchmarkLabeller, type IntelligenceSecurity } from "../landscape";
+import { buildYieldLandscape, describeBenchmarkContext, describeMarketState, remainingTenorAtObservationDays, summarizeSegment, benchmarkLabeller, type IntelligenceSecurity } from "../landscape";
 import type { ComparableRow } from "../comparables";
 import type { BenchmarkSelection } from "../benchmark";
 
@@ -29,7 +29,7 @@ function sec(o: Omit<Partial<IntelligenceSecurity>, "analytics"> & { analytics?:
     observationFreshness: "CURRENT",
     observationAgeDays: 3,
     analyticsEligible: true,
-    analytics: { tenorDays: 450, ytmPct: 21, cleanPrice: 99, observationKind: "SECONDARY_MARKET", ytmSource: "SOLVED_FROM_PRICE", quality: { status: "VALID", issues: [] }, ...analytics },
+    analytics: { tenorDays: 450, ytmPct: 21, cleanPrice: 99, observationKind: "SECONDARY_MARKET", ytmSource: "SOLVED_FROM_PRICE", sourceQuotedYieldPct: null, quality: { status: "VALID", issues: [] }, ...analytics },
     carriedPrice: null,
     noTradeRecordedSince: null,
     termsIssues: [],
@@ -139,5 +139,53 @@ describe("summarizeSegment", () => {
     ]);
     expect(s).toMatchObject({ active: 5, reliable: 2, recent: 1, stale: 1, needsReview: 1, carriedOnly: 1, neverQuoted: 1 });
     expect(s.latestTrade).toEqual({ date: "2026-10-01", freshness: "CURRENT" });
+  });
+});
+
+describe("Yield Landscape tenor semantics (M7.4 §A) — x = maturity − OBSERVATION date, never maturity − today", () => {
+  it("remainingTenorAtObservationDays measures from the observation date", () => {
+    // GoG 20.75% Mar-27 traded 2 Feb 2026: 399 days of life at that observation, 520 from the 4 Oct 2026 valuation date.
+    expect(remainingTenorAtObservationDays("2027-03-08", "2026-02-02")).toBe(399);
+    expect(remainingTenorAtObservationDays("2027-03-08", "2026-10-04")).toBe(155);
+    expect(remainingTenorAtObservationDays("2026-01-01", "2026-02-02")).toBe(0); // never negative
+  });
+
+  const old = sec({ instrumentCode: "MAR27", classification: "SOVEREIGN", issuerName: "Government of Ghana", maturityDate: "2027-03-08", latestObservationDate: "2026-02-02", observationFreshness: "STALE", observationAgeDays: 244, analytics: { tenorDays: 155, ytmPct: 30.18 } });
+  const fresh = sec({ instrumentCode: "MAR27B", classification: "SOVEREIGN", issuerName: "Government of Ghana", maturityDate: "2027-03-08", latestObservationDate: "2026-10-02", observationAgeDays: 2, analytics: { tenorDays: 155, ytmPct: 18 } });
+  const bill: ComparableRow = {
+    instrumentCode: "TBILL-364D",
+    instrumentName: "364-Day Treasury Bill",
+    issuerName: "Government of Ghana",
+    classification: "SOVEREIGN",
+    instrumentType: "TREASURY_BILL",
+    // maturity = auction date + tenor, exactly as the query layer builds it
+    maturityDate: "2027-08-23",
+    tenorDays: 364,
+    ytmPct: 11.59,
+    currentYieldPct: null,
+    modifiedDurationYears: null,
+    dv01: null,
+    spreadBps: null,
+    observationDate: "2026-08-24",
+    observationKind: "AUCTION_PRIMARY",
+    freshness: "STALE",
+    analyticsEligible: true,
+  };
+  const { points } = buildYieldLandscape([old, fresh], [bill], VALUATION);
+
+  it("two observations of the SAME bond sit at different x positions because they were observed at different tenors", () => {
+    const a = points.find((p) => p.id === "MAR27")!;
+    const b = points.find((p) => p.id === "MAR27B")!;
+    expect(a.tenorAtObservationDays).toBe(399);
+    expect(b.tenorAtObservationDays).toBe(157);
+    expect(a.tenorAtObservationDays).toBeGreaterThan(b.tenorAtObservationDays);
+  });
+
+  it("keeps today's tenor separately (for comparables only), never as the plotted position", () => {
+    expect(points.find((p) => p.id === "MAR27")!.tenorTodayDays).toBe(155);
+  });
+
+  it("a Treasury bill's tenor at its auction date is its full auction tenor", () => {
+    expect(points.find((p) => p.id === "TBILL-364D")!.tenorAtObservationDays).toBe(364);
   });
 });

@@ -136,4 +136,17 @@ describe("getFixedIncomeWorkspace (M7.3)", () => {
     expect(workspace.comparables.every((r) => ["CURRENT", "STALE", "MISSING"].includes(r.freshness))).toBe(true);
     expect(workspace.comparables.find((r) => r.instrumentCode === CORP_CODE)!.couponRatePct).toBe(24);
   });
+
+  it("exposes trade history, the sovereign pool and bill auction pairs for the analyst layers (M7.4)", async () => {
+    const workspace = await getFixedIncomeWorkspace(SETTLEMENT);
+    const corp = workspace.securities.find((s) => s.instrumentCode === CORP_CODE)!;
+    expect(corp.tradeHistory.tradeDays).toBe(1);
+    expect(corp.tradeHistory.reliableTradeDays).toBe(1);
+    expect(corp.tradeHistory.firstTradeDate).toBe("2026-06-01");
+    expect(corp.tradeHistory.latestReliableTrade).toMatchObject({ date: "2026-06-01", cleanPrice: 92.5 });
+    expect(corp.tradeHistory.previousReliableTrade).toBeNull(); // one trade: no previous value is invented
+    expect(workspace.sovereignPool.every((p) => p.observationDate <= workspace.valuationDateIso)).toBe(true);
+    expect(workspace.billAuctions.map((b) => b.code)).toEqual(["91_DAY_BILL", "182_DAY_BILL", "364_DAY_BILL"]);
+    for (const b of workspace.billAuctions) if (b.latest && b.previous) expect(b.latest.date > b.previous.date).toBe(true);
+  });
 });

@@ -33,6 +33,7 @@ export type ObservationIssueCode =
   | "MATURITY_CONFLICT"
   | "COUPON_CONFLICT"
   | "YIELD_MISMATCH"
+  | "DUPLICATED_VOLUME"
   | "CALCULATION_FAILED"
   | "MATURITY_DATE_ADJUSTMENT";
 
@@ -81,6 +82,8 @@ export interface QualityInput {
   /** The source row's own maturity date / description, when the source provided them (GFIM). */
   sourceMaturityDate: Date | null;
   sourceSecurityDescription: string | null;
+  /** Other instruments in the SAME report row-block whose traded volume and trade count are identical to the cent (see findDuplicatedVolumes). Omit/empty when none. */
+  duplicatedVolumeWith?: string[];
 }
 
 const DESCRIPTION_RE = /^[A-Z]{3}-[A-Z]{2}-(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4})-[A-Z0-9]+(?:-\d+)?(?:-(\d+(?:\.\d+)?))?$/i;
@@ -167,6 +170,16 @@ export function assessObservationQuality(input: QualityInput): ObservationQualit
     });
   }
 
+  // --- Cross-row integrity: one trade copied onto several securities -------
+  if (input.tradeStatus !== "NOT_TRADED" && input.duplicatedVolumeWith && input.duplicatedVolumeWith.length > 0) {
+    issues.push({
+      code: "DUPLICATED_VOLUME",
+      severity: "REVIEW",
+      label: "Duplicated report volume",
+      detail: `The source report shows exactly the same traded volume and trade count on ${iso(observationDate)} for ${input.duplicatedVolumeWith.join(", ")} — one trade cannot be both, so the row's price and volume are unreliable until checked against the source.`,
+    });
+  }
+
   // --- Price ↔ yield consistency -------------------------------------------
   const canSolve = input.cleanPrice !== null && observationDate.getTime() < terms.maturityDate.getTime();
   if (canSolve) {
@@ -192,4 +205,51 @@ export function assessObservationQuality(input: QualityInput): ObservationQualit
 
   const status: ObservationQualityStatus = issues.some((i) => i.severity === "EXCLUDED") ? "EXCLUDED" : issues.some((i) => i.severity === "REVIEW") ? "REVIEW" : "VALID";
   return { status, analyticsEligible: status === "VALID", issues };
+}
+
+/** A traded observation, reduced to the fields the duplicate-volume check needs. */
+export interface VolumeRow {
+  securityKey: string;
+  /** Short label used in the issue text (e.g. an instrument code). */
+  label: string;
+  issuerName: string;
+  observationDate: string;
+  volumeTradedGhs: number | null;
+  numberOfTrades: number | null;
+  tradeStatus: "TRADED" | "NOT_TRADED" | null;
+}
+
+/**
+ * Source integrity check (M7.4 forensic finding). On 28 Aug 2026 GFIM's
+ * CORPORATE sheet printed the identical volume (36,065 GHS, 1 trade) on
+ * THREE different Ghana Cocoa Board bonds, with closing prices 99.16, 51.26
+ * and 29.97 — a fill-down/copy error in the source, not three trades. Such
+ * rows cannot be told apart from a genuine trade by price alone (there is no
+ * source yield on the CORPORATE sheet to contradict them), so the evidence is
+ * the duplication itself: the same non-round GHS amount and trade count on
+ * two or more securities of one issuer on one day.
+ *
+ * Round amounts (multiples of 1,000 GHS) are excluded: two unrelated trades
+ * of exactly 250,000 are an ordinary coincidence; two of 34,529,476 are not.
+ * Returns, per `securityKey|date`, the OTHER securities sharing the volume.
+ */
+export function findDuplicatedVolumes(rows: VolumeRow[]): Map<string, string[]> {
+  const groups = new Map<string, VolumeRow[]>();
+  for (const r of rows) {
+    if (r.tradeStatus === "NOT_TRADED" || r.volumeTradedGhs === null || r.numberOfTrades === null || r.volumeTradedGhs <= 0) continue;
+    if (r.volumeTradedGhs % 1000 === 0) continue;
+    const key = `${r.issuerName}|${r.observationDate}|${r.volumeTradedGhs}|${r.numberOfTrades}`;
+    groups.set(key, [...(groups.get(key) ?? []), r]);
+  }
+  const out = new Map<string, string[]>();
+  for (const group of groups.values()) {
+    if (new Set(group.map((g) => g.securityKey)).size < 2) continue;
+    for (const r of group) {
+      out.set(
+        `${r.securityKey}|${r.observationDate}`,
+        group.filter((g) => g.securityKey !== r.securityKey).map((g) => g.label),
+      );
+    }
+  }
+  return out;
 }

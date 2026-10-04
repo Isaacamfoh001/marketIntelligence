@@ -42,6 +42,8 @@ export interface ObservationInput {
   tradeStatus?: "TRADED" | "NOT_TRADED" | null;
   sourceMaturityDate?: Date | null;
   sourceSecurityDescription?: string | null;
+  /** Other securities showing the identical report volume on this date (observation-quality.ts findDuplicatedVolumes). */
+  duplicatedVolumeWith?: string[];
 }
 
 export type YtmSource = "SOLVED_FROM_PRICE" | "SOURCE_QUOTED";
@@ -121,6 +123,7 @@ export function buildSecurityAnalytics(terms: BondTerms, observation: Observatio
     sourceYieldPct: observation.sourceYieldPct,
     sourceMaturityDate: observation.sourceMaturityDate ?? null,
     sourceSecurityDescription: observation.sourceSecurityDescription ?? null,
+    duplicatedVolumeWith: observation.duplicatedVolumeWith,
   });
 
   let ytmPct: number | null = null;

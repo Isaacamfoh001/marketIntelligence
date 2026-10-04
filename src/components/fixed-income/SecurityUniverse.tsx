@@ -12,7 +12,7 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import { formatIsoDate, formatPct, formatTimeRemaining, issuerShortName, MATURING_SOON_DAYS, type SecurityLifecycle } from "@/lib/fixed-income";
 import type { WorkspaceSecurity } from "@/lib/queries/fixed-income";
-import { Segmented } from "./OpportunitiesTable";
+import { Segmented } from "./ReliableYieldsTable";
 import { BenchmarkCell, LifecycleBadge, MarketStatusCell, Missing, NUM, SecurityIdentity, TD, TH, TermsWarning, securityToMarketStatus } from "./ui";
 
 type LifecycleTab = "ACTIVE" | "MATURING_SOON" | "MATURED";

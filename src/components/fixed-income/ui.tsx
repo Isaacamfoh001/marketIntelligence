@@ -232,6 +232,29 @@ export function MarketStateChip({ state }: { state: MarketState }) {
   return <span className={`${PILL} ${STATE_STYLE[state]}`}>{state === "NEEDS_REVIEW" ? "⚠ " : ""}{MARKET_STATE_LABEL[state]}</span>;
 }
 
+/** Keyboard-reachable info marker: the explanation lives in the tooltip and the accessible label, so it never clutters the row. */
+export function InfoTip({ text, label = "How is this calculated?" }: { text: string; label?: string }) {
+  return (
+    <span tabIndex={0} role="note" title={text} aria-label={`${label} ${text}`} className="ml-1 inline-flex h-3.5 w-3.5 shrink-0 cursor-help items-center justify-center rounded-full border border-zinc-300 text-[9px] font-semibold leading-none text-zinc-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500 dark:border-zinc-600 dark:text-zinc-400">
+      i
+    </span>
+  );
+}
+
+/** Second-glance context that an analyst does not need to reread every day: closed by default, never removed. */
+export function Methodology({ summary = "Methodology", children, className = "" }: { summary?: string; children: React.ReactNode; className?: string }) {
+  return (
+    <details className={`group text-xs ${className}`}>
+      <summary className="cursor-pointer text-zinc-500 hover:text-zinc-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500 dark:text-zinc-400 dark:hover:text-zinc-200">{summary}</summary>
+      <div className="mt-1.5 space-y-1.5 text-zinc-500 dark:text-zinc-400">{children}</div>
+    </details>
+  );
+}
+
+/** The one definition of how an observed corporate spread is benchmarked — shown in tooltips and methodology disclosures everywhere. */
+export const SPREAD_METHOD_SHORT = "Date-matched nearest-tenor GoG benchmark. Not credit-adjusted.";
+export const SPREAD_METHOD_LONG = `The benchmark is the Government of Ghana observation (bond trade or T-bill auction) dated within ${BENCHMARK_DATE_WINDOW_DAYS} days of the corporate trade whose remaining tenor — measured at its own observation date — is closest to the corporate bond's tenor at its trade, preferring secondary-market trades. Spread = corporate observed yield − benchmark observed yield. It is an observed market spread, not a credit valuation: credit quality, liquidity, structure and the GoG benchmark's own data gaps are not adjusted for.`;
+
 const kindWord = (kind: "AUCTION_PRIMARY" | "SECONDARY_MARKET") => (kind === "SECONDARY_MARKET" ? "secondary trade" : "primary auction");
 
 /**
@@ -241,7 +264,7 @@ const kindWord = (kind: "AUCTION_PRIMARY" | "SECONDARY_MARKET") => (kind === "SE
  *                         context for hypothetical scenarios ONLY. There is no spread.
  * `compact` fits a table cell; the full form is for cards and the security page.
  */
-export function BenchmarkCell({ ctx, compact = true, align = "right" }: { ctx: BenchmarkContext; compact?: boolean; align?: "left" | "right" }) {
+export function BenchmarkCell({ ctx, compact = true, align = "right", observed }: { ctx: BenchmarkContext; compact?: boolean; align?: "left" | "right"; observed?: { yieldPct: number; date: string } }) {
   const text = align === "right" ? "text-right" : "text-left";
   const tag = "text-[9px] font-semibold uppercase tracking-wide";
   switch (ctx.type) {
@@ -249,20 +272,31 @@ export function BenchmarkCell({ ctx, compact = true, align = "right" }: { ctx: B
       return <span className="text-xs text-zinc-400 dark:text-zinc-500">Sovereign benchmark</span>;
     case "OBSERVED_SPREAD":
       return (
-        <div
-          className={text}
-          title={`${ctx.label} · ${kindWord(ctx.kind)} ${formatIsoDate(ctx.date)} · ${ctx.observationGapDays} days from this trade · tenor gap ${ctx.tenorGapDays} days${ctx.isWideGap ? " — wide gap, approximate" : ""}`}
-        >
-          <div className={`${tag} text-emerald-700 dark:text-emerald-400`}>Observed spread</div>
+        <div className={text}>
+          <div className={`${tag} flex items-center ${align === "right" ? "justify-end" : ""} text-emerald-700 dark:text-emerald-400`}>
+            Observed spread
+            <InfoTip text={`${SPREAD_METHOD_SHORT} ${ctx.label} · ${kindWord(ctx.kind)} ${formatIsoDate(ctx.date)} · ${ctx.observationGapDays} days from this trade · tenor gap ${ctx.tenorGapDays} days${ctx.isWideGap ? " — wide gap, approximate" : ""}.`} label="Spread method." />
+          </div>
           <div className="text-base font-semibold tabular-nums text-zinc-900 dark:text-zinc-100">{formatBps(ctx.spreadBps)}</div>
           <div className={`text-[10px] ${ctx.isWideGap ? "text-amber-600 dark:text-amber-400" : "text-zinc-500 dark:text-zinc-400"}`}>
             vs {compact ? "GoG" : ctx.label} at {formatPct(ctx.yieldPct)} · {formatIsoDate(ctx.date)}
             {ctx.isWideGap ? " · wide tenor gap" : ""}
           </div>
           {!compact && (
-            <div className="text-[10px] text-zinc-400 dark:text-zinc-500">
-              {ctx.label} · {kindWord(ctx.kind)} · {ctx.observationGapDays}d from the trade · {ctx.tenorGapDays}d tenor gap
-            </div>
+            <>
+              {observed && (
+                <div className="mt-1 text-[11px] tabular-nums text-zinc-600 dark:text-zinc-300">
+                  {formatPct(observed.yieldPct)} <span className="text-zinc-400 dark:text-zinc-500">({formatIsoDate(observed.date)})</span> − {formatPct(ctx.yieldPct)} <span className="text-zinc-400 dark:text-zinc-500">({formatIsoDate(ctx.date)})</span> = {formatBps(ctx.spreadBps)}
+                </div>
+              )}
+              <div className="text-[10px] text-zinc-400 dark:text-zinc-500">
+                {ctx.label} · {kindWord(ctx.kind)} · {ctx.observationGapDays}d from the trade · {ctx.tenorGapDays}d tenor gap
+              </div>
+              <p className="mt-1 text-[10px] font-medium text-zinc-500 dark:text-zinc-400">{SPREAD_METHOD_SHORT}</p>
+              <Methodology summary="How is this calculated?" className="mt-0.5">
+                <p>{SPREAD_METHOD_LONG}</p>
+              </Methodology>
+            </>
           )}
         </div>
       );

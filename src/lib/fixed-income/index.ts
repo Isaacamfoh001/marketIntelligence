@@ -23,3 +23,6 @@ export * from "./insights";
 export * from "./format";
 export * from "./observation-quality";
 export * from "./landscape";
+export * from "./market-changes";
+export * from "./analyst-queue";
+export * from "./decision-support";
