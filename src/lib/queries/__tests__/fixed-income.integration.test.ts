@@ -12,7 +12,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { getPrisma } from "../../prisma";
 import { importFixedIncomeSecurities } from "../../ingestion/fixed-income-securities-provider";
 import { importFixedIncomeObservations } from "../../ingestion/fixed-income-observations-provider";
-import { getFixedIncomeUniverse, getFixedIncomeSecurityByCode, getSovereignYieldCurve, getComparableUniverse } from "../fixed-income";
+import { getFixedIncomeUniverse, getFixedIncomeSecurityByCode, getSovereignYieldCurve, getComparableUniverse, getFixedIncomeWorkspace } from "../fixed-income";
 
 const db = getPrisma();
 const CORP_CODE = "ZZQFI-CORP-1";
@@ -103,5 +103,37 @@ describe("getComparableUniverse", () => {
     expect(corp).toBeDefined();
     expect(corp!.spreadBps).not.toBeNull();
     expect(universe.some((r) => r.instrumentType === "TREASURY_BILL")).toBe(true);
+  });
+});
+
+describe("getFixedIncomeWorkspace (M7.3)", () => {
+  it("derives lifecycle and observation freshness, and attaches a sovereign benchmark to corporates only", async () => {
+    const workspace = await getFixedIncomeWorkspace(SETTLEMENT);
+    expect(workspace.valuationDateIso).toBe("2026-06-15");
+    const corp = workspace.securities.find((s) => s.instrumentCode === CORP_CODE)!;
+    const gov = workspace.securities.find((s) => s.instrumentCode === GOV_CODE)!;
+    expect(corp.lifecycle).toBe("ACTIVE");
+    expect(corp.observationAgeDays).toBe(14); // observed 2026-06-01
+    expect(corp.observationFreshness).toBe("STALE"); // GFIM is daily-cadence; 14 days old is stale, never shown as current
+    expect(corp.latestObservationCleanPrice).toBe(92.5);
+    expect(corp.terms.couponRatePct).toBe(24);
+    expect(corp.benchmark).not.toBeNull();
+    expect(corp.spreadBps).not.toBeNull();
+    expect(gov.benchmark).toBeNull();
+    expect(gov.spreadBps).toBeNull();
+  });
+
+  it("classifies a security as MATURED from its maturity date, even though the master status says ACTIVE", async () => {
+    const workspace = await getFixedIncomeWorkspace(new Date("2027-06-15T00:00:00.000Z"));
+    const gov = workspace.securities.find((s) => s.instrumentCode === GOV_CODE)!;
+    expect(gov.status).toBe("ACTIVE");
+    expect(gov.lifecycle).toBe("MATURED");
+    expect(gov.latestObservationCleanPrice).toBe(98); // final known quote kept for research
+  });
+
+  it("carries freshness on every comparable row (weekly cadence for T-bills)", async () => {
+    const workspace = await getFixedIncomeWorkspace(SETTLEMENT);
+    expect(workspace.comparables.every((r) => ["CURRENT", "STALE", "MISSING"].includes(r.freshness))).toBe(true);
+    expect(workspace.comparables.find((r) => r.instrumentCode === CORP_CODE)!.couponRatePct).toBe(24);
   });
 });

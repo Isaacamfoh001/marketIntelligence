@@ -12,6 +12,16 @@
 // coupon (w = daysToNextCoupon / periodDays). This single formula prices
 // the fractional first (stub) period correctly without a separate accrued-
 // interest add-on — the result already IS the dirty price at settlement.
+//
+// FINAL COUPON PERIOD (M7.3 §26): when a fixed-coupon bond has exactly one
+// remaining cash flow (coupon + principal), it is discounted with SIMPLE
+// interest — P = CF / (1 + y·t), t = DSR / (E × freq) years — the market
+// "street" convention used by ICMA, Bloomberg and Excel's PRICE/YIELD for
+// bonds in their last period. Compounding a fractional period of a few days
+// to an annual rate produces meaningless extremes (and cannot represent a
+// large loss at all), which is exactly the near-maturity premium case the
+// purchase-price scenarios must show honestly. `simpleFinalPeriod` flags
+// this so yield/duration stay on the same convention.
 // ---------------------------------------------------------------------------
 
 import { paymentsPerYear } from "./classification";
@@ -27,7 +37,14 @@ interface PricingPoint {
 }
 
 /** Builds the (exponent, cashFlow) pairs once so the YTM solver, duration, and DV01 don't each re-derive the schedule/period-boundary per iteration. */
-export function buildPricingPoints(terms: BondTerms, settlementDate: Date): Result<{ points: PricingPoint[]; freq: number }> {
+export interface PricingModel {
+  points: PricingPoint[];
+  freq: number;
+  /** True when a FIXED-coupon bond is in its final coupon period (one remaining cash flow) and is priced with simple interest — see module header. */
+  simpleFinalPeriod: boolean;
+}
+
+export function buildPricingPoints(terms: BondTerms, settlementDate: Date): Result<PricingModel> {
   if (terms.maturityDate.getTime() <= settlementDate.getTime()) {
     return unavailable("MATURED", "This security's maturity date has passed — it has no remaining cash flows.");
   }
@@ -37,7 +54,7 @@ export function buildPricingPoints(terms: BondTerms, settlementDate: Date): Resu
 
   if (terms.couponType === "ZERO_COUPON") {
     const years = daysBetween(settlementDate, terms.maturityDate) / DAYS_PER_YEAR;
-    return { ok: true, freq: 1, points: [{ exponent: years, cashFlow: terms.faceValue }] };
+    return { ok: true, freq: 1, simpleFinalPeriod: false, points: [{ exponent: years, cashFlow: terms.faceValue }] };
   }
 
   if (terms.couponRatePct === null || terms.couponFrequency === null) {
@@ -56,11 +73,15 @@ export function buildPricingPoints(terms: BondTerms, settlementDate: Date): Resu
     return { exponent: i + w, cashFlow: couponPerPeriod + (isFinal ? terms.faceValue : 0) };
   });
 
-  return { ok: true, freq, points };
+  return { ok: true, freq, points, simpleFinalPeriod: points.length === 1 };
 }
 
 /** Dirty price for a given flat annual yield (percent, e.g. 19.5 for 19.5%). */
-export function priceFromPoints(points: PricingPoint[], freq: number, annualYieldPct: number): number {
+export function priceFromPoints(points: PricingPoint[], freq: number, annualYieldPct: number, simpleFinalPeriod = false): number {
+  if (simpleFinalPeriod && points.length === 1) {
+    const years = points[0].exponent / freq;
+    return points[0].cashFlow / (1 + (annualYieldPct / 100) * years);
+  }
   const periodRate = annualYieldPct / 100 / freq;
   return points.reduce((sum, p) => sum + p.cashFlow / Math.pow(1 + periodRate, p.exponent), 0);
 }
@@ -69,5 +90,5 @@ export function priceFromPoints(points: PricingPoint[], freq: number, annualYiel
 export function priceFromYield(terms: BondTerms, settlementDate: Date, annualYieldPct: number): Result<{ dirtyPrice: number }> {
   const built = buildPricingPoints(terms, settlementDate);
   if (!built.ok) return built;
-  return { ok: true, dirtyPrice: priceFromPoints(built.points, built.freq, annualYieldPct) };
+  return { ok: true, dirtyPrice: priceFromPoints(built.points, built.freq, annualYieldPct, built.simpleFinalPeriod) };
 }

@@ -83,3 +83,41 @@ describe("computeYtm — bond-math correctness (M7 §21 acceptance scenarios)", 
     expect(computeYtm(SEMI_ANNUAL_BOND, settlement, -5).ok).toBe(false);
   });
 });
+
+describe("computeYtm — final coupon period (M7.3 §26: street convention)", () => {
+  // Final period 15 Dec 2027 -> 15 Jun 2028 (183 days); settle 31 days before redemption.
+  const settle = d("2028-05-15");
+  const years = 31 / (183 * 2);
+  const cash = 110; // final coupon 10 + principal 100
+
+  it("uses the closed-form simple-interest yield when one cash flow remains", () => {
+    const dirty = 108.5;
+    const result = computeYtm(SEMI_ANNUAL_BOND, settle, dirty);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.ytmPct).toBeCloseTo((cash / dirty - 1) / years * 100, 8);
+  });
+
+  it("solves a large negative yield for a price far above the remaining cash (no NON_CONVERGENT)", () => {
+    const result = computeYtm(SEMI_ANNUAL_BOND, settle, 125);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.ytmPct).toBeLessThan(-99);
+  });
+
+  it("round-trips through priceFromYield on the same convention", () => {
+    const result = computeYtm(SEMI_ANNUAL_BOND, settle, 108.5);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const repriced = priceFromYield(SEMI_ANNUAL_BOND, settle, result.ytmPct);
+    expect(repriced.ok).toBe(true);
+    if (repriced.ok) expect(repriced.dirtyPrice).toBeCloseTo(108.5, 8);
+  });
+
+  it("multi-period bonds still solve below -99% when a premium demands it", () => {
+    // Two cash flows left, priced far above their sum.
+    const result = computeYtm(SEMI_ANNUAL_BOND, d("2027-11-15"), 135);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const repriced = priceFromYield(SEMI_ANNUAL_BOND, d("2027-11-15"), result.ytmPct);
+    if (repriced.ok) expect(repriced.dirtyPrice).toBeCloseTo(135, 4);
+  });
+});

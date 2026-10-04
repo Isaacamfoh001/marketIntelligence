@@ -36,10 +36,22 @@ const CONVEXITY_BUMP_PCT = 1;
 export function computeDuration(terms: BondTerms, settlementDate: Date, ytmPct: number): Result<DurationResult> {
   const built = buildPricingPoints(terms, settlementDate);
   if (!built.ok) return built;
-  const { points, freq } = built;
+  const { points, freq, simpleFinalPeriod } = built;
 
-  const price = priceFromPoints(points, freq, ytmPct);
+  const price = priceFromPoints(points, freq, ytmPct, simpleFinalPeriod);
   if (!(price > 0)) return unavailable("INVALID_PRICE", "Duration requires a positive model price at the given yield.");
+
+  const priceDown = priceFromPoints(points, freq, ytmPct - ONE_BP_PCT, simpleFinalPeriod);
+  const priceUp = priceFromPoints(points, freq, ytmPct + ONE_BP_PCT, simpleFinalPeriod);
+  const dv01 = (priceDown - priceUp) / 2;
+  const convexityYears2 = computeConvexityFromPoints(points, freq, ytmPct, price, simpleFinalPeriod);
+
+  if (simpleFinalPeriod) {
+    // One cash flow under simple interest: Macaulay duration is its time to
+    // payment; modified duration is −(dP/dy)/P = t / (1 + y·t).
+    const t = points[0].exponent / freq;
+    return { ok: true, macaulayDurationYears: t, modifiedDurationYears: t / (1 + (ytmPct / 100) * t), dv01, convexityYears2 };
+  }
 
   const periodRate = ytmPct / 100 / freq;
   let weightedTime = 0;
@@ -51,18 +63,12 @@ export function computeDuration(terms: BondTerms, settlementDate: Date, ytmPct: 
   const macaulayDurationYears = weightedTime / price;
   const modifiedDurationYears = macaulayDurationYears / (1 + periodRate);
 
-  const priceDown = priceFromPoints(points, freq, ytmPct - ONE_BP_PCT);
-  const priceUp = priceFromPoints(points, freq, ytmPct + ONE_BP_PCT);
-  const dv01 = (priceDown - priceUp) / 2;
-
-  const convexityYears2 = computeConvexityFromPoints(points, freq, ytmPct, price);
-
   return { ok: true, macaulayDurationYears, modifiedDurationYears, dv01, convexityYears2 };
 }
 
-function computeConvexityFromPoints(points: { exponent: number; cashFlow: number }[], freq: number, ytmPct: number, price: number): number | null {
-  const priceDown = priceFromPoints(points, freq, ytmPct - CONVEXITY_BUMP_PCT);
-  const priceUp = priceFromPoints(points, freq, ytmPct + CONVEXITY_BUMP_PCT);
+function computeConvexityFromPoints(points: { exponent: number; cashFlow: number }[], freq: number, ytmPct: number, price: number, simpleFinalPeriod: boolean): number | null {
+  const priceDown = priceFromPoints(points, freq, ytmPct - CONVEXITY_BUMP_PCT, simpleFinalPeriod);
+  const priceUp = priceFromPoints(points, freq, ytmPct + CONVEXITY_BUMP_PCT, simpleFinalPeriod);
   const deltaDecimal = CONVEXITY_BUMP_PCT / 100;
   if (price <= 0 || deltaDecimal === 0) return null;
   return (priceUp + priceDown - 2 * price) / (price * deltaDecimal * deltaDecimal);

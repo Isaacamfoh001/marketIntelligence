@@ -16,3 +16,8 @@ export * from "./comparables";
 export * from "./investment-calculator";
 export * from "./treasury-bill-adapter";
 export * from "./security-analytics";
+export * from "./lifecycle";
+export * from "./transaction-costs";
+export * from "./price-scenarios";
+export * from "./insights";
+export * from "./format";

@@ -11,6 +11,7 @@
 // ---------------------------------------------------------------------------
 
 import { getPrisma } from "../prisma";
+import { dailyFreshness, observationFreshness, type Freshness } from "../freshness";
 import { TREASURY_INSTRUMENTS, getTreasurySnapshot } from "./market-data";
 import {
   buildSecurityAnalytics,
@@ -20,6 +21,11 @@ import {
   computeSpreadBps,
   treasuryBillToBondTerms,
   computeDuration,
+  classifyLifecycle,
+  observationAgeDays,
+  toValuationDate,
+  type BenchmarkSelection,
+  type SecurityLifecycle,
   type SecurityAnalytics,
   type YieldCurvePoint,
   type BondTerms,
@@ -50,7 +56,19 @@ export interface FixedIncomeSecurityRow {
   status: "ACTIVE" | "MATURED" | "CALLED" | "DEFAULTED";
   latestObservationDate: string | null;
   latestObservationVolumeGhs: number | null;
+  /** The latest observation's raw price/yield as published — kept even after maturity (when `analytics` is empty) so historical research can show the final known quote. */
+  latestObservationCleanPrice: number | null;
+  latestObservationYieldPct: number | null;
   analytics: SecurityAnalytics;
+  /** Derived from maturity vs valuation date — never from `status`, which the securities master leaves ACTIVE after maturity (M7.3 §4). */
+  lifecycle: SecurityLifecycle;
+  /** GFIM observations are daily-cadence: CURRENT within one business day, else STALE; MISSING when never observed. */
+  observationFreshness: Freshness;
+  observationAgeDays: number | null;
+  /** Data-integrity flag: the latest observation is dated after the contractual maturity, which should not happen for a real trade. */
+  observationAfterMaturity: boolean;
+  /** Contractual terms in the shape the analytics engine consumes (passed to client-side scenario/calculator components). */
+  terms: BondTerms;
 }
 
 interface SecurityWithCompany {
@@ -126,12 +144,19 @@ function toSecurityRow(sec: SecurityWithCompany, latestObservation: ObservationR
     status: sec.status,
     latestObservationDate: latestObservation ? latestObservation.observationDate.toISOString().slice(0, 10) : null,
     latestObservationVolumeGhs: latestObservation?.volumeTradedGhs !== null && latestObservation?.volumeTradedGhs !== undefined ? Number(latestObservation.volumeTradedGhs) : null,
+    latestObservationCleanPrice: latestObservation && latestObservation.cleanPrice !== null ? Number(latestObservation.cleanPrice) : null,
+    latestObservationYieldPct: latestObservation && latestObservation.sourceYieldPct !== null ? Number(latestObservation.sourceYieldPct) : null,
     analytics,
+    lifecycle: classifyLifecycle(sec.maturityDate, settlementDate),
+    observationFreshness: dailyFreshness(latestObservation?.observationDate ?? null, settlementDate),
+    observationAgeDays: observationAgeDays(latestObservation ? latestObservation.observationDate.toISOString().slice(0, 10) : null, settlementDate),
+    observationAfterMaturity: latestObservation ? latestObservation.observationDate.getTime() > sec.maturityDate.getTime() : false,
+    terms,
   };
 }
 
-/** Every Fixed Income security (government + corporate bonds) with its latest observation and computed analytics, as of `settlementDate` (defaults to now). */
-export async function getFixedIncomeUniverse(settlementDate: Date = new Date()): Promise<FixedIncomeSecurityRow[]> {
+/** Every Fixed Income security (government + corporate bonds) with its latest observation and computed analytics, as of `settlementDate` (defaults to today's UTC valuation date). */
+export async function getFixedIncomeUniverse(settlementDate: Date = toValuationDate(new Date())): Promise<FixedIncomeSecurityRow[]> {
   const prisma = getPrisma();
   const securities = await prisma.fixedIncomeSecurity.findMany({
     include: { company: { select: { ticker: true } } },
@@ -149,7 +174,7 @@ export async function getFixedIncomeUniverse(settlementDate: Date = new Date()):
   );
 }
 
-export async function getFixedIncomeSecurityByCode(instrumentCode: string, settlementDate: Date = new Date()): Promise<FixedIncomeSecurityRow | null> {
+export async function getFixedIncomeSecurityByCode(instrumentCode: string, settlementDate: Date = toValuationDate(new Date())): Promise<FixedIncomeSecurityRow | null> {
   const prisma = getPrisma();
   const sec = await prisma.fixedIncomeSecurity.findUnique({
     where: { instrumentCode },
@@ -190,7 +215,8 @@ export async function getFixedIncomeObservationHistory(securityId: string): Prom
 // plus Government Bonds (new domain), observed points only.
 // ---------------------------------------------------------------------------
 
-export async function getSovereignYieldCurve(settlementDate: Date = new Date()): Promise<YieldCurvePoint[]> {
+/** `universe` may be passed when the caller already loaded it for the same settlement date, avoiding a second full universe query. */
+export async function getSovereignYieldCurve(settlementDate: Date = toValuationDate(new Date()), universe?: FixedIncomeSecurityRow[]): Promise<YieldCurvePoint[]> {
   const treasurySnapshot = await getTreasurySnapshot();
   const billPoints: YieldCurvePoint[] = [];
   for (const { code, label } of TREASURY_INSTRUMENTS) {
@@ -213,8 +239,8 @@ export async function getSovereignYieldCurve(settlementDate: Date = new Date()):
     });
   }
 
-  const universe = await getFixedIncomeUniverse(settlementDate);
-  const bondPoints: YieldCurvePoint[] = universe
+  const bondUniverse = universe ?? (await getFixedIncomeUniverse(settlementDate));
+  const bondPoints: YieldCurvePoint[] = bondUniverse
     .filter((s) => s.instrumentType === "GOVERNMENT_BOND" && s.analytics.ytmPct !== null && !s.analytics.isMatured)
     .map((s) => ({
       tenorDays: s.analytics.tenorDays,
@@ -234,9 +260,12 @@ export async function getSovereignYieldCurve(settlementDate: Date = new Date()):
 // Comparables universe (M7 §14) — bonds + Treasury bills, unified.
 // ---------------------------------------------------------------------------
 
-export async function getComparableUniverse(settlementDate: Date = new Date()): Promise<ComparableRow[]> {
-  const universe = await getFixedIncomeUniverse(settlementDate);
-  const curve = await getSovereignYieldCurve(settlementDate);
+export async function getComparableUniverse(
+  settlementDate: Date = toValuationDate(new Date()),
+  preloaded?: { universe: FixedIncomeSecurityRow[]; curve: YieldCurvePoint[] },
+): Promise<ComparableRow[]> {
+  const universe = preloaded?.universe ?? (await getFixedIncomeUniverse(settlementDate));
+  const curve = preloaded?.curve ?? (await getSovereignYieldCurve(settlementDate, universe));
 
   const bondRows: ComparableRow[] = universe.map((s) => {
     const benchmark = s.analytics.ytmPct !== null ? selectBenchmark(s.analytics.tenorDays, curve.filter((p) => p.instrumentCode !== s.instrumentCode)) : null;
@@ -247,6 +276,7 @@ export async function getComparableUniverse(settlementDate: Date = new Date()): 
       classification: s.classification,
       instrumentType: s.instrumentType,
       maturityDate: s.maturityDate,
+      couponRatePct: s.couponRatePct,
       tenorDays: s.analytics.tenorDays,
       ytmPct: s.analytics.ytmPct,
       currentYieldPct: s.analytics.currentYieldPct,
@@ -255,6 +285,7 @@ export async function getComparableUniverse(settlementDate: Date = new Date()): 
       spreadBps: benchmark && s.classification === "CORPORATE" ? computeSpreadBps(s.analytics.ytmPct!, benchmark.benchmark.yieldPct) : null,
       observationDate: s.latestObservationDate,
       observationKind: s.analytics.observationKind,
+      freshness: s.observationFreshness,
     };
   });
 
@@ -285,10 +316,51 @@ export async function getComparableUniverse(settlementDate: Date = new Date()): 
       spreadBps: null,
       observationDate: latest.observationDate.toISOString().slice(0, 10),
       observationKind: "AUCTION_PRIMARY",
+      // Weekly BoG auctions — judged on the weekly cadence, not the daily GFIM one.
+      freshness: observationFreshness("WEEKLY", latest.observationDate, settlementDate),
     });
   }
 
   return [...bondRows, ...billRows];
+}
+
+// ---------------------------------------------------------------------------
+// Decision workspace (M7.3) — one load of the universe, curve, and
+// comparables, plus each security's sovereign benchmark, shared by the
+// landing page, Compare, and Security Detail so all three agree.
+// ---------------------------------------------------------------------------
+
+export interface WorkspaceSecurity extends FixedIncomeSecurityRow {
+  /** Nearest-tenor sovereign benchmark for an outstanding CORPORATE security (present even without a market yield, so the government comparison is always visible). Null for sovereigns. */
+  benchmark: BenchmarkSelection | null;
+  /** Observed YTM minus benchmark yield, in bps — null without an observed YTM or benchmark. */
+  spreadBps: number | null;
+}
+
+export interface FixedIncomeWorkspace {
+  valuationDateIso: string;
+  securities: WorkspaceSecurity[];
+  curve: YieldCurvePoint[];
+  comparables: ComparableRow[];
+}
+
+export function attachBenchmark(row: FixedIncomeSecurityRow, curve: YieldCurvePoint[]): WorkspaceSecurity {
+  if (row.classification !== "CORPORATE" || row.lifecycle === "MATURED") return { ...row, benchmark: null, spreadBps: null };
+  const benchmark = selectBenchmark(row.analytics.tenorDays, curve);
+  const spreadBps = benchmark && row.analytics.ytmPct !== null ? computeSpreadBps(row.analytics.ytmPct, benchmark.benchmark.yieldPct) : null;
+  return { ...row, benchmark, spreadBps };
+}
+
+export async function getFixedIncomeWorkspace(valuationDate: Date = toValuationDate(new Date())): Promise<FixedIncomeWorkspace> {
+  const universe = await getFixedIncomeUniverse(valuationDate);
+  const curve = await getSovereignYieldCurve(valuationDate, universe);
+  const comparables = await getComparableUniverse(valuationDate, { universe, curve });
+  return {
+    valuationDateIso: valuationDate.toISOString().slice(0, 10),
+    securities: universe.map((row) => attachBenchmark(row, curve)),
+    curve,
+    comparables,
+  };
 }
 
 export { classifyInstrument };

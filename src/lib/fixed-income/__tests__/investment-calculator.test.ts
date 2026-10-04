@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { evaluateInvestment } from "../investment-calculator";
+import { computeYtm } from "../yield";
 import type { BondTerms } from "../types";
 
 const d = (iso: string) => new Date(`${iso}T00:00:00.000Z`);
@@ -50,5 +51,57 @@ describe("evaluateInvestment", () => {
 
   it("is unavailable once the bond has matured", () => {
     expect(evaluateInvestment(SEMI_ANNUAL_BOND, d("2028-06-15"), 1_000_000, 100).ok).toBe(false);
+  });
+
+  describe("acquisition costs (M7.3 §13/§14)", () => {
+    // Period 15 Dec 2024 -> 15 Jun 2025 is 182 days; 90 accrued at 15 Mar -> accrued = 10 * 90/182 per 100.
+    const SETTLE = d("2025-03-15");
+    const CHARGES = { regulatoryLevyPct: 0.01, dealerFeePct: 0.25 };
+
+    it("breaks the investment amount into clean + accrued + levy + dealer fee", () => {
+      const r = evaluateInvestment(SEMI_ANNUAL_BOND, SETTLE, 1_000_000, 105, CHARGES);
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+      expect(r.accruedInterest).toBeCloseTo(10 * (90 / 182), 10);
+      expect(r.cleanConsideration + r.accruedInterestPaid).toBeCloseTo(r.settlementConsideration, 6);
+      expect(r.regulatoryLevy).toBeCloseTo(r.settlementConsideration * 0.0001, 6);
+      expect(r.dealerFee).toBeCloseTo(r.settlementConsideration * 0.0025, 6);
+      expect(r.totalAcquisitionCost).toBeCloseTo(1_000_000, 4);
+      // Accrued interest paid scales with the position, not the per-100 figure.
+      expect(r.accruedInterestPaid).toBeCloseTo((r.faceValueAcquired / 100) * r.accruedInterest, 6);
+      expect(r.accruedInterestPaid).toBeGreaterThan(1000);
+    });
+
+    it("charges lower the annualised return below the pre-charge YTM, and match a direct solve on all-in cost", () => {
+      const r = evaluateInvestment(SEMI_ANNUAL_BOND, SETTLE, 1_000_000, 105, CHARGES);
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+      expect(r.annualisedReturnPct).toBeLessThan(r.ytmBeforeChargesPct);
+      const direct = computeYtm(SEMI_ANNUAL_BOND, SETTLE, r.dirtyPrice * (1 + 0.26 / 100));
+      expect(direct.ok).toBe(true);
+      if (direct.ok) expect(r.annualisedReturnPct).toBeCloseTo(direct.ytmPct, 8);
+    });
+
+    it("with zero charges, the annualised return equals the pre-charge YTM (original M7 behaviour)", () => {
+      const r = evaluateInvestment(SEMI_ANNUAL_BOND, SETTLE, 1_000_000, 105, { regulatoryLevyPct: 0, dealerFeePct: 0 });
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+      expect(r.dealerFee).toBe(0);
+      expect(r.regulatoryLevy).toBe(0);
+      expect(r.annualisedReturnPct).toBeCloseTo(r.ytmBeforeChargesPct, 10);
+    });
+
+    it("scales the remaining cash-flow schedule to the position and sums to total cash received", () => {
+      const r = evaluateInvestment(SEMI_ANNUAL_BOND, SETTLE, 1_000_000, 105, CHARGES);
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+      const sum = r.cashFlows.reduce((s, f) => s + f.total, 0);
+      expect(sum).toBeCloseTo(r.totalNominalCashReceived, 6);
+      expect(r.cashFlows[r.cashFlows.length - 1].principal).toBeCloseTo(r.faceValueAcquired, 6);
+    });
+
+    it("rejects implausible dealer fees", () => {
+      expect(evaluateInvestment(SEMI_ANNUAL_BOND, SETTLE, 1_000_000, 105, { regulatoryLevyPct: 0.01, dealerFeePct: 40 }).ok).toBe(false);
+    });
   });
 });

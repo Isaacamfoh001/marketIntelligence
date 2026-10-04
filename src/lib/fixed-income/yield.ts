@@ -38,19 +38,34 @@ export function computeYtm(terms: BondTerms, settlementDate: Date, dirtyPrice: n
 
   const built = buildPricingPoints(terms, settlementDate);
   if (!built.ok) return built;
-  const { points, freq } = built;
+  const { points, freq, simpleFinalPeriod } = built;
+
+  // Final coupon period (pricing.ts header): simple interest has an exact
+  // closed-form yield, y = (CF / P − 1) / t, valid for any positive price —
+  // including the large negative annualized returns of paying a premium for
+  // a bond only days from redemption.
+  if (simpleFinalPeriod) {
+    const years = points[0].exponent / freq;
+    if (!(years > 0)) return unavailable("MATURED", "This security has no time remaining to maturity.");
+    return { ok: true, ytmPct: (points[0].cashFlow / dirtyPrice - 1) / years * 100 };
+  }
 
   const priceAt = (yPct: number) => priceFromPoints(points, freq, yPct);
 
   let lo = YTM_LOWER_BOUND_PCT;
   let hi = YTM_UPPER_BOUND_PCT;
+  // A price far above the remaining cash flows can imply a yield below −99%.
+  // The compounded formula is defined for any periodic rate above −100%, so
+  // widen the floor to just inside that limit only when needed (keeps every
+  // previously solvable case on the original bracket).
+  if (priceAt(lo) < dirtyPrice) lo = -100 * freq + 1e-6;
   const priceLo = priceAt(lo);
   const priceHi = priceAt(hi);
   // Price is monotonically decreasing in yield, so priceLo must exceed the
   // target and priceHi must fall short — otherwise no root exists in this
   // (generously wide) bracket and the input is not a sane market price.
   if (!(priceLo >= dirtyPrice && priceHi <= dirtyPrice)) {
-    return unavailable("NON_CONVERGENT", "Could not solve for a yield to maturity within a -99% to 1000% bracket for this price.");
+    return unavailable("NON_CONVERGENT", "Could not solve for a yield to maturity for this price within the supported bracket.");
   }
 
   let mid = (lo + hi) / 2;

@@ -84,3 +84,16 @@ describe("computeDuration", () => {
     if (!result.ok) expect(result.reason).toBe("MATURED");
   });
 });
+
+describe("computeDuration — final coupon period", () => {
+  it("Macaulay duration equals the time to the single remaining payment", () => {
+    const settle = d("2028-05-15");
+    const result = computeDuration(SEMI_ANNUAL_BOND, settle, 20);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const t = 31 / (183 * 2);
+    expect(result.macaulayDurationYears).toBeCloseTo(t, 10);
+    expect(result.modifiedDurationYears).toBeCloseTo(t / (1 + 0.2 * t), 10);
+    expect(result.dv01).toBeGreaterThan(0);
+  });
+});
