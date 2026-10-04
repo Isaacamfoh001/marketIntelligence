@@ -127,6 +127,19 @@ enum ObservationKind {
   SECONDARY_MARKET
 }
 
+/// Whether the source reports an actual trade on the observation date
+/// (M7.3.1). GFIM's daily report publishes a closing price for EVERY listed
+/// security — for one that did not trade, that price is the last trade's
+/// price carried forward, possibly from months or years earlier. Only a
+/// TRADED observation is a dated market price; NOT_TRADED rows are kept for
+/// provenance but never treated as current market evidence. Null for
+/// sources that don't report trade activity (manual CSV imports, primary
+/// auction results).
+enum ObservationTradeStatus {
+  TRADED
+  NOT_TRADED
+}
+
 /// Observation frequency for macro series.
 enum MacroFrequency {
   DAILY
@@ -893,6 +906,16 @@ model FixedIncomeObservation {
   /// ObservationKind. Required: every observation must state which kind
   /// it is, never left ambiguous (M7.1 §8).
   observationKind ObservationKind
+  /// See ObservationTradeStatus. Null = source does not report trade activity.
+  tradeStatus     ObservationTradeStatus?
+  /// Number of trades the source reports for this security on this date.
+  numberOfTrades  Int?
+  /// The security description and maturity date exactly as printed on the
+  /// source row (M7.3.1) — provenance for checking that the ISIN match and
+  /// the Securities Master's contractual terms agree with what the source
+  /// itself says. Never used as terms; only compared against them.
+  sourceSecurityDescription String?
+  sourceMaturityDate        DateTime? @db.Date
 
   sourceId       String
   ingestionRunId String

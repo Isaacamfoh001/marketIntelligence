@@ -11,6 +11,7 @@
 import { formatBps, formatIsoDate, formatPct } from "./format";
 import type { SecurityLifecycle } from "./lifecycle";
 import type { PriceScenario } from "./price-scenarios";
+import type { ObservationIssue } from "./observation-quality";
 
 export type InsightTone = "neutral" | "caution";
 
@@ -23,9 +24,6 @@ export interface SecurityInsight {
 /** Above this many bps of annualized return per 1.00 of clean price, a security's return is called "highly sensitive" to purchase price. Roughly the sensitivity of a bond with ~6 months left; documented, not tuned to current data. */
 export const HIGH_PRICE_SENSITIVITY_BPS_PER_POINT = 200;
 
-/** GFIM's own quoted yield and Korbly's price-solved YTM differing by more than this is surfaced so the analyst can check conventions. */
-export const QUOTED_VS_SOLVED_YIELD_GAP_BPS = 100;
-
 export interface InsightInput {
   maturityDateIso: string;
   tenorDays: number;
@@ -37,6 +35,13 @@ export interface InsightInput {
     freshness: "CURRENT" | "STALE" | "MISSING";
     cleanPrice: number | null;
   } | null;
+  /** Quality issues of the market observation (M7.3.1) — REVIEW/EXCLUDED ones withhold it from analytics. */
+  observationIssues?: ObservationIssue[];
+  /** A newer carried closing price with no trade behind it, and the earliest date the source has shown only carried prices. */
+  carried?: { cleanPrice: number | null; asOf: string } | null;
+  noTradeRecordedSince?: string | null;
+  /** Source-vs-master terms conflicts (affect every calculation, including scenarios). */
+  termsIssues?: ObservationIssue[];
   ytmPct: number | null;
   ytmSource: "SOLVED_FROM_PRICE" | "SOURCE_QUOTED" | null;
   sourceQuotedYieldPct: number | null;
@@ -63,10 +68,23 @@ export function buildSecurityInsights(input: InsightInput): SecurityInsight[] {
     text: `Matures in ${input.tenorDays} day${input.tenorDays === 1 ? "" : "s"} (${formatIsoDate(input.maturityDateIso)}).`,
   });
 
+  // --- Terms integrity ----------------------------------------------------
+  for (const issue of (input.termsIssues ?? []).filter((i) => i.severity !== "INFO")) {
+    out.push({ id: `terms-${issue.code}`, tone: "caution", text: `${issue.label}: ${issue.detail}` });
+  }
+
   // --- Observation ------------------------------------------------------
   const obs = input.observation;
   if (!obs) {
-    out.push({ id: "no-observation", tone: "caution", text: "No market observation exists for this security — every price and return below is a hypothetical scenario, not a quote." });
+    if (input.noTradeRecordedSince) {
+      out.push({
+        id: "no-trade",
+        tone: "caution",
+        text: `No trade recorded in GFIM daily reports since at least ${formatIsoDate(input.noTradeRecordedSince)}${input.carried?.cleanPrice != null ? `; the published price ${input.carried.cleanPrice.toFixed(2)} is carried forward from an earlier, unknown date and is not a market price` : ""}. Every price and return below is a hypothetical scenario.`,
+      });
+    } else {
+      out.push({ id: "no-observation", tone: "caution", text: "No market observation exists for this security — every price and return below is a hypothetical scenario, not a quote." });
+    }
   } else {
     const kind = obs.kind === "SECONDARY_MARKET" ? "secondary-market trade" : "primary auction";
     const age = obs.ageDays === 0 ? "dated today" : `${obs.ageDays} day${obs.ageDays === 1 ? "" : "s"} old`;
@@ -75,23 +93,16 @@ export function buildSecurityInsights(input: InsightInput): SecurityInsight[] {
       tone: obs.freshness === "STALE" ? "caution" : "neutral",
       text: `Latest market observation (${kind}, ${formatIsoDate(obs.dateIso)}) is ${age}${obs.freshness === "STALE" ? " and is stale" : ""}.`,
     });
+    const blocking = (input.observationIssues ?? []).filter((i) => i.severity !== "INFO" && !(input.termsIssues ?? []).some((t) => t.code === i.code));
+    if (blocking.length > 0) {
+      out.push({ id: "withheld", tone: "caution", text: `This observation is withheld from derived analytics (curve, spreads, alternatives): ${blocking.map((i) => i.detail).join(" ")}` });
+    }
     if (obs.cleanPrice !== null) {
       const diff = obs.cleanPrice - 100;
       if (Math.abs(diff) < 0.005) out.push({ id: "price-vs-par", tone: "neutral", text: "Observed market price is at par (100.00)." });
       else out.push({ id: "price-vs-par", tone: "neutral", text: `Observed market price ${obs.cleanPrice.toFixed(2)} is ${diff > 0 ? "above" : "below"} par by ${Math.abs(diff).toFixed(2)}.` });
     } else {
       out.push({ id: "price-not-reported", tone: "neutral", text: "The observation reports a yield but no price." });
-    }
-  }
-
-  if (input.ytmSource === "SOLVED_FROM_PRICE" && input.ytmPct !== null && input.sourceQuotedYieldPct !== null) {
-    const gap = Math.round((input.ytmPct - input.sourceQuotedYieldPct) * 100);
-    if (Math.abs(gap) > QUOTED_VS_SOLVED_YIELD_GAP_BPS) {
-      out.push({
-        id: "quoted-vs-solved",
-        tone: "caution",
-        text: `Source-quoted yield (${formatPct(input.sourceQuotedYieldPct)}) differs from Korbly's price-solved YTM (${formatPct(input.ytmPct)}) by ${formatBps(gap).replace("+", "")} — check the source's settlement and yield conventions.`,
-      });
     }
   }
 

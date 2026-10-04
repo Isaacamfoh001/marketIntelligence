@@ -91,9 +91,25 @@ describe("buildSecurityInsights (M7.3 §20)", () => {
     expect(ids(input({ benchmark: null, spreadBps: null }))).toContain("no-benchmark");
   });
 
-  it("surfaces a large gap between source-quoted and price-solved yields", () => {
-    expect(ids(input({ sourceQuotedYieldPct: 6.5, ytmPct: 3.4 }))).toContain("quoted-vs-solved");
-    expect(ids(input({ sourceQuotedYieldPct: 23.5, ytmPct: 23.58 }))).not.toContain("quoted-vs-solved");
+  it("states when an observation is withheld from analytics, with the quality evidence", () => {
+    const issue = { code: "YIELD_MISMATCH" as const, severity: "REVIEW" as const, label: "Yield mismatch", detail: "The source quotes 46.56%, but the quoted price implies 25.31%." };
+    expect(textOf(input({ observationIssues: [issue] }), "withheld")).toContain("46.56%");
+    expect(ids(input({ observationIssues: [{ ...issue, severity: "INFO" }] }))).not.toContain("withheld");
+  });
+
+  it("explains a carried price with no recorded trade instead of treating it as a quote", () => {
+    const i = input({ observation: null, ytmPct: null, ytmSource: null, spreadBps: null, noTradeRecordedSince: "2025-07-21", carried: { cleanPrice: 40.9633, asOf: "2026-10-02" } });
+    const t = textOf(i, "no-trade");
+    expect(t).toContain("21 Jul 2025");
+    expect(t).toContain("40.96");
+    expect(t).toContain("not a market price");
+  });
+
+  it("surfaces securities-master terms conflicts as caution facts", () => {
+    const conflict = { code: "COUPON_CONFLICT" as const, severity: "REVIEW" as const, label: "Coupon conflict", detail: "The source's description indicates 23.5%, but the master holds 24.5%." };
+    const fact = buildSecurityInsights(input({ termsIssues: [conflict] })).find((x) => x.id === "terms-COUPON_CONFLICT")!;
+    expect(fact.tone).toBe("caution");
+    expect(fact.text).toContain("Coupon conflict");
   });
 
   it("reports only the matured fact for a matured security", () => {

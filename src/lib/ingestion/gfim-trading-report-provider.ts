@@ -22,6 +22,12 @@
 // alone doesn't carry the contractual terms a Securities Master row
 // needs).
 //
+// Trade status (M7.3.1): GFIM prints a closing price for every listed
+// security; only rows with volume/trade count are TRADED. Carried
+// NOT_TRADED prices are stored only when they are new information (see
+// persistObservations), and ingestion reports rows whose source maturity
+// disagrees with the Securities Master, or that fall on/after maturity.
+//
 // observationKind is always SECONDARY_MARKET here. If an AUCTION_PRIMARY
 // observation already exists for the same (security, date) — the only
 // other observationKind this platform writes — that row is left alone
@@ -89,6 +95,15 @@ interface WpMediaItem {
   mime_type: string;
 }
 
+function toDiscoveredReport(item: WpMediaItem): DiscoveredReport | null {
+  const title = item.title?.rendered ?? "";
+  if (!/^TRADING REPORT FOR GFIM-/i.test(title.trim())) return null;
+  if (!item.mime_type?.includes("spreadsheet")) return null;
+  const reportDate = parseReportDateFromTitle(title);
+  if (!reportDate) return null;
+  return { url: item.source_url, filename: title.trim(), reportDate, mediaId: item.id };
+}
+
 /** Finds the most recent "TRADING REPORT FOR GFIM-..." .xlsx attachment via GFIM's public media API. Returns null if none found (never throws for "nothing new"). */
 export async function discoverLatestDailyTradingReport(): Promise<DiscoveredReport | null> {
   const url = `${WP_MEDIA_API}?search=${encodeURIComponent("trading report for gfim")}&orderby=date&order=desc&per_page=10`;
@@ -97,16 +112,32 @@ export async function discoverLatestDailyTradingReport(): Promise<DiscoveredRepo
 
   let best: DiscoveredReport | null = null;
   for (const item of json as WpMediaItem[]) {
-    const title = item.title?.rendered ?? "";
-    if (!/^TRADING REPORT FOR GFIM-/i.test(title.trim())) continue;
-    if (!item.mime_type?.includes("spreadsheet")) continue;
-    const reportDate = parseReportDateFromTitle(title);
-    if (!reportDate) continue;
-    if (!best || reportDate.getTime() > best.reportDate.getTime()) {
-      best = { url: item.source_url, filename: title.trim(), reportDate, mediaId: item.id };
-    }
+    const report = toDiscoveredReport(item);
+    if (report && (!best || report.reportDate.getTime() > best.reportDate.getTime())) best = report;
   }
   return best;
+}
+
+/** Every daily trading report the public media API lists on/after `fromDate`, OLDEST first (one report per date). Pages are bounded so a misbehaving API can never loop forever. */
+export async function discoverDailyTradingReports(fromDate: Date, maxPages = 10): Promise<DiscoveredReport[]> {
+  const byDate = new Map<string, DiscoveredReport>();
+  for (let page = 1; page <= maxPages; page++) {
+    const url = `${WP_MEDIA_API}?search=${encodeURIComponent("trading report for gfim")}&orderby=date&order=desc&per_page=100&page=${page}`;
+    let json: unknown;
+    try {
+      json = await fetchGfimJson(url);
+    } catch {
+      break; // WordPress answers past-the-end pages with HTTP 400
+    }
+    if (!Array.isArray(json) || json.length === 0) break;
+    for (const item of json as WpMediaItem[]) {
+      const report = toDiscoveredReport(item);
+      if (!report || report.reportDate.getTime() < fromDate.getTime()) continue;
+      const key = report.reportDate.toISOString().slice(0, 10);
+      if (!byDate.has(key)) byDate.set(key, report);
+    }
+  }
+  return [...byDate.values()].sort((a, b) => a.reportDate.getTime() - b.reportDate.getTime());
 }
 
 // ---------------------------------------------------------------------------
@@ -124,30 +155,70 @@ export interface AuctionConflict {
   observationDate: string;
 }
 
+/** A source row whose own maturity date disagrees with the Securities Master — the ISIN matched, but the two GFIM publications disagree on terms (M7.3.1). Persisted for provenance; the quality layer withholds it from analytics. */
+export interface TermsConflict {
+  isin: string;
+  masterMaturityDate: string;
+  sourceMaturityDate: string;
+  sourceSecurityDescription: string | null;
+}
+
+/** A row dated on/after the security's contractual maturity (per the Securities Master). Persisted only when it is a real trade, and always flagged. */
+export interface PostMaturityRow {
+  isin: string;
+  maturityDate: string;
+  tradeStatus: "TRADED" | "NOT_TRADED";
+}
+
+interface MatchedSecurity {
+  id: string;
+  maturityDate: Date;
+}
+
+function samePrice(a: unknown, b: string | null): boolean {
+  if (a === null || a === undefined) return b === null;
+  if (b === null) return false;
+  return Math.abs(Number(a) - Number(b)) < 0.00005; // stored at 4dp
+}
+
 async function persistObservations(
   runId: string,
   sourceId: string,
   reportDate: Date,
   rows: NormalisedTradingObservationRow[],
-): Promise<{ inserted: number; updated: number; unmatched: UnmatchedIsin[]; auctionConflicts: AuctionConflict[] }> {
+): Promise<{
+  inserted: number;
+  updated: number;
+  carriedSkipped: number;
+  unmatched: UnmatchedIsin[];
+  auctionConflicts: AuctionConflict[];
+  termsConflicts: TermsConflict[];
+  postMaturity: PostMaturityRow[];
+}> {
   const db = getPrisma();
   let inserted = 0;
   let updated = 0;
+  let carriedSkipped = 0;
   const unmatched: UnmatchedIsin[] = [];
   const auctionConflicts: AuctionConflict[] = [];
-  const securityIdCache = new Map<string, string | null>();
+  const termsConflicts: TermsConflict[] = [];
+  const postMaturity: PostMaturityRow[] = [];
+  const securityCache = new Map<string, MatchedSecurity | null>();
+  const reportIso = reportDate.toISOString().slice(0, 10);
 
   for (const row of rows) {
-    let securityId = securityIdCache.get(row.isin);
-    if (securityId === undefined) {
-      const security = await db.fixedIncomeSecurity.findUnique({ where: { isin: row.isin } });
-      securityId = security?.id ?? null;
-      securityIdCache.set(row.isin, securityId);
+    let security = securityCache.get(row.isin);
+    if (security === undefined) {
+      const found = await db.fixedIncomeSecurity.findUnique({ where: { isin: row.isin }, select: { id: true, maturityDate: true } });
+      security = found ?? null;
+      securityCache.set(row.isin, security);
     }
-    if (!securityId) {
+    if (!security) {
       unmatched.push({ isin: row.isin, sheet: row.sheet, securityDescription: row.securityDescription });
       continue;
     }
+    const securityId = security.id;
+    const masterMaturityIso = security.maturityDate.toISOString().slice(0, 10);
 
     const existing = await db.fixedIncomeObservation.findUnique({
       where: { securityId_observationDate: { securityId, observationDate: reportDate } },
@@ -155,37 +226,56 @@ async function persistObservations(
     if (existing && existing.observationKind === "AUCTION_PRIMARY") {
       // Never let a secondary-market trade silently overwrite a primary
       // auction clearing rate recorded for the same security/date.
-      auctionConflicts.push({ isin: row.isin, observationDate: reportDate.toISOString().slice(0, 10) });
+      auctionConflicts.push({ isin: row.isin, observationDate: reportIso });
       continue;
     }
 
+    // A carried (NOT_TRADED) closing price is only new information when it
+    // differs from the security's latest earlier observation — GFIM repeats
+    // the same carried price every day, and storing each repeat would invent
+    // a daily price history that never traded. An existing row for this
+    // exact date is always updated, so earlier misclassified rows get
+    // corrected in place (never deleted — CLAUDE.md §3.3).
+    if (row.tradeStatus === "NOT_TRADED" && !existing) {
+      const prior = await db.fixedIncomeObservation.findFirst({
+        where: { securityId, observationDate: { lt: reportDate } },
+        orderBy: { observationDate: "desc" },
+      });
+      if (prior && samePrice(prior.cleanPrice, row.cleanPrice) && samePrice(prior.sourceYieldPct, row.sourceYieldPct)) {
+        carriedSkipped++;
+        continue;
+      }
+    }
+
+    if (row.sourceMaturityDate && row.sourceMaturityDate !== masterMaturityIso) {
+      termsConflicts.push({ isin: row.isin, masterMaturityDate: masterMaturityIso, sourceMaturityDate: row.sourceMaturityDate, sourceSecurityDescription: row.securityDescription });
+    }
+    if (security.maturityDate.getTime() <= reportDate.getTime()) {
+      postMaturity.push({ isin: row.isin, maturityDate: masterMaturityIso, tradeStatus: row.tradeStatus });
+    }
+
+    const data = {
+      cleanPrice: row.cleanPrice,
+      sourceYieldPct: row.sourceYieldPct,
+      volumeTradedGhs: row.volumeTradedGhs,
+      observationKind: "SECONDARY_MARKET" as const,
+      tradeStatus: row.tradeStatus,
+      numberOfTrades: row.numberOfTrades,
+      sourceSecurityDescription: row.securityDescription,
+      sourceMaturityDate: row.sourceMaturityDate ? new Date(`${row.sourceMaturityDate}T00:00:00.000Z`) : null,
+      sourceId,
+      ingestionRunId: runId,
+    };
     await db.fixedIncomeObservation.upsert({
       where: { securityId_observationDate: { securityId, observationDate: reportDate } },
-      update: {
-        cleanPrice: row.cleanPrice,
-        sourceYieldPct: row.sourceYieldPct,
-        volumeTradedGhs: row.volumeTradedGhs,
-        observationKind: "SECONDARY_MARKET",
-        sourceId,
-        retrievedAt: new Date(),
-        ingestionRunId: runId,
-      },
-      create: {
-        securityId,
-        observationDate: reportDate,
-        cleanPrice: row.cleanPrice,
-        sourceYieldPct: row.sourceYieldPct,
-        volumeTradedGhs: row.volumeTradedGhs,
-        observationKind: "SECONDARY_MARKET",
-        sourceId,
-        ingestionRunId: runId,
-      },
+      update: { ...data, retrievedAt: new Date() },
+      create: { securityId, observationDate: reportDate, ...data },
     });
     if (existing) updated++;
     else inserted++;
   }
 
-  return { inserted, updated, unmatched, auctionConflicts };
+  return { inserted, updated, carriedSkipped, unmatched, auctionConflicts, termsConflicts, postMaturity };
 }
 
 // ---------------------------------------------------------------------------
@@ -202,10 +292,18 @@ export interface GfimTradingReportImportResult {
   recordsAccepted: number;
   recordsRejected: number;
   noTradeCount: number;
+  /** Rows the source reports as actually traded on the report date. */
+  tradedCount: number;
+  /** Rows with a carried closing price but no trade on the report date. */
+  notTradedCount: number;
   inserted: number;
   updated: number;
+  /** NOT_TRADED rows not stored because they repeat the security's latest earlier observation unchanged. */
+  carriedSkipped: number;
   unmatched: UnmatchedIsin[];
   auctionConflicts: AuctionConflict[];
+  termsConflicts: TermsConflict[];
+  postMaturity: PostMaturityRow[];
   errors: { row: unknown; errors: string[] }[];
   sampleValid: NormalisedTradingObservationRow[];
 }
@@ -250,10 +348,15 @@ export async function importGfimTradingReportFromBuffer(
         recordsAccepted: validation.traded.length,
         recordsRejected: validation.invalid.length,
         noTradeCount: validation.noTrade.length,
+        tradedCount: validation.traded.filter((r) => r.tradeStatus === "TRADED").length,
+        notTradedCount: validation.traded.filter((r) => r.tradeStatus === "NOT_TRADED").length,
         inserted: 0,
         updated: 0,
+        carriedSkipped: 0,
         unmatched: [],
         auctionConflicts: [],
+        termsConflicts: [],
+        postMaturity: [],
         errors: validation.invalid,
         sampleValid: validation.traded.slice(0, PREVIEW_SAMPLE_SIZE),
       };
@@ -268,10 +371,15 @@ export async function importGfimTradingReportFromBuffer(
         recordsAccepted: 0,
         recordsRejected: 0,
         noTradeCount: 0,
+        tradedCount: 0,
+        notTradedCount: 0,
         inserted: 0,
         updated: 0,
+        carriedSkipped: 0,
         unmatched: [],
         auctionConflicts: [],
+        termsConflicts: [],
+        postMaturity: [],
         errors: [{ row: {}, errors: [message] }],
         sampleValid: [],
       };
@@ -288,7 +396,12 @@ export async function importGfimTradingReportFromBuffer(
 
   try {
     const { rawRows, validation, resolvedDate } = await parseAndValidate();
-    const { inserted, updated, unmatched, auctionConflicts } = await persistObservations(runId, dataSource.id, resolvedDate, validation.traded);
+    const { inserted, updated, carriedSkipped, unmatched, auctionConflicts, termsConflicts, postMaturity } = await persistObservations(
+      runId,
+      dataSource.id,
+      resolvedDate,
+      validation.traded,
+    );
 
     const run = await completeRun(runId, {
       recordsRead: rawRows.length,
@@ -305,10 +418,15 @@ export async function importGfimTradingReportFromBuffer(
       recordsAccepted: run.recordsAccepted,
       recordsRejected: run.recordsRejected,
       noTradeCount: validation.noTrade.length,
+      tradedCount: validation.traded.filter((r) => r.tradeStatus === "TRADED").length,
+      notTradedCount: validation.traded.filter((r) => r.tradeStatus === "NOT_TRADED").length,
       inserted,
       updated,
+      carriedSkipped,
       unmatched,
       auctionConflicts,
+      termsConflicts,
+      postMaturity,
       errors: validation.invalid,
       sampleValid: validation.traded.slice(0, PREVIEW_SAMPLE_SIZE),
     };
@@ -324,14 +442,45 @@ export async function importGfimTradingReportFromBuffer(
       recordsAccepted: 0,
       recordsRejected: 0,
       noTradeCount: 0,
+      tradedCount: 0,
+      notTradedCount: 0,
       inserted: 0,
       updated: 0,
+      carriedSkipped: 0,
       unmatched: [],
       auctionConflicts: [],
+      termsConflicts: [],
+      postMaturity: [],
       errors: [],
       sampleValid: [],
     };
   }
+}
+
+/**
+ * Backfill (M7.3.1): imports every report on/after `fromDate`, oldest
+ * first, through exactly the same parse/match/persist path as the daily
+ * import — so each TRADED observation lands on its real trade date and
+ * carried prices are de-duplicated against the history built so far.
+ * Idempotent: re-running re-upserts the same (security, date) rows.
+ */
+export async function backfillGfimTradingReports(
+  fromDate: Date,
+  onProgress?: (r: GfimTradingReportImportResult) => void,
+): Promise<GfimTradingReportImportResult[]> {
+  const reports = await discoverDailyTradingReports(fromDate);
+  const results: GfimTradingReportImportResult[] = [];
+  for (const report of reports) {
+    const buffer = await fetchGfimBuffer(report.url);
+    const result = await importGfimTradingReportFromBuffer(report.filename, buffer, report.reportDate, {
+      commit: true,
+      triggeredBy: "cli-backfill",
+      acquisitionMethod: "OFFICIAL_WEB_FETCH",
+    });
+    results.push(result);
+    onProgress?.(result);
+  }
+  return results;
 }
 
 /** Mode A entrypoint: discovers the latest report via GFIM's public media API, downloads it, and commits directly — no human preview step, mirroring the BoG automated CLIs. */

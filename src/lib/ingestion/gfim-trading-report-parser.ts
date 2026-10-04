@@ -19,11 +19,16 @@
 //     the same header shape across all three, differing only in which
 //     bonds they list. Header row is also row 4.
 //
-// A blank OPENING/CLOSING cell means the security simply did not trade
-// that day (illiquidity is real information, not missing data to paper
-// over) — such rows are parsed but excluded from the "has a genuine
-// trade" result; they are never forward-filled or treated as a zero
-// (CLAUDE.md: missing is not zero).
+// TRADE DETECTION (corrected in M7.3.1): GFIM publishes a closing price for
+// EVERY listed security, traded or not. For a security that did not trade,
+// the "closing price" is its LAST trade's price carried forward — verified
+// across 299 daily reports (Jul 2025 – Oct 2026): e.g. Kasapreko
+// GHCKCP075566 printed 99.8057 every day after its only trade on
+// 7 May 2026. A row is a trade on the report date ONLY when VOLUME or
+// NUMBER TRADED is positive; a price with neither is classified NOT_TRADED
+// and must never be treated as a market price dated on the report date.
+// A row with no price and no yield at all is simply skipped (CLAUDE.md:
+// missing is not zero).
 //
 // Column lookup is by HEADER NAME (normalized, matching file-parse.ts's
 // convention), not fixed index — resilient to GFIM reordering columns
@@ -54,6 +59,7 @@ export interface RawTradingReportRow {
   closingPrice: unknown;
   closingYield: unknown;
   volume: unknown;
+  numberTraded: unknown;
   maturityDateCell: unknown;
 }
 
@@ -105,6 +111,7 @@ export function extractSheetRows(workbook: ExcelJS.Workbook, kind: TradingReport
   const yieldCol = kind === "CORPORATE" ? null : findColumn(colIndex, ["closing yield"]);
   const volumeCol = kind === "CORPORATE" ? findColumn(colIndex, ["volume traded"]) : findColumn(colIndex, ["volume"]);
   const maturityCol = findColumn(colIndex, ["maturity date", "maturity"]);
+  const numberTradedCol = findColumn(colIndex, ["number traded"]);
 
   if (!isinCol) return []; // sheet structure unrecognised — nothing can be safely matched
 
@@ -122,6 +129,7 @@ export function extractSheetRows(workbook: ExcelJS.Workbook, kind: TradingReport
       closingPrice: priceCol ? cellToPlain(row.getCell(priceCol).value) : null,
       closingYield: yieldCol ? cellToPlain(row.getCell(yieldCol).value) : null,
       volume: volumeCol ? cellToPlain(row.getCell(volumeCol).value) : null,
+      numberTraded: numberTradedCol ? cellToPlain(row.getCell(numberTradedCol).value) : null,
       maturityDateCell: maturityCol ? cellToPlain(row.getCell(maturityCol).value) : null,
     });
   }
@@ -179,12 +187,17 @@ export interface NormalisedTradingObservationRow {
   cleanPrice: string | null;
   sourceYieldPct: string | null;
   volumeTradedGhs: string | null;
+  /** TRADED only when the source reports volume or a trade count for this date — see module header. */
+  tradeStatus: "TRADED" | "NOT_TRADED";
+  numberOfTrades: number | null;
+  /** The source row's own maturity date (YYYY-MM-DD), for cross-checking the Securities Master — null when the cell is blank or not a usable date. */
+  sourceMaturityDate: string | null;
 }
 
 export interface TradingReportValidationResult {
-  /** Rows with a genuine trade (price and/or yield present) for an ISIN — ready to persist as an observation. */
+  /** Rows carrying a price and/or yield for an ISIN, each classified TRADED or NOT_TRADED (carried closing price). */
   traded: NormalisedTradingObservationRow[];
-  /** Rows with a recognisable ISIN but no trade that day — not an error, just no observation to record (CLAUDE.md: missing is not zero). */
+  /** Rows with a recognisable ISIN but neither price nor yield — nothing to record (CLAUDE.md: missing is not zero). */
   noTrade: { isin: string; sheet: TradingReportSheetKind }[];
   /** Rows that couldn't be parsed at all (malformed numeric cell etc.) — surfaced for analyst review, never silently dropped. */
   invalid: { row: RawTradingReportRow; errors: string[] }[];
@@ -202,6 +215,33 @@ function parseNumericCell(value: unknown, field: string, errors: string[]): stri
     return null;
   }
   return n.toString();
+}
+
+function parseCount(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  const n = typeof value === "number" ? value : Number(value);
+  return Number.isInteger(n) && n >= 0 ? n : null;
+}
+
+/**
+ * The maturity cell as an ISO date, or null. GFIM's date columns contain
+ * occasional Excel-serial junk (e.g. 1899-12-31 for an empty date cell),
+ * so anything outside a plausible bond-maturity range is treated as absent
+ * rather than compared — it is provenance, not a contractual term.
+ */
+export function parseSourceDate(value: unknown): string | null {
+  let d: Date | null = null;
+  if (value instanceof Date) d = value;
+  else if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}/.test(value.trim())) d = new Date(`${value.trim().slice(0, 10)}T00:00:00.000Z`);
+  if (!d || Number.isNaN(d.getTime())) return null;
+  const year = d.getUTCFullYear();
+  if (year < 1990 || year > 2100) return null;
+  return d.toISOString().slice(0, 10);
+}
+
+/** True when the source reports trading activity for the row's date — volume or a trade count above zero. */
+export function isTradedRow(volumeTradedGhs: string | null, numberOfTrades: number | null): boolean {
+  return (volumeTradedGhs !== null && Number(volumeTradedGhs) > 0) || (numberOfTrades !== null && numberOfTrades > 0);
 }
 
 export function validateTradingReportRows(rows: RawTradingReportRow[]): TradingReportValidationResult {
@@ -225,13 +265,17 @@ export function validateTradingReportRows(rows: RawTradingReportRow[]): TradingR
       continue;
     }
 
+    const numberOfTrades = parseCount(row.numberTraded);
     traded.push({
       sheet: row.sheet,
       isin: row.isin!,
-      securityDescription: row.securityDescription,
+      securityDescription: typeof row.securityDescription === "string" ? row.securityDescription.trim() : null,
       cleanPrice,
       sourceYieldPct,
       volumeTradedGhs,
+      tradeStatus: isTradedRow(volumeTradedGhs, numberOfTrades) ? "TRADED" : "NOT_TRADED",
+      numberOfTrades,
+      sourceMaturityDate: parseSourceDate(row.maturityDateCell),
     });
   }
 

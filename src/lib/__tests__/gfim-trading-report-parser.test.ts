@@ -11,7 +11,7 @@
 
 import { describe, it, expect } from "vitest";
 import ExcelJS from "exceljs";
-import { extractSheetRows, extractAllSheets, validateTradingReportRows, extractReportDateFromWorkbook } from "../ingestion/gfim-trading-report-parser";
+import { extractSheetRows, extractAllSheets, validateTradingReportRows, extractReportDateFromWorkbook, isTradedRow, parseSourceDate } from "../ingestion/gfim-trading-report-parser";
 
 function addTitleRows(sheet: ExcelJS.Worksheet, label: string) {
   sheet.addRow([]);
@@ -40,7 +40,7 @@ async function buildWorkbook(): Promise<ExcelJS.Workbook> {
     "APPLICABLE\nDATE",
   ]);
   corp.addRow(["KASAPREKO PLC", 1, "KCP-BD-29/01/27-C0878-26", "GHCKCP073272", null, null, null, null, null, null, 119, new Date("2027-01-29")]); // no trade
-  corp.addRow([null, 2, "KCP-NT-12/09/28-C0933-23.50", "GHCKCP075566", 99.5, 99.81, null, null, 99.5, 99.81, 711, new Date("2028-09-12")]); // real trade
+  corp.addRow([null, 2, "KCP-NT-12/09/28-C0933-23.50", "GHCKCP075566", 99.5, 99.81, null, null, 99.5, 99.81, 711, new Date("2028-09-12")]); // price but NO volume/trades: a carried closing price (M7.3.1)
   corp.addRow(["UNKNOWN ISSUER", 3, "ZZZ-BD-01/01/30", "ZZUNKNOWNISIN01", 90, 91, 1000, 2, 90, 91, 1000, new Date("2030-01-01")]); // unmatched ISIN
 
   const newGog = wb.addWorksheet("NEW GOG NOTES AND BONDS");
@@ -142,5 +142,40 @@ describe("extractReportDateFromWorkbook", () => {
     const wb = new ExcelJS.Workbook();
     wb.addWorksheet("EMPTY");
     expect(extractReportDateFromWorkbook(wb)).toBeNull();
+  });
+});
+
+describe("trade classification (M7.3.1)", () => {
+  it("classifies a row as TRADED only when volume or number traded is positive", async () => {
+    const wb = await buildWorkbook();
+    const { traded } = validateTradingReportRows(extractAllSheets(wb));
+    const byIsin = new Map(traded.map((r) => [r.isin, r]));
+    expect(byIsin.get("GHGGOGI02204")!.tradeStatus).toBe("TRADED");
+    expect(byIsin.get("GHGGOGI02204")!.numberOfTrades).toBe(1);
+    // A closing price with no volume/trades is GFIM's carried last price, not a trade on the report date.
+    expect(byIsin.get("GHCKCP075566")!.tradeStatus).toBe("NOT_TRADED");
+    expect(byIsin.get("GHGGOG065145")!.tradeStatus).toBe("NOT_TRADED");
+  });
+
+  it("keeps the source's own description and maturity date for terms cross-checking", async () => {
+    const wb = await buildWorkbook();
+    const row = validateTradingReportRows(extractAllSheets(wb)).traded.find((r) => r.isin === "GHCKCP075566")!;
+    expect(row.securityDescription).toBe("KCP-NT-12/09/28-C0933-23.50");
+    expect(row.sourceMaturityDate).toBe("2028-09-12");
+  });
+
+  it("isTradedRow: zero volume and zero trades is not a trade", () => {
+    expect(isTradedRow(null, null)).toBe(false);
+    expect(isTradedRow("0", 0)).toBe(false);
+    expect(isTradedRow("120000", null)).toBe(true);
+    expect(isTradedRow(null, 2)).toBe(true);
+  });
+
+  it("parseSourceDate ignores GFIM's Excel-serial junk dates instead of comparing them", () => {
+    expect(parseSourceDate(new Date("2028-09-12T00:00:00.000Z"))).toBe("2028-09-12");
+    expect(parseSourceDate(new Date("1899-12-31T00:00:00.000Z"))).toBeNull();
+    expect(parseSourceDate("2027-04-08")).toBe("2027-04-08");
+    expect(parseSourceDate("-46297")).toBeNull();
+    expect(parseSourceDate(null)).toBeNull();
   });
 });

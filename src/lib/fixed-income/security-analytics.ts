@@ -11,12 +11,24 @@
 // yield is published (no price), that yield is used directly as YTM
 // without inventing a price to back it out of — `ytmSource` always says
 // which happened, so a UI never presents one as the other.
+//
+// M7.3.1 — two corrections:
+//   1. The observed YTM is solved AS OF THE OBSERVATION DATE (the yield the
+//      market actually traded at). Solving a months-old price as of today
+//      applies it to a shorter remaining life and different accrued
+//      interest, which manufactured yields such as ~47% for a GoG bond that
+//      really traded at 30.15% on 2 Feb 2026. Duration/DV01 are still
+//      measured at the valuation date, at that observed yield.
+//   2. Every observation carries a deterministic quality assessment
+//      (observation-quality.ts). Only `quality.analyticsEligible`
+//      observations may feed derived analytics; the rest stay visible with
+//      their evidence.
 // ---------------------------------------------------------------------------
 
-import { computeAccruedInterest, cleanToDirty } from "./accrued";
 import { computeDuration, type DurationResult } from "./duration";
-import { computeCurrentYield, computeYtm } from "./yield";
+import { computeCurrentYield } from "./yield";
 import { daysBetween } from "./cashflow";
+import { assessObservationQuality, solveObservedYtm, type ObservationQuality } from "./observation-quality";
 import type { BondTerms, FixedIncomeUnavailableReason } from "./types";
 
 export type ObservationKind = "AUCTION_PRIMARY" | "SECONDARY_MARKET";
@@ -26,6 +38,10 @@ export interface ObservationInput {
   cleanPrice: number | null;
   sourceYieldPct: number | null;
   observationKind: ObservationKind;
+  /** M7.3.1 — null when the source doesn't report trade activity. Defaults to null when omitted. */
+  tradeStatus?: "TRADED" | "NOT_TRADED" | null;
+  sourceMaturityDate?: Date | null;
+  sourceSecurityDescription?: string | null;
 }
 
 export type YtmSource = "SOLVED_FROM_PRICE" | "SOURCE_QUOTED";
@@ -34,9 +50,11 @@ export interface SecurityAnalytics {
   isMatured: boolean;
   tenorDays: number;
   cleanPrice: number | null;
+  /** Accrued interest and dirty price AT THE OBSERVATION DATE (the settlement the observed price relates to). */
   accruedInterest: number | null;
   dirtyPrice: number | null;
   currentYieldPct: number | null;
+  /** Observed yield to maturity as of the observation date — see module header. */
   ytmPct: number | null;
   ytmSource: YtmSource | null;
   /**
@@ -51,6 +69,8 @@ export interface SecurityAnalytics {
   /** Which kind of observation the YTM/price/yield above is based on — null only when there is no observation at all. Never conflate an auction clearing rate with a secondary-market trade (M7.1 §8). */
   observationKind: ObservationKind | null;
   observationDate: string | null;
+  /** Data-quality assessment of the observation (M7.3.1) — null when there is no observation. */
+  quality: ObservationQuality | null;
   macaulayDurationYears: number | null;
   modifiedDurationYears: number | null;
   dv01: number | null;
@@ -72,6 +92,7 @@ function emptyAnalytics(tenorDays: number, isMatured: boolean, reason: FixedInco
     sourceQuotedYieldPct: null,
     observationKind: null,
     observationDate: null,
+    quality: null,
     macaulayDurationYears: null,
     modifiedDurationYears: null,
     dv01: null,
@@ -92,28 +113,38 @@ export function buildSecurityAnalytics(terms: BondTerms, observation: Observatio
     return emptyAnalytics(tenorDays, false, "MISSING_MARKET_DATA", "No market observation (price or yield) has been imported for this security yet.");
   }
 
+  const quality = assessObservationQuality({
+    terms,
+    observationDate: observation.observationDate,
+    tradeStatus: observation.tradeStatus ?? null,
+    cleanPrice: observation.cleanPrice,
+    sourceYieldPct: observation.sourceYieldPct,
+    sourceMaturityDate: observation.sourceMaturityDate ?? null,
+    sourceSecurityDescription: observation.sourceSecurityDescription ?? null,
+  });
+
   let ytmPct: number | null = null;
   let ytmSource: YtmSource | null = null;
   let accruedInterest: number | null = null;
   let dirtyPrice: number | null = null;
   let currentYieldPct: number | null = null;
 
-  if (observation.cleanPrice !== null) {
-    const accruedResult = computeAccruedInterest(terms, settlementDate);
-    if (accruedResult.ok) {
-      accruedInterest = accruedResult.accruedInterest;
-      dirtyPrice = cleanToDirty(observation.cleanPrice, accruedInterest);
-      const ytmResult = computeYtm(terms, settlementDate, dirtyPrice);
-      if (ytmResult.ok) {
-        ytmPct = ytmResult.ytmPct;
+  // A carried (NOT_TRADED) price has no date of its own, so no yield is implied from it.
+  if (observation.tradeStatus !== "NOT_TRADED") {
+    if (observation.cleanPrice !== null) {
+      const solved = solveObservedYtm(terms, observation.observationDate, observation.cleanPrice);
+      if (solved.ok) {
+        accruedInterest = solved.accruedInterest;
+        dirtyPrice = observation.cleanPrice + solved.accruedInterest;
+        ytmPct = solved.ytmPct;
         ytmSource = "SOLVED_FROM_PRICE";
       }
+      const currentYieldResult = computeCurrentYield(terms, observation.cleanPrice);
+      if (currentYieldResult.ok) currentYieldPct = currentYieldResult.currentYieldPct;
+    } else if (observation.sourceYieldPct !== null) {
+      ytmPct = observation.sourceYieldPct;
+      ytmSource = "SOURCE_QUOTED";
     }
-    const currentYieldResult = computeCurrentYield(terms, observation.cleanPrice);
-    if (currentYieldResult.ok) currentYieldPct = currentYieldResult.currentYieldPct;
-  } else if (observation.sourceYieldPct !== null) {
-    ytmPct = observation.sourceYieldPct;
-    ytmSource = "SOURCE_QUOTED";
   }
 
   let duration: DurationResult | null = null;
@@ -122,25 +153,37 @@ export function buildSecurityAnalytics(terms: BondTerms, observation: Observatio
     if (durationResult.ok) duration = durationResult;
   }
 
+  const base = {
+    isMatured: false,
+    tenorDays,
+    cleanPrice: observation.cleanPrice,
+    sourceQuotedYieldPct: observation.sourceYieldPct,
+    observationKind: observation.observationKind,
+    observationDate: observation.observationDate.toISOString().slice(0, 10),
+    quality,
+  };
+
   if (ytmPct === null && duration === null) {
     return {
-      ...emptyAnalytics(tenorDays, false, "MISSING_MARKET_DATA", "This observation has neither a usable price nor yield for this instrument type."),
-      cleanPrice: observation.cleanPrice,
+      ...emptyAnalytics(
+        tenorDays,
+        false,
+        "MISSING_MARKET_DATA",
+        observation.tradeStatus === "NOT_TRADED"
+          ? "The source reports no trade — its closing price is carried forward from an earlier, unknown date, so no market yield is implied."
+          : "This observation has neither a usable price nor yield for this instrument type.",
+      ),
+      ...base,
     };
   }
 
   return {
-    isMatured: false,
-    tenorDays,
-    cleanPrice: observation.cleanPrice,
+    ...base,
     accruedInterest,
     dirtyPrice,
     currentYieldPct,
     ytmPct,
     ytmSource,
-    sourceQuotedYieldPct: observation.sourceYieldPct,
-    observationKind: observation.observationKind,
-    observationDate: observation.observationDate.toISOString().slice(0, 10),
     macaulayDurationYears: duration?.macaulayDurationYears ?? null,
     modifiedDurationYears: duration?.modifiedDurationYears ?? null,
     dv01: duration?.dv01 ?? null,

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { findComparables, findInYieldRange, relativeValue, type ComparableRow } from "../comparables";
+import { findComparables, findInYieldRange, relativeValue, comparability, COMPARABLE_TENOR_BAND_DAYS, type ComparableRow } from "../comparables";
 
 function row(overrides: Partial<ComparableRow>): ComparableRow {
   return {
@@ -101,5 +101,52 @@ describe("findInYieldRange (M7.3 §16 — similar returns elsewhere)", () => {
 
   it("accepts the band bounds in either order and a custom width", () => {
     expect(findInYieldRange(universe, 25, 23, new Set(["SEL"]), 0).map((x) => x.instrumentCode)).toEqual([]);
+  });
+});
+
+describe("relative-value hardening (M7.3.1)", () => {
+  const target = row({ instrumentCode: "KCP-SEP28", ytmPct: 23.5, tenorDays: 709, classification: "CORPORATE" });
+  const universe: ComparableRow[] = [
+    row({ instrumentCode: "GOG-2039", ytmPct: 23.45, tenorDays: 4683, classification: "SOVEREIGN", instrumentType: "GOVERNMENT_BOND" }), // closest yield, radically different tenor
+    row({ instrumentCode: "LGH-OCT27", ytmPct: 24.3, tenorDays: 368, classification: "CORPORATE" }), // similar yield & tenor
+    row({ instrumentCode: "GOG-MAY28", ytmPct: 24.66, tenorDays: 602, classification: "SOVEREIGN", instrumentType: "GOVERNMENT_BOND" }), // sovereign, similar tenor
+    row({ instrumentCode: "STALE-1", ytmPct: 23.6, tenorDays: 700, freshness: "STALE", observationDate: "2026-05-07" }),
+    row({ instrumentCode: "QUESTIONABLE", ytmPct: 23.5, tenorDays: 709, analyticsEligible: false }), // failed a quality check
+  ];
+
+  it("never offers an observation that failed a data-quality check", () => {
+    for (const f of ["SIMILAR_RETURN", "SIMILAR_MATURITY", "HIGHER_YIELD", "GOVERNMENT_ONLY", "CORPORATE_ONLY"] as const) {
+      expect(findComparables(target, universe, f).map((r) => r.instrumentCode)).not.toContain("QUESTIONABLE");
+    }
+    expect(findInYieldRange(universe, 23, 24, new Set()).map((r) => r.instrumentCode)).not.toContain("QUESTIONABLE");
+  });
+
+  it("lists similar-yield-and-tenor alternatives before a closer yield at a radically different tenor", () => {
+    const order = findComparables(target, universe, "SIMILAR_RETURN").map((r) => r.instrumentCode);
+    expect(order.indexOf("GOG-2039")).toBe(order.length - 1);
+    expect(order.slice(0, 3)).toEqual(["STALE-1", "LGH-OCT27", "GOG-MAY28"]);
+  });
+
+  it("keeps stale alternatives (badged by the UI) unless recentOnly is requested", () => {
+    expect(findComparables(target, universe, "SIMILAR_RETURN").map((r) => r.instrumentCode)).toContain("STALE-1");
+    expect(findComparables(target, universe, "SIMILAR_RETURN", { recentOnly: true }).map((r) => r.instrumentCode)).not.toContain("STALE-1");
+  });
+
+  it("classifies comparability by tenor proximity to any reference security", () => {
+    expect(comparability(368, [709])).toBe("SIMILAR_YIELD_AND_TENOR");
+    expect(comparability(4683, [709])).toBe("SIMILAR_YIELD_DIFFERENT_TENOR");
+    expect(comparability(709 + COMPARABLE_TENOR_BAND_DAYS, [709])).toBe("SIMILAR_YIELD_AND_TENOR");
+    expect(comparability(4683, [709, 4500])).toBe("SIMILAR_YIELD_AND_TENOR");
+  });
+
+  it("findInYieldRange tiers by tenor proximity to the selected securities, then yield", () => {
+    const order = findInYieldRange(universe, 23.5, 23.5, new Set(), 150, [709]).map((r) => r.instrumentCode);
+    expect(order).toEqual(["GOG-MAY28", "LGH-OCT27", "STALE-1", "GOG-2039"]);
+  });
+
+  it("is deterministic regardless of input order", () => {
+    const a = findComparables(target, universe, "SIMILAR_RETURN").map((r) => r.instrumentCode);
+    const b = findComparables(target, [...universe].reverse(), "SIMILAR_RETURN").map((r) => r.instrumentCode);
+    expect(a).toEqual(b);
   });
 });
