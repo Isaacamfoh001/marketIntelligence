@@ -6,7 +6,7 @@
 // upload/preview/confirm wizard (see ImportWizard.tsx).
 // ---------------------------------------------------------------------------
 
-export type FixedIncomeDatasetType = "fixed-income-securities" | "fixed-income-observations";
+export type FixedIncomeDatasetType = "fixed-income-securities" | "fixed-income-observations" | "fixed-income-secondary-market-report";
 
 export interface FixedIncomeImportTemplate {
   type: FixedIncomeDatasetType;
@@ -38,6 +38,16 @@ export const FIXED_INCOME_IMPORT_TEMPLATES: Record<FixedIncomeDatasetType, Fixed
     requiredNote: "plus at least one of Clean Price or Yield. Observation Kind must be AUCTION_PRIMARY or SECONDARY_MARKET — never left ambiguous",
     optionalHeaders: ["Clean Price", "Yield", "Volume Traded"],
     templateFilename: "fixed-income-observations-template.csv",
+  },
+  "fixed-income-secondary-market-report": {
+    type: "fixed-income-secondary-market-report",
+    label: "GFIM Daily Trading Report (Secondary Market)",
+    description:
+      "The official GFIM daily trading report .xlsx (government and corporate bond sheets). Matches rows to existing securities by ISIN and imports real secondary-market price/yield/volume as SECONDARY_MARKET observations — a security with no trade that day is left alone, never forward-filled. Korbly fetches this automatically every day; upload here only as a manual fallback (e.g. a specific historical report an analyst has obtained directly).",
+    requiredHeaders: ["the official unmodified GFIM report .xlsx, with its CORPORATE / NEW GOG NOTES AND BONDS / OLD GOG NOTES AND BONDS sheets"],
+    requiredNote: "the report date is read from the file's own 'Date: ...' text — no column template applies",
+    optionalHeaders: [],
+    templateFilename: "",
   },
 };
 

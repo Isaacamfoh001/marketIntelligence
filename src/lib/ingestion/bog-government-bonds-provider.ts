@@ -98,6 +98,15 @@ async function persistGovBonds(
 
     const existing = await db.fixedIncomeSecurity.findUnique({ where: { instrumentCode } });
 
+    // `update` deliberately omits maturityDate/instrumentName/isin: the
+    // auction feed only ever gives an APPROXIMATE maturity (issue date +
+    // tenor in whole years) — once a more authoritative maturity/ISIN has
+    // been attached to this instrumentCode (e.g. cross-referenced against
+    // GFIM's secondary-market sheets, which publish the bond's real legal
+    // maturity — see M7.2 §10's GOG-4Y-AUCTION-2023 correction), a later
+    // re-run of this collector must never regress it back to the
+    // estimate. couponRatePct/status are safe to keep syncing from BoG,
+    // since BoG is the sole authority for those.
     const security = await db.fixedIncomeSecurity.upsert({
       where: { instrumentCode },
       update: {
@@ -107,7 +116,6 @@ async function persistGovBonds(
         classification: "SOVEREIGN",
         currency: "GHS",
         issueDate: row.observationDate,
-        maturityDate,
         couponType: "FIXED",
         couponRatePct: row.ratePct,
         couponFrequency: "SEMI_ANNUAL",

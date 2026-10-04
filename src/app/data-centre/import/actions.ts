@@ -16,6 +16,7 @@ import { importGseMarketSummary, type GseIndexImportResult } from "@/lib/ingesti
 import { importCompanyFinancials, type FinancialsImportResult } from "@/lib/ingestion/financials-provider";
 import { importFixedIncomeSecurities, type FixedIncomeSecuritiesImportResult } from "@/lib/ingestion/fixed-income-securities-provider";
 import { importFixedIncomeObservations, type FixedIncomeObservationsImportResult } from "@/lib/ingestion/fixed-income-observations-provider";
+import { importGfimTradingReportFromBuffer, type GfimTradingReportImportResult } from "@/lib/ingestion/gfim-trading-report-provider";
 import {
   MAX_UPLOAD_BYTES,
   hasAcceptedExtension,
@@ -36,6 +37,7 @@ export interface ImportActionResult {
   financials?: FinancialsImportResult;
   fixedIncomeSecurities?: FixedIncomeSecuritiesImportResult;
   fixedIncomeObservations?: FixedIncomeObservationsImportResult;
+  gfimTradingReport?: GfimTradingReportImportResult;
 }
 
 async function extractFile(formData: FormData): Promise<{ filename: string; buffer: Buffer } | { error: string }> {
@@ -62,7 +64,8 @@ function readDatasetType(formData: FormData): ImportDatasetType | null {
     value === "market-summary" ||
     value === "company-financials" ||
     value === "fixed-income-securities" ||
-    value === "fixed-income-observations"
+    value === "fixed-income-observations" ||
+    value === "fixed-income-secondary-market-report"
   ) {
     return value;
   }
@@ -100,6 +103,20 @@ async function runImport(formData: FormData, commit: boolean): Promise<ImportAct
   if (datasetType === "fixed-income-observations") {
     const fixedIncomeObservations = await importFixedIncomeObservations(filename, buffer, { commit, triggeredBy: "web" });
     return { ok: true, datasetType, filename, fixedIncomeObservations };
+  }
+
+  if (datasetType === "fixed-income-secondary-market-report") {
+    // reportDate is null here: the Mode B web upload doesn't ask the
+    // analyst for it separately — the provider derives it from the
+    // report's own in-file "Date: ..." text (see
+    // gfim-trading-report-provider.ts), which is more reliable than
+    // trusting the uploaded filename to follow GFIM's exact convention.
+    const gfimTradingReport = await importGfimTradingReportFromBuffer(filename, buffer, null, {
+      commit,
+      triggeredBy: "web",
+      acquisitionMethod: "MANUAL_FILE_IMPORT",
+    });
+    return { ok: true, datasetType, filename, gfimTradingReport };
   }
 
   const kind = datasetTypeToSecurityKind(datasetType);

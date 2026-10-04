@@ -16,6 +16,7 @@
     "ingest:bog-treasury": "node --import tsx scripts/ingest-bog-treasury.ts",
     "ingest:bog-treasury:backfill": "node --import tsx scripts/ingest-bog-treasury.ts --backfill",
     "ingest:bog-government-bonds": "node --import tsx scripts/ingest-bog-government-bonds.ts",
+    "ingest:gfim-trading-report": "node --import tsx scripts/ingest-gfim-trading-report.ts",
     "ingest:bog-mpr": "node --import tsx scripts/ingest-bog-mpr.ts",
     "ingest:gss-inflation": "node --import tsx scripts/ingest-gss-inflation.ts",
     "ingest:gss-inflation-latest": "node --import tsx scripts/ingest-gss-inflation-latest.ts",

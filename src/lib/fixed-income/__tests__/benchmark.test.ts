@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { buildSovereignYieldCurve, selectBenchmark, computeSpreadBps, WIDE_TENOR_GAP_DAYS, type YieldCurvePoint } from "../benchmark";
+import { buildSovereignYieldCurve, selectBenchmark, computeSpreadBps, WIDE_TENOR_GAP_DAYS, type YieldCurvePoint, type YieldCurvePointKind } from "../benchmark";
 
-function point(tenorDays: number, yieldPct: number): YieldCurvePoint {
-  return { tenorDays, tenorLabel: `${tenorDays}D`, yieldPct, instrumentLabel: `${tenorDays}D bill`, instrumentCode: null, isGovernmentBond: false, observationDate: "2026-01-01" };
+function point(tenorDays: number, yieldPct: number, observationKind: YieldCurvePointKind = "AUCTION_PRIMARY"): YieldCurvePoint {
+  return { tenorDays, tenorLabel: `${tenorDays}D`, yieldPct, instrumentLabel: `${tenorDays}D bill`, instrumentCode: null, isGovernmentBond: false, observationDate: "2026-01-01", observationKind };
 }
 
 describe("buildSovereignYieldCurve", () => {
@@ -30,6 +30,32 @@ describe("selectBenchmark", () => {
 
   it("returns null when the curve has no points at all", () => {
     expect(selectBenchmark(365, [])).toBeNull();
+  });
+
+  it("falls back to an AUCTION_PRIMARY point and flags it as such when no secondary point exists", () => {
+    const selection = selectBenchmark(200, curve);
+    expect(selection!.isSecondaryBenchmark).toBe(false);
+  });
+
+  it("prefers a SECONDARY_MARKET point over a closer-tenor AUCTION_PRIMARY point (M7.2 §11)", () => {
+    const mixedCurve = buildSovereignYieldCurve([
+      point(180, 22, "AUCTION_PRIMARY"), // closer tenor to target (200) but primary
+      point(400, 26, "SECONDARY_MARKET"), // farther tenor but a real secondary trade
+    ]);
+    const selection = selectBenchmark(200, mixedCurve);
+    expect(selection!.benchmark.tenorDays).toBe(400);
+    expect(selection!.isSecondaryBenchmark).toBe(true);
+  });
+
+  it("uses the nearest secondary point among several, not just the first secondary point found", () => {
+    const mixedCurve = buildSovereignYieldCurve([
+      point(91, 22, "AUCTION_PRIMARY"),
+      point(1095, 27, "SECONDARY_MARKET"),
+      point(200, 24, "SECONDARY_MARKET"),
+    ]);
+    const selection = selectBenchmark(210, mixedCurve);
+    expect(selection!.benchmark.tenorDays).toBe(200);
+    expect(selection!.isSecondaryBenchmark).toBe(true);
   });
 });
 

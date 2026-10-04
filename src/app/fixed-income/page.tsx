@@ -3,6 +3,7 @@ import { getFixedIncomeUniverse, getSovereignYieldCurve } from "@/lib/queries/fi
 import { getTreasurySnapshot, TREASURY_INSTRUMENTS, formatObservationDate } from "@/lib/queries/market-data";
 import { COUPON_FREQUENCY_LABEL } from "@/lib/fixed-income/classification";
 import { YieldCurveChart } from "@/components/YieldCurveChart";
+import { dailyFreshness } from "@/lib/freshness";
 
 export const dynamic = "force-dynamic";
 
@@ -31,6 +32,28 @@ function formatDate(iso: string): string {
   return new Date(`${iso}T00:00:00.000Z`).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
 }
 
+function ObservationCell({ latestObservationDate, observationKind, now }: { latestObservationDate: string | null; observationKind: "AUCTION_PRIMARY" | "SECONDARY_MARKET" | null; now: Date }) {
+  if (!latestObservationDate) return <span className="text-zinc-400 dark:text-zinc-500">No observation</span>;
+  const freshness = dailyFreshness(new Date(`${latestObservationDate}T00:00:00.000Z`), now);
+  return (
+    <div className="flex flex-col items-end gap-0.5">
+      <span className="whitespace-nowrap">{formatDate(latestObservationDate)}</span>
+      <div className="flex items-center gap-1">
+        {observationKind && (
+          <span
+            className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
+              observationKind === "AUCTION_PRIMARY" ? "bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400" : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"
+            }`}
+          >
+            {observationKind === "AUCTION_PRIMARY" ? "Primary" : "Secondary"}
+          </span>
+        )}
+        {freshness === "STALE" && <span className="rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">Stale</span>}
+      </div>
+    </div>
+  );
+}
+
 function CouponCell({ couponType, couponRatePct, couponFrequency }: { couponType: string; couponRatePct: number | null; couponFrequency: string | null }) {
   if (couponType === "ZERO_COUPON") return <span>Zero coupon</span>;
   if (couponType === "FLOATING") return <span>Floating{couponRatePct !== null ? ` (ref. ${couponRatePct.toFixed(2)}%)` : ""}</span>;
@@ -41,7 +64,7 @@ function CouponCell({ couponType, couponRatePct, couponFrequency }: { couponType
   );
 }
 
-function BondTable({ rows, showSpread }: { rows: Awaited<ReturnType<typeof getFixedIncomeUniverse>>; showSpread: boolean }) {
+function BondTable({ rows, showSpread, now }: { rows: Awaited<ReturnType<typeof getFixedIncomeUniverse>>; showSpread: boolean; now: Date }) {
   if (rows.length === 0) {
     return (
       <div className="rounded border border-zinc-200 bg-white px-6 py-10 text-center dark:border-zinc-800 dark:bg-zinc-900">
@@ -62,6 +85,7 @@ function BondTable({ rows, showSpread }: { rows: Awaited<ReturnType<typeof getFi
             <th className="px-4 py-2.5 text-right text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Price</th>
             <th className="px-4 py-2.5 text-right text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">YTM</th>
             {showSpread && <th className="px-4 py-2.5 text-right text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Duration</th>}
+            <th className="px-4 py-2.5 text-right text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Observation</th>
           </tr>
         </thead>
         <tbody>
@@ -89,6 +113,9 @@ function BondTable({ rows, showSpread }: { rows: Awaited<ReturnType<typeof getFi
                   {r.analytics.modifiedDurationYears !== null ? `${r.analytics.modifiedDurationYears.toFixed(2)}y` : "—"}
                 </td>
               )}
+              <td className="whitespace-nowrap px-4 py-2.5 text-right text-xs text-zinc-600 dark:text-zinc-400">
+                <ObservationCell latestObservationDate={r.latestObservationDate} observationKind={r.analytics.observationKind} now={now} />
+              </td>
             </tr>
           ))}
         </tbody>
@@ -98,7 +125,8 @@ function BondTable({ rows, showSpread }: { rows: Awaited<ReturnType<typeof getFi
 }
 
 export default async function FixedIncomePage() {
-  const [universe, curve, treasury] = await Promise.all([getFixedIncomeUniverse(), getSovereignYieldCurve(), getTreasurySnapshot()]);
+  const now = new Date();
+  const [universe, curve, treasury] = await Promise.all([getFixedIncomeUniverse(now), getSovereignYieldCurve(now), getTreasurySnapshot()]);
 
   const governmentBonds = universe.filter((r) => r.instrumentType === "GOVERNMENT_BOND");
   const corporateBonds = universe.filter((r) => r.instrumentType === "CORPORATE_BOND");
@@ -158,13 +186,13 @@ export default async function FixedIncomePage() {
       {/* ------------------------------------------------------------ */}
       <section>
         <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Government Bonds</h2>
-        <BondTable rows={governmentBonds} showSpread={false} />
+        <BondTable rows={governmentBonds} showSpread={false} now={now} />
       </section>
 
       {/* ------------------------------------------------------------ */}
       <section>
         <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Corporate Bonds</h2>
-        <BondTable rows={corporateBonds} showSpread={true} />
+        <BondTable rows={corporateBonds} showSpread={true} now={now} />
       </section>
     </div>
   );

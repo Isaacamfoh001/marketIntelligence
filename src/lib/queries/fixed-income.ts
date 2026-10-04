@@ -49,6 +49,7 @@ export interface FixedIncomeSecurityRow {
   faceValue: number;
   status: "ACTIVE" | "MATURED" | "CALLED" | "DEFAULTED";
   latestObservationDate: string | null;
+  latestObservationVolumeGhs: number | null;
   analytics: SecurityAnalytics;
 }
 
@@ -74,6 +75,7 @@ interface ObservationRowShape {
   observationDate: Date;
   cleanPrice: unknown;
   sourceYieldPct: unknown;
+  volumeTradedGhs: unknown;
   observationKind: "AUCTION_PRIMARY" | "SECONDARY_MARKET";
 }
 type ObservationRow = ObservationRowShape | null;
@@ -123,6 +125,7 @@ function toSecurityRow(sec: SecurityWithCompany, latestObservation: ObservationR
     faceValue: Number(sec.faceValue),
     status: sec.status,
     latestObservationDate: latestObservation ? latestObservation.observationDate.toISOString().slice(0, 10) : null,
+    latestObservationVolumeGhs: latestObservation?.volumeTradedGhs !== null && latestObservation?.volumeTradedGhs !== undefined ? Number(latestObservation.volumeTradedGhs) : null,
     analytics,
   };
 }
@@ -204,6 +207,9 @@ export async function getSovereignYieldCurve(settlementDate: Date = new Date()):
       instrumentCode: null,
       isGovernmentBond: false,
       observationDate: latest.observationDate.toISOString().slice(0, 10),
+      // The BoG weekly auction rate is always a PRIMARY rate — Ghana's
+      // T-bills are not quoted on the GFIM secondary-market trading report.
+      observationKind: "AUCTION_PRIMARY",
     });
   }
 
@@ -218,6 +224,7 @@ export async function getSovereignYieldCurve(settlementDate: Date = new Date()):
       instrumentCode: s.instrumentCode,
       isGovernmentBond: true,
       observationDate: s.latestObservationDate!,
+      observationKind: s.analytics.observationKind ?? "AUCTION_PRIMARY",
     }));
 
   return buildSovereignYieldCurve([...billPoints, ...bondPoints]);
@@ -246,6 +253,8 @@ export async function getComparableUniverse(settlementDate: Date = new Date()): 
       modifiedDurationYears: s.analytics.modifiedDurationYears,
       dv01: s.analytics.dv01,
       spreadBps: benchmark && s.classification === "CORPORATE" ? computeSpreadBps(s.analytics.ytmPct!, benchmark.benchmark.yieldPct) : null,
+      observationDate: s.latestObservationDate,
+      observationKind: s.analytics.observationKind,
     };
   });
 
@@ -274,6 +283,8 @@ export async function getComparableUniverse(settlementDate: Date = new Date()): 
       modifiedDurationYears: durationResult.ok ? durationResult.modifiedDurationYears : null,
       dv01: durationResult.ok ? durationResult.dv01 : null,
       spreadBps: null,
+      observationDate: latest.observationDate.toISOString().slice(0, 10),
+      observationKind: "AUCTION_PRIMARY",
     });
   }
 

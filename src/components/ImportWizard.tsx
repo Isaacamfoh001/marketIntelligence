@@ -10,6 +10,7 @@ import type { NormalisedGseIndexRow } from "@/lib/ingestion/gse-index-parser";
 import type { NormalisedFinancialRow } from "@/lib/ingestion/financials-parser";
 import type { NormalisedFixedIncomeSecurityRow } from "@/lib/ingestion/fixed-income-securities-parser";
 import type { NormalisedFixedIncomeObservationRow } from "@/lib/ingestion/fixed-income-observations-parser";
+import type { NormalisedTradingObservationRow } from "@/lib/ingestion/gfim-trading-report-parser";
 import { formatPeriodLabel } from "@/lib/financial-period-label";
 
 const DATASET_TYPES: ImportDatasetType[] = [
@@ -18,6 +19,7 @@ const DATASET_TYPES: ImportDatasetType[] = [
   "company-financials",
   "fixed-income-securities",
   "fixed-income-observations",
+  "fixed-income-secondary-market-report",
   "security-backfill",
 ];
 
@@ -28,7 +30,12 @@ function templateFor(type: ImportDatasetType) {
 }
 
 function isFixedIncomeDatasetType(type: ImportDatasetType): type is FixedIncomeDatasetType {
-  return type === "fixed-income-securities" || type === "fixed-income-observations";
+  return type === "fixed-income-securities" || type === "fixed-income-observations" || type === "fixed-income-secondary-market-report";
+}
+
+/** Only the row/column-shaped CSV datasets have a meaningful blank template to download — the GFIM trading report is the official unmodified report itself, never a Korbly-authored template. */
+function hasDownloadableTemplate(type: ImportDatasetType): boolean {
+  return type !== "fixed-income-secondary-market-report";
 }
 
 function formatBytes(bytes: number): string {
@@ -213,6 +220,27 @@ function summarize(result: ImportActionResult): ResultSummary | null {
       sourceLabel: "Ghana Fixed Income Market — Market Observations",
     };
   }
+  if (result.gfimTradingReport) {
+    const g = result.gfimTradingReport;
+    const unmatchedList = g.unmatched.map((u) => u.isin).join(", ");
+    return {
+      recordsRead: g.recordsRead,
+      recordsAccepted: g.recordsAccepted,
+      recordsRejected: g.recordsRejected,
+      inserted: g.inserted,
+      updated: g.updated,
+      conflicts: g.auctionConflicts.length,
+      restatements: 0,
+      unknownInstruments: g.unmatched.length,
+      status: g.status,
+      runId: g.runId,
+      fourthStatLabel: "No trade that day",
+      fourthStatValue: g.noTradeCount,
+      captionLine: `Report date: ${g.reportDate}${unmatchedList ? ` · Unmatched ISINs: ${unmatchedList}` : ""}`,
+      errors: g.errors.map((e) => ({ row: e.row, errors: e.errors, rowNumber: (e.row as { rowNumber?: number })?.rowNumber ?? 0 })),
+      sourceLabel: "Ghana Fixed Income Market — Daily Trading Reports",
+    };
+  }
   return null;
 }
 
@@ -368,6 +396,39 @@ function FixedIncomeObservationPreviewTable({ rows }: { rows: NormalisedFixedInc
               <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums text-zinc-900 dark:text-zinc-100">{r.cleanPrice ?? "—"}</td>
               <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums text-zinc-900 dark:text-zinc-100">{r.sourceYieldPct ? `${r.sourceYieldPct}%` : "—"}</td>
               <td className="whitespace-nowrap px-3 py-2 text-zinc-600 dark:text-zinc-400">{r.observationKind === "AUCTION_PRIMARY" ? "Primary Auction" : "Secondary Market"}</td>
+              <td className="whitespace-nowrap px-3 py-2 text-emerald-600 dark:text-emerald-400">✓ Valid</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function GfimTradingReportPreviewTable({ rows }: { rows: NormalisedTradingObservationRow[] }) {
+  return (
+    <div className="overflow-x-auto rounded border border-zinc-200 dark:border-zinc-800">
+      <table className="w-full min-w-[640px] text-left text-sm">
+        <thead>
+          <tr className="border-b border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900/60">
+            <th className="px-3 py-2 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">ISIN</th>
+            <th className="px-3 py-2 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Security</th>
+            <th className="px-3 py-2 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Sheet</th>
+            <th className="px-3 py-2 text-right text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Closing Price</th>
+            <th className="px-3 py-2 text-right text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Closing Yield</th>
+            <th className="px-3 py-2 text-right text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Volume</th>
+            <th className="px-3 py-2 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r, i) => (
+            <tr key={i} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/50">
+              <td className="whitespace-nowrap px-3 py-2 font-medium text-zinc-900 dark:text-zinc-100">{r.isin}</td>
+              <td className="whitespace-nowrap px-3 py-2 text-zinc-600 dark:text-zinc-400">{r.securityDescription ?? "—"}</td>
+              <td className="whitespace-nowrap px-3 py-2 text-zinc-600 dark:text-zinc-400">{r.sheet}</td>
+              <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums text-zinc-900 dark:text-zinc-100">{r.cleanPrice ?? "—"}</td>
+              <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums text-zinc-900 dark:text-zinc-100">{r.sourceYieldPct ? `${r.sourceYieldPct}%` : "—"}</td>
+              <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums text-zinc-600 dark:text-zinc-400">{r.volumeTradedGhs ?? "—"}</td>
               <td className="whitespace-nowrap px-3 py-2 text-emerald-600 dark:text-emerald-400">✓ Valid</td>
             </tr>
           ))}
@@ -582,15 +643,19 @@ export function ImportWizard() {
 
       <div className="rounded border border-zinc-200 bg-white p-3 text-xs dark:border-zinc-800 dark:bg-zinc-900">
         <p className="text-zinc-500 dark:text-zinc-400">
-          <span className="font-medium text-zinc-700 dark:text-zinc-300">Required columns:</span> {spec.requiredHeaders.join(", ")}
+          <span className="font-medium text-zinc-700 dark:text-zinc-300">Required:</span> {spec.requiredHeaders.join(", ")}
           {spec.requiredNote ? ` (${spec.requiredNote})` : ""}
         </p>
-        <p className="mt-1 text-zinc-500 dark:text-zinc-400">
-          <span className="font-medium text-zinc-700 dark:text-zinc-300">Optional columns:</span> {spec.optionalHeaders.join(", ")}
-        </p>
-        <button type="button" onClick={() => downloadCsvTemplate(datasetType)} className="mt-2 text-zinc-700 underline hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-zinc-100">
-          Download blank CSV template
-        </button>
+        {spec.optionalHeaders.length > 0 && (
+          <p className="mt-1 text-zinc-500 dark:text-zinc-400">
+            <span className="font-medium text-zinc-700 dark:text-zinc-300">Optional columns:</span> {spec.optionalHeaders.join(", ")}
+          </p>
+        )}
+        {hasDownloadableTemplate(datasetType) && (
+          <button type="button" onClick={() => downloadCsvTemplate(datasetType)} className="mt-2 text-zinc-700 underline hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-zinc-100">
+            Download blank CSV template
+          </button>
+        )}
       </div>
 
       <div>
@@ -720,6 +785,14 @@ export function ImportWizard() {
                     Sample rows (showing {previewResult.fixedIncomeObservations.sampleValid.length} of {previewSummary.recordsAccepted} accepted)
                   </p>
                   <FixedIncomeObservationPreviewTable rows={previewResult.fixedIncomeObservations.sampleValid} />
+                </div>
+              )}
+              {previewResult.gfimTradingReport && previewResult.gfimTradingReport.sampleValid.length > 0 && (
+                <div>
+                  <p className="mb-2 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                    Sample rows (showing {previewResult.gfimTradingReport.sampleValid.length} of {previewSummary.recordsAccepted} traded)
+                  </p>
+                  <GfimTradingReportPreviewTable rows={previewResult.gfimTradingReport.sampleValid} />
                 </div>
               )}
 

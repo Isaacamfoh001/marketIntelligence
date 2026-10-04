@@ -39,6 +39,15 @@ export interface SecurityAnalytics {
   currentYieldPct: number | null;
   ytmPct: number | null;
   ytmSource: YtmSource | null;
+  /**
+   * The source's OWN published yield (e.g. GFIM's "CLOSING YIELD" column),
+   * independent of `ytmPct` — populated whenever the observation carries
+   * one, even when a price was ALSO present and preferred for `ytmPct`
+   * (M7.2 §8: the Jerome workflow must be able to show both the engine's
+   * own price-solved YTM and the source's own quoted yield side by side,
+   * never silently picking one and discarding the other).
+   */
+  sourceQuotedYieldPct: number | null;
   /** Which kind of observation the YTM/price/yield above is based on — null only when there is no observation at all. Never conflate an auction clearing rate with a secondary-market trade (M7.1 §8). */
   observationKind: ObservationKind | null;
   observationDate: string | null;
@@ -60,6 +69,7 @@ function emptyAnalytics(tenorDays: number, isMatured: boolean, reason: FixedInco
     currentYieldPct: null,
     ytmPct: null,
     ytmSource: null,
+    sourceQuotedYieldPct: null,
     observationKind: null,
     observationDate: null,
     macaulayDurationYears: null,
@@ -128,6 +138,7 @@ export function buildSecurityAnalytics(terms: BondTerms, observation: Observatio
     currentYieldPct,
     ytmPct,
     ytmSource,
+    sourceQuotedYieldPct: observation.sourceYieldPct,
     observationKind: observation.observationKind,
     observationDate: observation.observationDate.toISOString().slice(0, 10),
     macaulayDurationYears: duration?.macaulayDurationYears ?? null,

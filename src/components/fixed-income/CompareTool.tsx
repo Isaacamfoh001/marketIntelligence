@@ -16,6 +16,23 @@ function formatTenor(tenorDays: number): string {
   return `${(tenorDays / 365).toFixed(1)}y`;
 }
 
+function formatObservationDate(iso: string): string {
+  return new Date(`${iso}T00:00:00.000Z`).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+}
+
+function ObservationBadge({ observationKind }: { observationKind: "AUCTION_PRIMARY" | "SECONDARY_MARKET" | null }) {
+  if (!observationKind) return null;
+  return (
+    <span
+      className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
+        observationKind === "AUCTION_PRIMARY" ? "bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400" : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"
+      }`}
+    >
+      {observationKind === "AUCTION_PRIMARY" ? "Primary" : "Secondary"}
+    </span>
+  );
+}
+
 export function CompareTool({ universe }: { universe: ComparableRow[] }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
@@ -67,6 +84,7 @@ export function CompareTool({ universe }: { universe: ComparableRow[] }) {
                 <th className="px-3 py-2 text-right text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Duration</th>
                 <th className="px-3 py-2 text-right text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">DV01</th>
                 <th className="px-3 py-2 text-right text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Spread</th>
+                <th className="px-3 py-2 text-right text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Observation</th>
               </tr>
             </thead>
             <tbody>
@@ -91,6 +109,16 @@ export function CompareTool({ universe }: { universe: ComparableRow[] }) {
                   <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums text-zinc-600 dark:text-zinc-400">{r.dv01 !== null ? r.dv01.toFixed(4) : "—"}</td>
                   <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums text-zinc-600 dark:text-zinc-400">
                     {r.spreadBps !== null ? `${r.spreadBps >= 0 ? "+" : ""}${r.spreadBps} bps` : "—"}
+                  </td>
+                  <td className="whitespace-nowrap px-3 py-2 text-right text-xs text-zinc-600 dark:text-zinc-400">
+                    {r.observationDate ? (
+                      <div className="flex flex-col items-end gap-0.5">
+                        <span>{formatObservationDate(r.observationDate)}</span>
+                        <ObservationBadge observationKind={r.observationKind} />
+                      </div>
+                    ) : (
+                      <span className="text-zinc-400 dark:text-zinc-500">No observation</span>
+                    )}
                   </td>
                 </tr>
               ))}

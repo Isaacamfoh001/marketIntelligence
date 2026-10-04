@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getFixedIncomeSecurityByCode, getFixedIncomeObservationHistory, getSovereignYieldCurve, getComparableUniverse } from "@/lib/queries/fixed-income";
 import { generateCashFlows, selectBenchmark, computeSpreadBps, COUPON_FREQUENCY_LABEL, type BondTerms, type ComparableRow } from "@/lib/fixed-income";
+import { dailyFreshness, type Freshness } from "@/lib/freshness";
 import { RatesChart } from "@/components/RatesChart";
 import { InvestmentCalculator } from "@/components/fixed-income/InvestmentCalculator";
 import { FindAlternatives } from "@/components/fixed-income/FindAlternatives";
@@ -30,6 +31,29 @@ function formatTenor(tenorDays: number): string {
   if (tenorDays <= 0) return "Matured";
   if (tenorDays < 365) return `${tenorDays} days`;
   return `${(tenorDays / 365).toFixed(1)} years`;
+}
+
+function formatVolumeGhs(value: number): string {
+  return `GHS ${value.toLocaleString("en-GB", { maximumFractionDigits: 0 })}`;
+}
+
+/**
+ * Observation-freshness label for a single security's latest trade/auction
+ * date (M7.2 §7). Deliberately reuses dailyFreshness rather than inventing
+ * a liquidity score — "STALE" here means exactly what it means on the rest
+ * of the platform: no observation within the last business day. An
+ * illiquid bond that simply hasn't traded in weeks is expected to show
+ * STALE honestly, not be forward-filled as current.
+ */
+function observationFreshnessLabel(latestObservationDate: string | null, now: Date): { text: string; className: string } {
+  const freshness: Freshness = dailyFreshness(latestObservationDate ? new Date(`${latestObservationDate}T00:00:00.000Z`) : null, now);
+  if (freshness === "MISSING") {
+    return { text: "No market observation", className: "bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400" };
+  }
+  if (freshness === "STALE") {
+    return { text: "Stale observation", className: "bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400" };
+  }
+  return { text: "Recent observation", className: "bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400" };
 }
 
 export default async function FixedIncomeSecurityPage({ params }: { params: Promise<{ instrumentCode: string }> }) {
@@ -79,6 +103,8 @@ export default async function FixedIncomeSecurityPage({ params }: { params: Prom
     modifiedDurationYears: security.analytics.modifiedDurationYears,
     dv01: security.analytics.dv01,
     spreadBps,
+    observationDate: security.latestObservationDate,
+    observationKind: security.analytics.observationKind,
   };
   const comparableUniverseExcludingSelf = comparables.filter((c) => c.instrumentCode !== security.instrumentCode);
 
@@ -128,7 +154,7 @@ export default async function FixedIncomeSecurityPage({ params }: { params: Prom
 
       {/* ------------------------------------------------------------ */}
       <section>
-        <h2 className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+        <h2 className="mb-3 flex flex-wrap items-center gap-2 text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
           Latest Market Data &amp; Yield Analytics
           {security.analytics.observationKind && (
             <span
@@ -141,6 +167,11 @@ export default async function FixedIncomeSecurityPage({ params }: { params: Prom
               {security.analytics.observationKind === "AUCTION_PRIMARY" ? "Primary Auction" : "Secondary Market"}
             </span>
           )}
+          {(() => {
+            const freshness = observationFreshnessLabel(security.latestObservationDate, settlementDate);
+            return <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium normal-case tracking-normal ${freshness.className}`}>{freshness.text}</span>;
+          })()}
+          {security.latestObservationDate && <span className="normal-case tracking-normal text-zinc-400 dark:text-zinc-500">as of {formatDate(security.latestObservationDate)}</span>}
         </h2>
         {security.analytics.unavailableReason ? (
           <SectionCard>
@@ -167,9 +198,28 @@ export default async function FixedIncomeSecurityPage({ params }: { params: Prom
                   sub={security.analytics.ytmSource === "SOURCE_QUOTED" ? "source-quoted, not solved from price" : security.analytics.ytmSource === "SOLVED_FROM_PRICE" ? "solved from market price" : undefined}
                 />
               </div>
+              {security.analytics.ytmSource === "SOLVED_FROM_PRICE" && security.analytics.sourceQuotedYieldPct !== null && (
+                <p className="mt-3 border-t border-zinc-100 pt-3 text-xs text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
+                  GFIM&apos;s own quoted closing yield for this trade: <span className="font-medium text-zinc-700 dark:text-zinc-300">{security.analytics.sourceQuotedYieldPct.toFixed(2)}%</span> — shown alongside
+                  the {security.analytics.ytmPct!.toFixed(2)}% above, which Korbly solves from the traded clean price using the bond&apos;s actual cash-flow schedule.
+                </p>
+              )}
             </SectionCard>
             <SectionCard>
-              <StatBlock label="Accrued Interest" value={security.analytics.accruedInterest !== null ? security.analytics.accruedInterest.toFixed(4) : "—"} />
+              <div className="grid grid-cols-2 gap-4">
+                <StatBlock label="Accrued Interest" value={security.analytics.accruedInterest !== null ? security.analytics.accruedInterest.toFixed(4) : "—"} />
+                <StatBlock
+                  label="Volume Traded"
+                  value={security.latestObservationVolumeGhs !== null ? formatVolumeGhs(security.latestObservationVolumeGhs) : "—"}
+                  sub={
+                    security.latestObservationVolumeGhs !== null
+                      ? "GFIM reported trade value"
+                      : security.analytics.observationKind === "SECONDARY_MARKET"
+                        ? "not reported by source for this trade"
+                        : undefined
+                  }
+                />
+              </div>
             </SectionCard>
           </div>
         )}
@@ -205,14 +255,27 @@ export default async function FixedIncomeSecurityPage({ params }: { params: Prom
           ) : (
             <SectionCard>
               <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-                <StatBlock label="This Security's YTM" value={`${security.analytics.ytmPct!.toFixed(2)}%`} />
-                <StatBlock label="Benchmark" value={benchmark.benchmark.instrumentLabel} sub={`${benchmark.benchmark.yieldPct.toFixed(2)}% · ${benchmark.benchmark.tenorLabel} tenor`} />
+                <StatBlock
+                  label="This Security's YTM"
+                  value={`${security.analytics.ytmPct!.toFixed(2)}%`}
+                  sub={security.analytics.observationKind === "SECONDARY_MARKET" ? "from secondary-market trade" : "from primary auction"}
+                />
+                <StatBlock
+                  label="Benchmark"
+                  value={benchmark.benchmark.instrumentLabel}
+                  sub={`${benchmark.benchmark.yieldPct.toFixed(2)}% · ${benchmark.benchmark.tenorLabel} tenor · ${benchmark.benchmark.observationKind === "SECONDARY_MARKET" ? "secondary-market" : "primary auction"} rate (${formatDate(benchmark.benchmark.observationDate)})`}
+                />
                 <StatBlock label="Spread" value={`${spreadBps >= 0 ? "+" : ""}${spreadBps} bps`} />
                 <StatBlock label="Tenor Gap" value={`${benchmark.tenorGapDays} days`} sub={benchmark.isWideGap ? "Wide gap — comparison is approximate" : "Closely matched tenor"} />
               </div>
               {benchmark.isWideGap && (
                 <p className="mt-3 text-[11px] text-amber-600 dark:text-amber-400">
                   No sovereign instrument with a closely matched remaining tenor is currently available — this spread compares across a wide maturity gap and should be treated as approximate.
+                </p>
+              )}
+              {!benchmark.isSecondaryBenchmark && security.analytics.observationKind === "SECONDARY_MARKET" && (
+                <p className="mt-3 text-[11px] text-amber-600 dark:text-amber-400">
+                  No sovereign instrument has a secondary-market trade to compare against — this spread compares this bond&apos;s real secondary-market yield to a primary auction rate, not a like-for-like secondary yield.
                 </p>
               )}
             </SectionCard>

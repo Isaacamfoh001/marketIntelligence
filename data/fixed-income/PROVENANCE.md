@@ -67,7 +67,7 @@ Mode A.
 ## Coupon frequency
 
 Column `Coupon Frequency` is set to `SEMI_ANNUAL` for every row. This was
-independently verified for two of the issuers in this set (not assumed
+independently verified for three of the issuers in this set (not assumed
 market-wide without evidence):
 
 - **Government of Ghana bonds**: "Government of Ghana bonds make interest
@@ -76,11 +76,27 @@ market-wide without evidence):
 - **Kasapreko**: "bi-annual coupon payment cycles" confirmed via Kasapreko's
   own bond-programme press coverage (Tranche 1: 26 Jan/26 Jul cycle;
   Tranche 2: every 182 days) — both bi-annual.
+- **Bayport** (M7.2): independently confirmed per-ISIN via cbonds.com's
+  issue-level terms ("interest paid 2 times a year to holders") for 2 of
+  Bayport's 6 currently active fixed-rate ISINs — `GHCBFS072253` (23.5%,
+  17 Oct 2026) and `GHCBFS063609` (21.55%, 25 Jun 2026). cbonds.com's bond
+  pages themselves return HTTP 403 to automated fetch (consistent with
+  this platform's policy of never bypassing a technical access control —
+  CLAUDE.md §7), so this was read from cbonds' own indexed search-result
+  metadata, not a reverse-engineered or authenticated request. The
+  remaining 4 active Bayport ISINs (`GHCBFS071974`, `GHCBFS075173`,
+  `GHCBFS075165`, `GHCBFS075934`) are all notes issued under the same
+  GHS 500m Medium Term Notes and Bond Programme (see Bayport's 6 April
+  2023 GSE press release) and are assumed to follow the same semi-annual
+  convention as their 2 verified siblings — not independently verified
+  per-ISIN. A programme-level term sheet, if obtained later, could verify
+  the remaining 4 in one step since a programme typically fixes the
+  payment convention across its series.
 
 No authoritative evidence was found of a different payment frequency for
-any other issuer in this set (AFB/CMB/DTP/ILL/LGH/QTL/BFS); semi-annual is
+any other issuer in this set (AFB/CMB/DTP/ILL/LGH/QTL); semi-annual is
 applied as the GFIM corporate-bond market's general convention based on
-the two confirmed cases, not independently verified per issuer. If a
+the confirmed cases above, not independently verified per issuer. If a
 specific issuer's term sheet is later found to use a different frequency,
 correct that row and re-import — the import is idempotent (upserts by
 `instrument_code`, i.e. ISIN).

@@ -23,6 +23,9 @@ export interface ComparableRow {
   modifiedDurationYears: number | null;
   dv01: number | null;
   spreadBps: number | null;
+  /** When this YTM was observed, and whether it came from a real secondary-market trade or a primary auction (M7.2 §8/§11) — never implied by the YTM figure alone. */
+  observationDate: string | null;
+  observationKind: "AUCTION_PRIMARY" | "SECONDARY_MARKET" | null;
 }
 
 export const COMPARABLE_FILTER_LABEL: Record<ComparableFilter, string> = {

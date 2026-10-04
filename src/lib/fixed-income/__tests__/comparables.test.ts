@@ -15,6 +15,8 @@ function row(overrides: Partial<ComparableRow>): ComparableRow {
     modifiedDurationYears: 1.8,
     dv01: 0.02,
     spreadBps: 300,
+    observationDate: "2026-01-01",
+    observationKind: "AUCTION_PRIMARY",
     ...overrides,
   };
 }

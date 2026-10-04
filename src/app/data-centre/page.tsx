@@ -7,6 +7,7 @@ import { ensureGseIndexDataSources } from "@/lib/ingestion/gse-index-provider";
 import { ensureFinancialsDataSource } from "@/lib/ingestion/financials-provider";
 import { ensureFixedIncomeSecuritiesDataSource } from "@/lib/ingestion/fixed-income-securities-provider";
 import { ensureFixedIncomeObservationsDataSource } from "@/lib/ingestion/fixed-income-observations-provider";
+import { ensureGfimTradingReportDataSource } from "@/lib/ingestion/gfim-trading-report-provider";
 
 // Database-backed page: must reflect the latest ingestion state on every
 // request, not the state at build time.
@@ -26,6 +27,7 @@ async function getDataSourcesWithRuns() {
     ensureFinancialsDataSource(),
     ensureFixedIncomeSecuritiesDataSource(),
     ensureFixedIncomeObservationsDataSource(),
+    ensureGfimTradingReportDataSource(),
   ]);
 
   const sources = await prisma.dataSource.findMany({
