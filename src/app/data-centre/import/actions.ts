@@ -14,21 +14,28 @@
 import { importGseSecurityPrices, type GseSecurityImportResult } from "@/lib/ingestion/gse-security-provider";
 import { importGseMarketSummary, type GseIndexImportResult } from "@/lib/ingestion/gse-index-provider";
 import { importCompanyFinancials, type FinancialsImportResult } from "@/lib/ingestion/financials-provider";
+import { importFixedIncomeSecurities, type FixedIncomeSecuritiesImportResult } from "@/lib/ingestion/fixed-income-securities-provider";
+import { importFixedIncomeObservations, type FixedIncomeObservationsImportResult } from "@/lib/ingestion/fixed-income-observations-provider";
 import {
   MAX_UPLOAD_BYTES,
   hasAcceptedExtension,
   datasetTypeToSecurityKind,
   type GseDatasetType,
 } from "@/lib/gse-import-templates";
+import type { FixedIncomeDatasetType } from "@/lib/fixed-income-import-templates";
+
+export type ImportDatasetType = GseDatasetType | FixedIncomeDatasetType;
 
 export interface ImportActionResult {
   ok: boolean;
   error?: string;
-  datasetType?: GseDatasetType;
+  datasetType?: ImportDatasetType;
   filename?: string;
   security?: GseSecurityImportResult;
   index?: GseIndexImportResult;
   financials?: FinancialsImportResult;
+  fixedIncomeSecurities?: FixedIncomeSecuritiesImportResult;
+  fixedIncomeObservations?: FixedIncomeObservationsImportResult;
 }
 
 async function extractFile(formData: FormData): Promise<{ filename: string; buffer: Buffer } | { error: string }> {
@@ -47,9 +54,18 @@ async function extractFile(formData: FormData): Promise<{ filename: string; buff
   return { filename: file.name, buffer };
 }
 
-function readDatasetType(formData: FormData): GseDatasetType | null {
+function readDatasetType(formData: FormData): ImportDatasetType | null {
   const value = formData.get("datasetType");
-  if (value === "security-daily" || value === "security-backfill" || value === "market-summary" || value === "company-financials") return value;
+  if (
+    value === "security-daily" ||
+    value === "security-backfill" ||
+    value === "market-summary" ||
+    value === "company-financials" ||
+    value === "fixed-income-securities" ||
+    value === "fixed-income-observations"
+  ) {
+    return value;
+  }
   return null;
 }
 
@@ -74,6 +90,16 @@ async function runImport(formData: FormData, commit: boolean): Promise<ImportAct
   if (datasetType === "company-financials") {
     const financials = await importCompanyFinancials(filename, buffer, { commit, triggeredBy: "web" });
     return { ok: true, datasetType, filename, financials };
+  }
+
+  if (datasetType === "fixed-income-securities") {
+    const fixedIncomeSecurities = await importFixedIncomeSecurities(filename, buffer, { commit, triggeredBy: "web" });
+    return { ok: true, datasetType, filename, fixedIncomeSecurities };
+  }
+
+  if (datasetType === "fixed-income-observations") {
+    const fixedIncomeObservations = await importFixedIncomeObservations(filename, buffer, { commit, triggeredBy: "web" });
+    return { ok: true, datasetType, filename, fixedIncomeObservations };
   }
 
   const kind = datasetTypeToSecurityKind(datasetType);

@@ -5,6 +5,8 @@ import { observationFreshness, type Cadence } from "@/lib/freshness";
 import { ensureGseSecurityDataSources } from "@/lib/ingestion/gse-security-provider";
 import { ensureGseIndexDataSources } from "@/lib/ingestion/gse-index-provider";
 import { ensureFinancialsDataSource } from "@/lib/ingestion/financials-provider";
+import { ensureFixedIncomeSecuritiesDataSource } from "@/lib/ingestion/fixed-income-securities-provider";
+import { ensureFixedIncomeObservationsDataSource } from "@/lib/ingestion/fixed-income-observations-provider";
 
 // Database-backed page: must reflect the latest ingestion state on every
 // request, not the state at build time.
@@ -18,7 +20,13 @@ async function getDataSourcesWithRuns() {
   // Registering them here — metadata only, no run, no observation — lets
   // Data Centre show them as NOT_CONFIGURED/awaiting-first-import from day
   // one, rather than being invisible until the first real file is loaded.
-  await Promise.all([ensureGseSecurityDataSources(), ensureGseIndexDataSources(), ensureFinancialsDataSource()]);
+  await Promise.all([
+    ensureGseSecurityDataSources(),
+    ensureGseIndexDataSources(),
+    ensureFinancialsDataSource(),
+    ensureFixedIncomeSecuritiesDataSource(),
+    ensureFixedIncomeObservationsDataSource(),
+  ]);
 
   const sources = await prisma.dataSource.findMany({
     orderBy: [{ provider: "asc" }, { name: "asc" }],
@@ -46,7 +54,7 @@ async function getDataSourcesWithRuns() {
   // ingested anything even after a real successful run.
   const withLatestObservation = await Promise.all(
     sources.map(async (src) => {
-      const [macroLatest, fxLatest, treasuryLatest, policyLatest, indexLatest, summaryLatest, securityPriceLatest, financialLatest] = await Promise.all([
+      const [macroLatest, fxLatest, treasuryLatest, policyLatest, indexLatest, summaryLatest, securityPriceLatest, financialLatest, fixedIncomeSecurityLatest, fixedIncomeObservationLatest] = await Promise.all([
         prisma.macroObservation.findFirst({
           where: { ingestionRun: { dataSourceId: src.id } },
           orderBy: { observationDate: "desc" },
@@ -94,6 +102,18 @@ async function getDataSourcesWithRuns() {
           orderBy: { financialPeriod: { endDate: "desc" } },
           select: { financialPeriod: { select: { endDate: true } } },
         }),
+        // Securities Master has no time-series observation of its own — the
+        // closest analog is the most recently added instrument's issue date.
+        prisma.fixedIncomeSecurity.findFirst({
+          where: { sourceId: src.id },
+          orderBy: { issueDate: "desc" },
+          select: { issueDate: true },
+        }),
+        prisma.fixedIncomeObservation.findFirst({
+          where: { ingestionRun: { dataSourceId: src.id } },
+          orderBy: { observationDate: "desc" },
+          select: { observationDate: true },
+        }),
       ]);
       const dates = [
         macroLatest?.observationDate,
@@ -104,6 +124,8 @@ async function getDataSourcesWithRuns() {
         summaryLatest?.tradingDate,
         securityPriceLatest?.tradingDate,
         financialLatest?.financialPeriod.endDate,
+        fixedIncomeSecurityLatest?.issueDate,
+        fixedIncomeObservationLatest?.observationDate,
       ].filter((d): d is Date => d != null);
       const latestObservationDate = dates.length > 0 ? dates.reduce((a, b) => (b > a ? b : a)) : null;
       return { ...src, latestObservationDate };

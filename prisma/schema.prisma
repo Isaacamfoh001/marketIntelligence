@@ -70,6 +70,52 @@ enum SecurityType {
   ETF
 }
 
+/// Government vs corporate issuance — distinguished from `instrumentType`
+/// (which also encodes the actual instrument shape) so a UI filter
+/// ("Government Only"/"Corporate Only" — M7 §14) can group on classification
+/// alone without re-deriving it from instrument type in every call site.
+enum FixedIncomeClassification {
+  SOVEREIGN
+  CORPORATE
+}
+
+/// Treasury bills are NOT modeled here — they already have a complete,
+/// working domain (TreasuryInstrument/TreasuryRate, M4) that this milestone
+/// explicitly must not duplicate (M7 §3: "We do NOT want another page that
+/// simply duplicates Treasury rates"). FixedIncomeSecurity models the two
+/// coupon-bearing instrument shapes Treasury doesn't cover.
+enum FixedIncomeInstrumentType {
+  GOVERNMENT_BOND
+  CORPORATE_BOND
+}
+
+/// FLOATING is modeled for completeness (M7 §4) but this milestone's
+/// cash-flow/YTM/duration engine only computes analytics for FIXED —
+/// a floating coupon's future reset path is unknown and a deterministic
+/// schedule cannot honestly be produced for it (M7 §7: "do not display
+/// meaningless metrics for instruments where they are not applicable").
+enum CouponType {
+  FIXED
+  FLOATING
+  ZERO_COUPON
+}
+
+/// Null only for ZERO_COUPON instruments, which have no periodic coupon at
+/// all — never a manufactured "frequency" for a schedule that doesn't exist.
+enum CouponFrequency {
+  ANNUAL
+  SEMI_ANNUAL
+  QUARTERLY
+  MONTHLY
+}
+
+enum FixedIncomeSecurityStatus {
+  ACTIVE
+  MATURED
+  CALLED
+  DEFAULTED
+}
+
 /// Observation frequency for macro series.
 enum MacroFrequency {
   DAILY
@@ -115,6 +161,8 @@ model DataSource {
   marketSummaries              MarketSummary[]
   securityPrices               SecurityPrice[]
   companyFinancialObservations CompanyFinancialObservation[]
+  fixedIncomeSecurities        FixedIncomeSecurity[]
+  fixedIncomeObservations      FixedIncomeObservation[]
 
   @@index([provider])
   @@index([active])
@@ -165,6 +213,8 @@ model IngestionRun {
   marketSummaries              MarketSummary[]
   securityPrices               SecurityPrice[]
   companyFinancialObservations CompanyFinancialObservation[]
+  fixedIncomeSecurities        FixedIncomeSecurity[]
+  fixedIncomeObservations      FixedIncomeObservation[]
 
   @@index([dataSourceId])
   @@index([status])
@@ -522,8 +572,9 @@ model Company {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  securities       Security[]
-  financialPeriods FinancialPeriod[]
+  securities            Security[]
+  financialPeriods      FinancialPeriod[]
+  fixedIncomeSecurities FixedIncomeSecurity[]
 
   @@index([active])
 }
@@ -728,6 +779,105 @@ model SecurityPrice {
   @@unique([securityId, tradingDate])
   @@index([securityId])
   @@index([tradingDate])
+  @@index([sourceId])
+  @@index([ingestionRunId])
+}
+
+// ---------------------------------------------------------------------------
+// Fixed Income (M7) — coupon-bearing bonds only. Treasury bills stay in the
+// TreasuryInstrument/TreasuryRate domain above; see FixedIncomeInstrumentType
+// for why they are not duplicated here.
+// ---------------------------------------------------------------------------
+
+/// A specific fixed-income instrument's contractual identity — issuer,
+/// tenor, and coupon terms. One row per issue, created by an import of the
+/// instrument's actual term sheet/prospectus, which is why — unlike
+/// TreasuryInstrument/MarketIndex/Security's near-static identity rows —
+/// this carries full source provenance directly on the identity row itself:
+/// the contractual terms ARE the ingested fact here, not merely a reference
+/// code (CLAUDE.md §1: "never store a market number without knowing its
+/// source" applies equally to "what coupon does this bond pay").
+///
+/// `companyId` is nullable and deliberately reuses the existing Company
+/// model as the general issuer identity (CLAUDE.md §4: reuse existing
+/// patterns, do not invent a parallel "Issuer" model) — including for a
+/// sovereign issuer (e.g. a single "Government of Ghana" Company row with
+/// no ticker and sector "Sovereign"), not only GSE-listed corporates. It is
+/// nullable only because a corporate bond's issuer may not yet have been
+/// created as a Company by any import (an issuer not registered until its
+/// first bond import, mirroring how `ensureCompanyByTicker` lazily creates
+/// Company rows for GSE equities/financials).
+model FixedIncomeSecurity {
+  id             String  @id @default(cuid())
+  instrumentCode String  @unique
+  instrumentName String
+  issuerName     String
+  companyId      String?
+
+  instrumentType  FixedIncomeInstrumentType
+  classification  FixedIncomeClassification
+  currency        String                    @default("GHS")
+  issueDate       DateTime                  @db.Date
+  maturityDate    DateTime                  @db.Date
+  couponType      CouponType
+  couponRatePct   Decimal?                  @db.Decimal(9, 4)
+  couponFrequency CouponFrequency?
+  faceValue       Decimal                   @default(100) @db.Decimal(18, 2)
+  status          FixedIncomeSecurityStatus @default(ACTIVE)
+
+  sourceId       String
+  ingestionRunId String
+  retrievedAt    DateTime @default(now())
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company      Company?                 @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  source       DataSource               @relation(fields: [sourceId], references: [id], onDelete: Restrict)
+  ingestionRun IngestionRun             @relation(fields: [ingestionRunId], references: [id], onDelete: Restrict)
+  observations FixedIncomeObservation[]
+
+  @@index([instrumentType])
+  @@index([classification])
+  @@index([maturityDate])
+  @@index([companyId])
+  @@index([sourceId])
+  @@index([ingestionRunId])
+}
+
+/// A single market observation (price and/or yield) for one fixed-income
+/// security on one date. `cleanPrice` and `sourceYieldPct` are both
+/// nullable at the schema level — a GFIM quote may publish only a yield or
+/// only a price — but the parser (fixed-income-observations-parser.ts)
+/// rejects any row supplying neither, so a persisted row always carries at
+/// least one real market fact. Dirty price and accrued interest are
+/// deliberately NOT stored here: both are always deterministically
+/// calculable from cleanPrice + the security's own coupon terms via the
+/// cash-flow engine (CLAUDE.md §1: never store a value that should
+/// obviously be computed).
+model FixedIncomeObservation {
+  id              String   @id @default(cuid())
+  securityId      String
+  observationDate DateTime @db.Date
+
+  cleanPrice      Decimal? @db.Decimal(12, 4)
+  sourceYieldPct  Decimal? @db.Decimal(9, 4)
+  volumeTradedGhs Decimal? @db.Decimal(20, 2)
+
+  sourceId       String
+  ingestionRunId String
+  retrievedAt    DateTime @default(now())
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  security     FixedIncomeSecurity @relation(fields: [securityId], references: [id], onDelete: Restrict)
+  source       DataSource          @relation(fields: [sourceId], references: [id], onDelete: Restrict)
+  ingestionRun IngestionRun        @relation(fields: [ingestionRunId], references: [id], onDelete: Restrict)
+
+  @@unique([securityId, observationDate])
+  @@index([securityId])
+  @@index([observationDate])
   @@index([sourceId])
   @@index([ingestionRunId])
 }

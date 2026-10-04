@@ -2,14 +2,34 @@
 
 import { useRef, useState } from "react";
 import Link from "next/link";
-import { previewGseImportAction, commitGseImportAction, type ImportActionResult } from "@/app/data-centre/import/actions";
+import { previewGseImportAction, commitGseImportAction, type ImportActionResult, type ImportDatasetType } from "@/app/data-centre/import/actions";
 import { GSE_IMPORT_TEMPLATES, buildCsvTemplate, MAX_UPLOAD_BYTES, hasAcceptedExtension, type GseDatasetType } from "@/lib/gse-import-templates";
+import { FIXED_INCOME_IMPORT_TEMPLATES, buildFixedIncomeCsvTemplate, type FixedIncomeDatasetType } from "@/lib/fixed-income-import-templates";
 import type { NormalisedGseSecurityRow } from "@/lib/ingestion/gse-security-parser";
 import type { NormalisedGseIndexRow } from "@/lib/ingestion/gse-index-parser";
 import type { NormalisedFinancialRow } from "@/lib/ingestion/financials-parser";
+import type { NormalisedFixedIncomeSecurityRow } from "@/lib/ingestion/fixed-income-securities-parser";
+import type { NormalisedFixedIncomeObservationRow } from "@/lib/ingestion/fixed-income-observations-parser";
 import { formatPeriodLabel } from "@/lib/financial-period-label";
 
-const DATASET_TYPES: GseDatasetType[] = ["security-daily", "market-summary", "company-financials", "security-backfill"];
+const DATASET_TYPES: ImportDatasetType[] = [
+  "security-daily",
+  "market-summary",
+  "company-financials",
+  "fixed-income-securities",
+  "fixed-income-observations",
+  "security-backfill",
+];
+
+/** Looks up a dataset type's display spec from whichever template registry (GSE or Fixed Income) owns it. */
+function templateFor(type: ImportDatasetType) {
+  if (type in FIXED_INCOME_IMPORT_TEMPLATES) return FIXED_INCOME_IMPORT_TEMPLATES[type as FixedIncomeDatasetType];
+  return GSE_IMPORT_TEMPLATES[type as GseDatasetType];
+}
+
+function isFixedIncomeDatasetType(type: ImportDatasetType): type is FixedIncomeDatasetType {
+  return type === "fixed-income-securities" || type === "fixed-income-observations";
+}
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -21,9 +41,10 @@ function formatDate(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
 
-function downloadCsvTemplate(type: GseDatasetType) {
-  const spec = GSE_IMPORT_TEMPLATES[type];
-  const blob = new Blob([buildCsvTemplate(type)], { type: "text/csv;charset=utf-8" });
+function downloadCsvTemplate(type: ImportDatasetType) {
+  const spec = templateFor(type);
+  const csv = isFixedIncomeDatasetType(type) ? buildFixedIncomeCsvTemplate(type) : buildCsvTemplate(type as GseDatasetType);
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
@@ -76,6 +97,8 @@ interface ResultSummary {
   updated: number;
   conflicts: number;
   restatements: number;
+  /** Observations whose instrument_code has no matching Fixed Income Security — distinct from `conflicts` (a priority clash), so the UI can explain it correctly. */
+  unknownInstruments: number;
   status: string;
   runId: string | null;
   /** The 4th summary-stat card — varies by dataset (a count for securities/financials, a date range for market summary). */
@@ -99,6 +122,7 @@ function summarize(result: ImportActionResult): ResultSummary | null {
       updated: s.updated,
       conflicts: s.conflicts.length,
       restatements: 0,
+      unknownInstruments: 0,
       status: s.status,
       runId: s.runId,
       fourthStatLabel: "Securities detected",
@@ -118,6 +142,7 @@ function summarize(result: ImportActionResult): ResultSummary | null {
       updated: i.updated,
       conflicts: 0,
       restatements: 0,
+      unknownInstruments: 0,
       status: i.status,
       runId: i.runId,
       fourthStatLabel: "Trading date range",
@@ -137,6 +162,7 @@ function summarize(result: ImportActionResult): ResultSummary | null {
       updated: f.updated,
       conflicts: 0,
       restatements: f.restatements.length,
+      unknownInstruments: 0,
       status: f.status,
       runId: f.runId,
       fourthStatLabel: "Companies detected",
@@ -144,6 +170,47 @@ function summarize(result: ImportActionResult): ResultSummary | null {
       captionLine: f.tickers.length > 0 ? f.tickers.join(", ") : null,
       errors: f.errors,
       sourceLabel: "Ghana Stock Exchange — Listed Company Financial Statements",
+    };
+  }
+  if (result.fixedIncomeSecurities) {
+    const s = result.fixedIncomeSecurities;
+    return {
+      recordsRead: s.recordsRead,
+      recordsAccepted: s.recordsAccepted,
+      recordsRejected: s.recordsRejected,
+      inserted: s.inserted,
+      updated: s.updated,
+      conflicts: 0,
+      restatements: s.restatements.length,
+      unknownInstruments: 0,
+      status: s.status,
+      runId: s.runId,
+      fourthStatLabel: "Instruments detected",
+      fourthStatValue: s.instrumentCodes.length,
+      captionLine: s.instrumentCodes.length > 0 ? s.instrumentCodes.join(", ") : null,
+      errors: s.errors,
+      sourceLabel: "Ghana Fixed Income Market — Securities Master",
+    };
+  }
+  if (result.fixedIncomeObservations) {
+    const o = result.fixedIncomeObservations;
+    const dateRange = `${o.earliestObservationDate ?? "—"} → ${o.latestObservationDate ?? "—"}`;
+    return {
+      recordsRead: o.recordsRead,
+      recordsAccepted: o.recordsAccepted,
+      recordsRejected: o.recordsRejected,
+      inserted: o.inserted,
+      updated: o.updated,
+      conflicts: 0,
+      restatements: 0,
+      unknownInstruments: o.unknownInstruments.length,
+      status: o.status,
+      runId: o.runId,
+      fourthStatLabel: "Instruments detected",
+      fourthStatValue: o.instrumentCodes.length,
+      captionLine: o.instrumentCodes.length > 0 ? `Observation date range: ${dateRange} · ${o.instrumentCodes.join(", ")}` : `Observation date range: ${dateRange}`,
+      errors: o.errors,
+      sourceLabel: "Ghana Fixed Income Market — Market Observations",
     };
   }
   return null;
@@ -244,6 +311,68 @@ function FinancialsPreviewTable({ rows }: { rows: NormalisedFinancialRow[] }) {
   );
 }
 
+function FixedIncomeSecurityPreviewTable({ rows }: { rows: NormalisedFixedIncomeSecurityRow[] }) {
+  return (
+    <div className="overflow-x-auto rounded border border-zinc-200 dark:border-zinc-800">
+      <table className="w-full min-w-[760px] text-left text-sm">
+        <thead>
+          <tr className="border-b border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900/60">
+            <th className="px-3 py-2 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Instrument</th>
+            <th className="px-3 py-2 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Issuer</th>
+            <th className="px-3 py-2 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Type</th>
+            <th className="px-3 py-2 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Maturity</th>
+            <th className="px-3 py-2 text-right text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Coupon</th>
+            <th className="px-3 py-2 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r, i) => (
+            <tr key={i} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/50">
+              <td className="whitespace-nowrap px-3 py-2 font-medium text-zinc-900 dark:text-zinc-100">{r.instrumentCode}</td>
+              <td className="whitespace-nowrap px-3 py-2 text-zinc-600 dark:text-zinc-400">{r.issuerName}</td>
+              <td className="whitespace-nowrap px-3 py-2 text-zinc-600 dark:text-zinc-400">{r.instrumentType}</td>
+              <td className="whitespace-nowrap px-3 py-2 text-zinc-600 dark:text-zinc-400">{formatDate(r.maturityDate)}</td>
+              <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums text-zinc-900 dark:text-zinc-100">
+                {r.couponType === "ZERO_COUPON" ? "Zero coupon" : `${r.couponRatePct}% ${r.couponFrequency}`}
+              </td>
+              <td className="whitespace-nowrap px-3 py-2 text-emerald-600 dark:text-emerald-400">✓ Valid</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function FixedIncomeObservationPreviewTable({ rows }: { rows: NormalisedFixedIncomeObservationRow[] }) {
+  return (
+    <div className="overflow-x-auto rounded border border-zinc-200 dark:border-zinc-800">
+      <table className="w-full min-w-[560px] text-left text-sm">
+        <thead>
+          <tr className="border-b border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900/60">
+            <th className="px-3 py-2 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Instrument</th>
+            <th className="px-3 py-2 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Date</th>
+            <th className="px-3 py-2 text-right text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Clean Price</th>
+            <th className="px-3 py-2 text-right text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Yield</th>
+            <th className="px-3 py-2 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r, i) => (
+            <tr key={i} className="border-b border-zinc-100 last:border-0 dark:border-zinc-800/50">
+              <td className="whitespace-nowrap px-3 py-2 font-medium text-zinc-900 dark:text-zinc-100">{r.instrumentCode}</td>
+              <td className="whitespace-nowrap px-3 py-2 text-zinc-600 dark:text-zinc-400">{formatDate(r.observationDate)}</td>
+              <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums text-zinc-900 dark:text-zinc-100">{r.cleanPrice ?? "—"}</td>
+              <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums text-zinc-900 dark:text-zinc-100">{r.sourceYieldPct ? `${r.sourceYieldPct}%` : "—"}</td>
+              <td className="whitespace-nowrap px-3 py-2 text-emerald-600 dark:text-emerald-400">✓ Valid</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 const MAX_REJECTED_SHOWN = 20;
 
 function RejectedRowsList({ errors }: { errors: RowError[] }) {
@@ -266,7 +395,7 @@ function RejectedRowsList({ errors }: { errors: RowError[] }) {
 }
 
 export function ImportWizard() {
-  const [datasetType, setDatasetType] = useState<GseDatasetType>("security-daily");
+  const [datasetType, setDatasetType] = useState<ImportDatasetType>("security-daily");
   const [file, setFile] = useState<File | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [fileError, setFileError] = useState<string | null>(null);
@@ -275,9 +404,9 @@ export function ImportWizard() {
   const [pending, setPending] = useState<"preview" | "commit" | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const spec = GSE_IMPORT_TEMPLATES[datasetType];
+  const spec = templateFor(datasetType);
 
-  function selectDatasetType(type: GseDatasetType) {
+  function selectDatasetType(type: ImportDatasetType) {
     setDatasetType(type);
     setFile(null);
     setFileError(null);
@@ -381,12 +510,23 @@ export function ImportWizard() {
                 </Banner>
               </div>
             )}
+            {summary.unknownInstruments > 0 && (
+              <div className="mt-3">
+                <Banner tone="warning">
+                  {summary.unknownInstruments} observation{summary.unknownInstruments === 1 ? "" : "s"} skipped — instrument_code not found. Import the
+                  Fixed Income Securities (Master) dataset first.
+                </Banner>
+              </div>
+            )}
           </div>
         )}
 
         <div className="flex flex-wrap gap-2">
-          <Link href={datasetType === "company-financials" ? "/companies" : "/equities"} className="rounded bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300">
-            {datasetType === "company-financials" ? "View Companies" : "View Equities"}
+          <Link
+            href={datasetType === "company-financials" ? "/companies" : isFixedIncomeDatasetType(datasetType) ? "/fixed-income" : "/equities"}
+            className="rounded bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
+          >
+            {datasetType === "company-financials" ? "View Companies" : isFixedIncomeDatasetType(datasetType) ? "View Fixed Income" : "View Equities"}
           </Link>
           <Link href="/data-centre" className="rounded border border-zinc-200 px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-800">
             View Data Centre
@@ -415,7 +555,7 @@ export function ImportWizard() {
         <p className="mb-2 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">1. Choose dataset</p>
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
           {DATASET_TYPES.map((type) => {
-            const t = GSE_IMPORT_TEMPLATES[type];
+            const t = templateFor(type);
             const selected = datasetType === type;
             return (
               <button
@@ -560,6 +700,22 @@ export function ImportWizard() {
                     Sample rows (showing {previewResult.financials.sampleValid.length} of {previewSummary.recordsAccepted} accepted)
                   </p>
                   <FinancialsPreviewTable rows={previewResult.financials.sampleValid} />
+                </div>
+              )}
+              {previewResult.fixedIncomeSecurities && previewResult.fixedIncomeSecurities.sampleValid.length > 0 && (
+                <div>
+                  <p className="mb-2 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                    Sample rows (showing {previewResult.fixedIncomeSecurities.sampleValid.length} of {previewSummary.recordsAccepted} accepted)
+                  </p>
+                  <FixedIncomeSecurityPreviewTable rows={previewResult.fixedIncomeSecurities.sampleValid} />
+                </div>
+              )}
+              {previewResult.fixedIncomeObservations && previewResult.fixedIncomeObservations.sampleValid.length > 0 && (
+                <div>
+                  <p className="mb-2 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                    Sample rows (showing {previewResult.fixedIncomeObservations.sampleValid.length} of {previewSummary.recordsAccepted} accepted)
+                  </p>
+                  <FixedIncomeObservationPreviewTable rows={previewResult.fixedIncomeObservations.sampleValid} />
                 </div>
               )}
 
