@@ -7,6 +7,7 @@
 // ---------------------------------------------------------------------------
 
 import { getPrisma } from "../prisma";
+import { GOVERNMENT_OF_GHANA } from "../treasury-bills";
 import { EXPOSURE_ASSET_CLASS_LABEL, resolveIssuerRef, type ExposureAssetClass } from "../portfolio";
 import { rowToRule, runScenario, shockTypeForAssetClass, type ScenarioPosition, type ScenarioResult, type ScenarioShockRule, type ShockType, type StoredShockRow } from "../scenarios";
 import { getPositionProvenance, toExposurePositions, type InstrumentContext, type PortfolioDetail, type PositionRow } from "./portfolio";
@@ -52,6 +53,7 @@ function targetLabel(row: StoredShockRow, ctx: InstrumentContext): string {
   if (row.targetKind === "SECURITY") {
     if (row.fixedIncomeSecurityId) return ctx.bondById.get(row.fixedIncomeSecurityId)?.label ?? "Unknown bond";
     if (row.securityId) return ctx.equityById.get(row.securityId)?.ticker ?? "Unknown security";
+    if (row.treasuryBillId) return ctx.billById.get(row.treasuryBillId)?.label ?? "Unknown Treasury bill";
   }
   const key = row.companyId ? `company:${row.companyId}` : `name:${row.issuerNameKey}`;
   return issuerNames(ctx).get(key) ?? row.issuerNameKey ?? "Unknown issuer";
@@ -62,6 +64,10 @@ function issuerNames(ctx: InstrumentContext): Map<string, string> {
   for (const b of ctx.bonds) {
     const i = resolveIssuerRef({ companyId: b.companyId, issuerName: b.issuerName });
     m.set(i.key, i.name);
+  }
+  for (const b of ctx.bills) {
+    const i = resolveIssuerRef({ companyId: b.companyId, issuerName: b.issuerName });
+    if (!m.has(i.key)) m.set(i.key, i.name);
   }
   for (const e of ctx.equities) {
     const i = resolveIssuerRef({ companyId: e.companyId, issuerName: e.companyName });
@@ -75,7 +81,7 @@ export async function getScenario(id: string, ctx: InstrumentContext): Promise<S
   if (!s) return null;
   const shocks: ScenarioShockView[] = [];
   for (const r of s.shocks) {
-    const row: StoredShockRow = { id: r.id, targetKind: r.targetKind, shockType: r.shockType, value: Number(r.value), assetClass: r.assetClass, companyId: r.companyId, issuerNameKey: r.issuerNameKey, fixedIncomeSecurityId: r.fixedIncomeSecurityId, securityId: r.securityId };
+    const row: StoredShockRow = { id: r.id, targetKind: r.targetKind, shockType: r.shockType, value: Number(r.value), assetClass: r.assetClass, companyId: r.companyId, issuerNameKey: r.issuerNameKey, fixedIncomeSecurityId: r.fixedIncomeSecurityId, securityId: r.securityId, treasuryBillId: r.treasuryBillId };
     const rule = rowToRule(row, targetLabel(row, ctx));
     if (rule) shocks.push({ rule, row });
   }
@@ -114,7 +120,7 @@ export interface TargetOption {
 }
 
 export function buildTargetOptions(portfolio: PortfolioDetail): TargetOption[] {
-  const opts: TargetOption[] = (["GOVERNMENT_BOND", "CORPORATE_BOND", "EQUITY"] as ExposureAssetClass[]).map((c) => ({ value: `ASSET_CLASS|${c}|${shockTypeForAssetClass(c)}`, label: EXPOSURE_ASSET_CLASS_LABEL[c], targetName: EXPOSURE_ASSET_CLASS_LABEL[c], group: "Asset class", kind: "ASSET_CLASS", shockType: shockTypeForAssetClass(c) }));
+  const opts: TargetOption[] = (["TREASURY_BILL", "GOVERNMENT_BOND", "CORPORATE_BOND", "EQUITY"] as ExposureAssetClass[]).map((c) => ({ value: `ASSET_CLASS|${c}|${shockTypeForAssetClass(c)}`, label: EXPOSURE_ASSET_CLASS_LABEL[c], targetName: EXPOSURE_ASSET_CLASS_LABEL[c], group: "Asset class", kind: "ASSET_CLASS", shockType: shockTypeForAssetClass(c) }));
   const exposure = toExposurePositions(portfolio.positions);
   const issuerSeen = new Set<string>();
   const issuers: TargetOption[] = [];
@@ -125,9 +131,9 @@ export function buildTargetOptions(portfolio: PortfolioDetail): TargetOption[] {
     const issuerId = `${e.issuer.key}|${type}`;
     if (!issuerSeen.has(issuerId)) {
       issuerSeen.add(issuerId);
-      issuers.push({ value: `ISSUER|${e.issuer.key}|${type}`, label: `${e.issuer.name} — ${type === "YIELD_BPS" ? "bonds" : "equity"}`, targetName: e.issuer.name, group: "Issuer", kind: "ISSUER", shockType: type });
+      issuers.push({ value: `ISSUER|${e.issuer.key}|${type}`, label: `${e.issuer.name} — ${type === "YIELD_BPS" ? (e.issuer.name === GOVERNMENT_OF_GHANA ? "bonds and Treasury bills" : "bonds") : "equity"}`, targetName: e.issuer.name, group: "Issuer", kind: "ISSUER", shockType: type });
     }
-    securities.push({ value: `SECURITY|${e.assetClass === "EQUITY" ? "EQUITY" : "BOND"}:${row.instrument.id}|${type}`, label: e.label, targetName: e.label, group: "Security", kind: "SECURITY", shockType: type });
+    securities.push({ value: `SECURITY|${e.assetClass === "EQUITY" ? "EQUITY" : e.assetClass === "TREASURY_BILL" ? "TREASURY_BILL" : "BOND"}:${row.instrument.id}|${type}`, label: e.label, targetName: e.label, group: "Security", kind: "SECURITY", shockType: type });
   });
   const by = (a: TargetOption, b: TargetOption) => a.label.localeCompare(b.label);
   return [...opts, ...issuers.sort(by), ...securities.sort(by)];
@@ -140,12 +146,12 @@ export function parseTargetOption(raw: string): import("../scenario-service").Sh
   const type = parts[parts.length - 1];
   const key = parts.slice(1, -1).join("|");
   if (parts.length < 3 || !kind || !key || !type) return null;
-  if (kind === "ASSET_CLASS" && (key === "GOVERNMENT_BOND" || key === "CORPORATE_BOND" || key === "EQUITY")) return { kind, assetClass: key };
+  if (kind === "ASSET_CLASS" && (key === "TREASURY_BILL" || key === "GOVERNMENT_BOND" || key === "CORPORATE_BOND" || key === "EQUITY")) return { kind, assetClass: key };
   if (kind === "ISSUER" && (type === "YIELD_BPS" || type === "PRICE_PCT")) return { kind, issuerKey: key, shockType: type };
   if (kind === "SECURITY") {
     const [instrument, ...rest] = key.split(":");
     const id = rest.join(":");
-    if ((instrument === "BOND" || instrument === "EQUITY") && id) return { kind, instrument, instrumentId: id };
+    if ((instrument === "BOND" || instrument === "EQUITY" || instrument === "TREASURY_BILL") && id) return { kind, instrument, instrumentId: id };
   }
   return null;
 }
@@ -167,6 +173,9 @@ export async function getPositionLinks(portfolio: PortfolioDetail): Promise<Reco
     if (row.instrument.kind === "BOND") {
       const code = encodeURIComponent(row.instrument.instrumentCode);
       out[row.positionId] = { analysis: { href: `/fixed-income/${code}`, label: "Open fixed-income analysis" }, evidence: { href: `/fixed-income/${code}#evidence`, label: "Review underlying market evidence" }, inspect };
+    } else if (row.instrument.kind === "TREASURY_BILL") {
+      // The rate evidence for every bill is the Treasury-bill auction history on Macro & Rates.
+      out[row.positionId] = { analysis: null, evidence: { href: "/macro-rates#treasury-bills", label: "Review Bank of Ghana auction rates" }, inspect };
     } else {
       const ticker = tickerOf.get(row.instrument.companyId);
       out[row.positionId] = { analysis: ticker ? { href: `/companies/${encodeURIComponent(ticker)}`, label: "Open company page" } : null, evidence: inspect, inspect };

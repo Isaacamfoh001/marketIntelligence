@@ -73,15 +73,16 @@ export async function setScenarioArchived(scenarioId: string, archived: boolean)
   return { ok: true };
 }
 
-export type ShockTarget = { kind: "ASSET_CLASS"; assetClass: "GOVERNMENT_BOND" | "CORPORATE_BOND" | "EQUITY" } | { kind: "ISSUER"; issuerKey: string; shockType: ShockType } | { kind: "SECURITY"; instrument: "BOND" | "EQUITY"; instrumentId: string };
+export type ShockTarget = { kind: "ASSET_CLASS"; assetClass: ExposureAssetClass } | { kind: "ISSUER"; issuerKey: string; shockType: ShockType } | { kind: "SECURITY"; instrument: "BOND" | "EQUITY" | "TREASURY_BILL"; instrumentId: string };
 
 const asSelector = (t: ShockTarget): ShockSelector => (t.kind === "ASSET_CLASS" ? { kind: "ASSET_CLASS", assetClass: t.assetClass } : t.kind === "ISSUER" ? { kind: "ISSUER", issuerKey: t.issuerKey } : { kind: "SECURITY", instrument: t.instrument, instrumentId: t.instrumentId });
-const typeOf = (t: ShockTarget): ShockType => (t.kind === "ASSET_CLASS" ? shockTypeForAssetClass(t.assetClass) : t.kind === "SECURITY" ? (t.instrument === "BOND" ? "YIELD_BPS" : "PRICE_PCT") : t.shockType);
+const typeOf = (t: ShockTarget): ShockType => (t.kind === "ASSET_CLASS" ? shockTypeForAssetClass(t.assetClass) : t.kind === "SECURITY" ? (t.instrument === "EQUITY" ? "PRICE_PCT" : "YIELD_BPS") : t.shockType);
 
 /** The target must refer to something that really exists — no shock may silently reference a security/issuer that never did. */
 async function checkTargetExists(t: ShockTarget, type: ShockType): Promise<string | null> {
   const prisma = getPrisma();
   if (t.kind === "SECURITY") {
+    if (t.instrument === "TREASURY_BILL") return (await prisma.treasuryBill.findUnique({ where: { id: t.instrumentId }, select: { id: true } })) ? null : "That Treasury bill does not exist.";
     if (t.instrument === "BOND") return (await prisma.fixedIncomeSecurity.findUnique({ where: { id: t.instrumentId }, select: { id: true } })) ? null : "That bond does not exist.";
     return (await prisma.security.findUnique({ where: { id: t.instrumentId }, select: { id: true } })) ? null : "That security does not exist.";
   }
@@ -96,7 +97,7 @@ async function checkTargetExists(t: ShockTarget, type: ShockType): Promise<strin
   return null;
 }
 
-const toStored = (r: { id: string; targetKind: StoredShockRow["targetKind"]; shockType: ShockType; value: unknown; assetClass: StoredShockRow["assetClass"]; companyId: string | null; issuerNameKey: string | null; fixedIncomeSecurityId: string | null; securityId: string | null }): StoredShockRow => ({ ...r, value: Number(r.value) });
+const toStored = (r: { id: string; targetKind: StoredShockRow["targetKind"]; shockType: ShockType; value: unknown; assetClass: StoredShockRow["assetClass"]; companyId: string | null; issuerNameKey: string | null; fixedIncomeSecurityId: string | null; securityId: string | null; treasuryBillId: string | null }): StoredShockRow => ({ ...r, value: Number(r.value) });
 
 export async function addShock(input: { scenarioId: string; target: ShockTarget; value: number }): Promise<ServiceResult<{ shockId: string }>> {
   const e = await editableScenario(input.scenarioId);
@@ -155,7 +156,7 @@ export async function removeShock(shockId: string): Promise<ServiceResult> {
 // ever stored.
 // ---------------------------------------------------------------------------
 
-type ShockWhere = Pick<StoredShockRow, "targetKind" | "assetClass" | "companyId" | "issuerNameKey" | "fixedIncomeSecurityId" | "securityId">;
+type ShockWhere = Pick<StoredShockRow, "targetKind" | "assetClass" | "companyId" | "issuerNameKey" | "fixedIncomeSecurityId" | "securityId" | "treasuryBillId">;
 
 /** Sets the assumption for a target: updates it if one exists, creates it otherwise. */
 export async function upsertShock(input: { scenarioId: string; target: ShockTarget; value: number }): Promise<ServiceResult<{ shockId: string }>> {

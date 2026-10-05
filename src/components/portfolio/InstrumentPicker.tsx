@@ -13,7 +13,7 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 import { UNVALUED_LABEL } from "@/lib/portfolio";
 import { formatIsoDate, formatPct } from "@/lib/fixed-income";
-import type { BondInstrument, EquityInstrument, HoldableInstrument } from "@/lib/queries/portfolio";
+import type { BondInstrument, EquityInstrument } from "@/lib/queries/portfolio";
 import type { FormState } from "@/app/portfolios/actions";
 import { PositionSizeForm } from "./PositionSizeForm";
 import { AssetBadge, ageText, formatPrice, RecencyBadge } from "./ui";
@@ -26,7 +26,8 @@ const FILTERS: { id: Filter; label: string }[] = [
   { id: "EQUITY", label: "Equities" },
 ];
 
-const searchText = (i: HoldableInstrument) => (i.kind === "BOND" ? `${i.label} ${i.issuerName} ${i.instrumentCode}` : `${i.ticker} ${i.companyName}`).toLowerCase();
+type PickerInstrument = BondInstrument | EquityInstrument;
+const searchText = (i: PickerInstrument) => (i.kind === "BOND" ? `${i.label} ${i.issuerName} ${i.instrumentCode}` : `${i.ticker} ${i.companyName}`).toLowerCase();
 
 function BondContext({ b }: { b: BondInstrument }) {
   if (b.input.available) {
@@ -71,7 +72,7 @@ export function InstrumentPicker({
   const [showBlocked, setShowBlocked] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  const all: HoldableInstrument[] = useMemo(() => [...bonds, ...equities], [bonds, equities]);
+  const all: PickerInstrument[] = useMemo(() => [...bonds, ...equities], [bonds, equities]);
   const blockedCount = all.filter((i) => !i.addable.addable).length;
   const q = query.trim().toLowerCase();
   const visible = all.filter((i) => {

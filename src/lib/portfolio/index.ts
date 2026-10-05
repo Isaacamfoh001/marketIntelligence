@@ -4,6 +4,7 @@ export * from "./positions";
 export * from "./eligibility";
 export * from "./bond-input";
 export * from "./equity-input";
+export * from "./bill-input";
 export * from "./valuation";
 export * from "./copy";
 export * from "./exposures";

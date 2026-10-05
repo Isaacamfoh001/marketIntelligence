@@ -5,9 +5,12 @@
 // position — rules REPLACE, they never stack. Same-level duplicates are
 // rejected (never "first/last/largest wins").
 //
-// ASSET DOMAIN: YIELD_BPS reaches bonds only; PRICE_PCT reaches equities only.
-// An issuer rule therefore reaches an issuer's bonds OR its equity depending on
-// its shock type — never both.
+// ASSET DOMAIN: YIELD_BPS reaches bonds and Treasury bills (the bill's reference
+// RATE moves); PRICE_PCT reaches equities only. An issuer rule therefore reaches
+// an issuer's fixed-income holdings (bonds and bills) OR its equity depending on
+// its shock type — never both. Specific beats broad: a Treasury-bill asset-class
+// rule is overridden by an issuer rule (e.g. Government of Ghana) which is in
+// turn overridden by a rule on one specific bill.
 // ---------------------------------------------------------------------------
 
 import type { ExposureAssetClass } from "../portfolio";
@@ -24,7 +27,11 @@ import {
   type ShockType,
 } from "./types";
 
+/** Bonds AND Treasury bills take a yield/rate shock in bps; equities take a price %. */
 export const shockTypeForAssetClass = (c: ExposureAssetClass): ShockType => (c === "EQUITY" ? "PRICE_PCT" : "YIELD_BPS");
+
+/** The asset classes a SECURITY-level selector for this instrument table can reach. */
+const instrumentClasses = (i: "BOND" | "EQUITY" | "TREASURY_BILL"): ExposureAssetClass[] => (i === "EQUITY" ? ["EQUITY"] : i === "TREASURY_BILL" ? ["TREASURY_BILL"] : ["GOVERNMENT_BOND", "CORPORATE_BOND"]);
 
 /** Does a shock of this type reach a position of this asset class at all? */
 export const shockTypeReaches = (type: ShockType, assetClass: ExposureAssetClass): boolean => shockTypeForAssetClass(assetClass) === type;
@@ -42,9 +49,9 @@ export function validateShockValue(type: ShockType, value: number): { ok: true }
 
 /** Selector/type compatibility: asset-class and security selectors fix the type; issuer selectors accept either. */
 export function checkCompatibility(selector: ShockSelector, type: ShockType): { ok: true } | { ok: false; message: string } {
-  const expected: ShockType | null = selector.kind === "ASSET_CLASS" ? shockTypeForAssetClass(selector.assetClass) : selector.kind === "SECURITY" ? (selector.instrument === "BOND" ? "YIELD_BPS" : "PRICE_PCT") : null;
+  const expected: ShockType | null = selector.kind === "ASSET_CLASS" ? shockTypeForAssetClass(selector.assetClass) : selector.kind === "SECURITY" ? (selector.instrument === "EQUITY" ? "PRICE_PCT" : "YIELD_BPS") : null;
   if (expected === null || expected === type) return { ok: true };
-  return { ok: false, message: type === "PRICE_PCT" ? "A price % shock applies to equities only — bonds take a yield shock in basis points." : "A yield (bps) shock applies to bonds only — equities take a price % shock." };
+  return { ok: false, message: type === "PRICE_PCT" ? "A price % shock applies to equities only — bonds and Treasury bills take a yield / rate shock in basis points." : "A yield (bps) shock applies to bonds and Treasury bills only — equities take a price % shock." };
 }
 
 /** Identity of the (selector, domain) a rule occupies — two rules with the same identity are ambiguous. */
@@ -91,7 +98,7 @@ export function ruleReaches(rule: ScenarioShockRule, p: Pick<ScenarioPosition, "
     case "ISSUER":
       return s.issuerKey === p.issuer.key;
     case "SECURITY":
-      return s.instrumentId === p.instrumentId && (s.instrument === "EQUITY") === (p.assetClass === "EQUITY");
+      return s.instrumentId === p.instrumentId && instrumentClasses(s.instrument).includes(p.assetClass);
   }
 }
 

@@ -10,8 +10,13 @@
 import { getPrisma } from "../prisma";
 import { getFixedIncomeUniverse, type FixedIncomeSecurityRow } from "./fixed-income";
 import { securityShortLabel, toValuationDate } from "../fixed-income";
+import { billLabel, GOVERNMENT_OF_GHANA, selectLatestCompleteCurve, type AuctionRateRow } from "../treasury-bills";
 import {
+  checkBillAddable,
   checkBondAddable,
+  resolveBillValuationInput,
+  valueBillPosition,
+  type BillValuationInput,
   checkEquityAddable,
   resolveBondValuationInput,
   resolveEquityValuationInput,
@@ -73,14 +78,33 @@ export interface EquityInstrument {
   addable: Addable;
 }
 
-export type HoldableInstrument = BondInstrument | EquityInstrument;
+/** A Treasury bill that can be held. Valued from the BoG auction curve, never from a stored per-bill price (none exists). */
+export interface BillInstrument {
+  kind: "TREASURY_BILL";
+  id: string;
+  label: string;
+  issuerName: string;
+  /** The Government of Ghana Company record the sovereign bonds link to (null when none exists) — so a bill and a government bond are ONE issuer in exposure and scenario targeting. */
+  companyId: string | null;
+  tenorDays: number;
+  issueDate: string;
+  maturityDate: string;
+  isin: string | null;
+  currency: string;
+  input: BillValuationInput | Unvalued;
+  addable: Addable;
+}
+
+export type HoldableInstrument = BondInstrument | EquityInstrument | BillInstrument;
 
 export interface InstrumentContext {
   valuationDate: Date;
   bonds: BondInstrument[];
   equities: EquityInstrument[];
+  bills: BillInstrument[];
   bondById: Map<string, BondInstrument>;
   equityById: Map<string, EquityInstrument>;
+  billById: Map<string, BillInstrument>;
 }
 
 /** Adapts an M7 security row to the domain resolver's input — no logic, only field mapping. */
@@ -139,14 +163,32 @@ async function loadEquityPrices(securityIds: string[], valuationDate: Date): Pro
   return out;
 }
 
+/** BoG auction rows near the valuation date — enough history (120 days) to find the latest COMPLETE weekly curve. */
+async function loadAuctionRows(valuationDate: Date): Promise<AuctionRateRow[]> {
+  const from = new Date(valuationDate.getTime() - 120 * 86_400_000);
+  const rows = await getPrisma().treasuryRate.findMany({
+    where: { observationDate: { gte: from, lte: valuationDate } },
+    include: { instrument: { select: { tenorDays: true } } },
+  });
+  return rows.map((r) => ({ tenorDays: r.instrument.tenorDays, observationDate: isoDay(r.observationDate), interestRatePct: Number(r.interestRate), discountRatePct: Number(r.discountRate), tenderNumber: r.tenderNumber }));
+}
+
+/** The latest complete BoG auction curve at/before the valuation date — the evidence every Treasury bill is valued from. */
+export async function getLatestAuctionCurve(valuationDate: Date = toValuationDate(new Date())) {
+  return selectLatestCompleteCurve(await loadAuctionRows(valuationDate), isoDay(valuationDate));
+}
+
 export async function getInstrumentContext(valuationDate: Date = toValuationDate(new Date())): Promise<InstrumentContext> {
   const prisma = getPrisma();
-  const [universe, securities, bondCompanies] = await Promise.all([
+  const [universe, securities, bondCompanies, billRows, auctionRows] = await Promise.all([
     getFixedIncomeUniverse(valuationDate),
     prisma.security.findMany({ include: { company: { select: { name: true } } }, orderBy: { ticker: "asc" } }),
     // companyId is not on M7's security row; read it here rather than widening M7's query.
     prisma.fixedIncomeSecurity.findMany({ select: { id: true, companyId: true } }),
+    prisma.treasuryBill.findMany({ include: { instrument: { select: { tenorDays: true } } }, orderBy: { maturityDate: "asc" } }),
+    loadAuctionRows(valuationDate),
   ]);
+  const curve = selectLatestCompleteCurve(auctionRows, isoDay(valuationDate));
   const companyIdByBond = new Map(bondCompanies.map((b) => [b.id, b.companyId]));
   const prices = await loadEquityPrices(
     securities.map((s) => s.id),
@@ -184,12 +226,30 @@ export async function getInstrumentContext(valuationDate: Date = toValuationDate
     addable: checkEquityAddable({ currency: s.currency, active: s.active }),
   }));
 
+  const sovereignCompanyId = universe.map((row) => (row.issuerName === GOVERNMENT_OF_GHANA ? companyIdByBond.get(row.id) ?? null : null)).find((id) => id !== null) ?? null;
+  const bills: BillInstrument[] = billRows.map((b) => ({
+    kind: "TREASURY_BILL",
+    id: b.id,
+    label: billLabel(b.instrument.tenorDays, b.maturityDate),
+    issuerName: GOVERNMENT_OF_GHANA,
+    companyId: sovereignCompanyId,
+    tenorDays: b.instrument.tenorDays,
+    issueDate: isoDay(b.issueDate),
+    maturityDate: isoDay(b.maturityDate),
+    isin: b.isin,
+    currency: b.currency,
+    input: resolveBillValuationInput({ currency: b.currency, tenorDays: b.instrument.tenorDays, issueDate: b.issueDate, maturityDate: b.maturityDate, curve }, valuationDate),
+    addable: checkBillAddable({ currency: b.currency, maturityDate: b.maturityDate }, valuationDate),
+  }));
+
   return {
     valuationDate,
     bonds,
     equities,
+    bills,
     bondById: new Map(bonds.map((b) => [b.id, b])),
     equityById: new Map(equities.map((e) => [e.id, e])),
+    billById: new Map(bills.map((b) => [b.id, b])),
   };
 }
 
@@ -218,8 +278,9 @@ export interface PortfolioDetail {
 
 interface StoredPosition {
   id: string;
-  assetClass: "BOND" | "EQUITY";
+  assetClass: "BOND" | "EQUITY" | "TREASURY_BILL";
   fixedIncomeSecurityId: string | null;
+  treasuryBillId?: string | null;
   nominalGhs: unknown;
   securityId: string | null;
   shares: number | null;
@@ -236,6 +297,17 @@ function valuePosition(p: StoredPosition, ctx: InstrumentContext): PositionRow |
       holding: { assetClass: "BOND", positionId: p.id, fixedIncomeSecurityId: bond.id, nominalGhs },
       instrument: bond,
       valuation: valueBondPosition(nominalGhs, bond.terms, bond.input, ctx.valuationDate),
+    };
+  }
+  if (p.assetClass === "TREASURY_BILL" && p.treasuryBillId) {
+    const bill = ctx.billById.get(p.treasuryBillId);
+    if (!bill) return null;
+    const faceValueGhs = Number(p.nominalGhs);
+    return {
+      positionId: p.id,
+      holding: { assetClass: "TREASURY_BILL", positionId: p.id, treasuryBillId: bill.id, faceValueGhs },
+      instrument: bill,
+      valuation: valueBillPosition(faceValueGhs, bill.input, ctx.valuationDate),
     };
   }
   if (p.assetClass === "EQUITY" && p.securityId) {
@@ -275,9 +347,9 @@ function toDetail(
   };
 }
 
-const positionSortKey = (p: PositionRow) => `${p.holding.assetClass === "BOND" ? "0" : "1"}|${p.instrument.kind === "BOND" ? p.instrument.label : p.instrument.ticker}`;
+const positionSortKey = (p: PositionRow) => `${p.holding.assetClass === "TREASURY_BILL" ? "0|" + (p.instrument as BillInstrument).maturityDate : p.holding.assetClass === "BOND" ? "1" : "2"}|${p.instrument.kind === "BOND" || p.instrument.kind === "TREASURY_BILL" ? p.instrument.label : p.instrument.ticker}`;
 
-const POSITION_SELECT = { id: true, assetClass: true, fixedIncomeSecurityId: true, nominalGhs: true, securityId: true, shares: true, createdAt: true } as const;
+const POSITION_SELECT = { id: true, assetClass: true, fixedIncomeSecurityId: true, treasuryBillId: true, nominalGhs: true, securityId: true, shares: true, createdAt: true } as const;
 
 /** Active (not archived) or archived portfolios, newest-updated first, each with its valuation summary. */
 export async function getPortfolios(opts: { archived: boolean }, ctx?: InstrumentContext): Promise<PortfolioDetail[]> {
@@ -312,6 +384,18 @@ export function toExposurePositions(rows: PositionRow[]): ExposurePosition[] {
         issuer: resolveIssuerRef({ companyId: b.companyId, issuerName: b.issuerName }),
         valuation: r.valuation,
         bond: { nominalGhs: r.holding.nominalGhs, currency: b.currency, status: b.status, terms: b.terms, maturityConflict: b.maturityConflict, couponConflict: b.couponConflict },
+      };
+    }
+    if (r.instrument.kind === "TREASURY_BILL" && r.holding.assetClass === "TREASURY_BILL") {
+      const b = r.instrument;
+      return {
+        positionId: r.positionId,
+        label: b.label,
+        assetClass: "TREASURY_BILL",
+        issuer: resolveIssuerRef({ companyId: b.companyId, issuerName: b.issuerName }),
+        valuation: r.valuation,
+        bond: null,
+        bill: { faceValueGhs: r.holding.faceValueGhs, currency: b.currency, tenorDays: b.tenorDays, issueDate: new Date(`${b.issueDate}T00:00:00.000Z`), maturityDate: new Date(`${b.maturityDate}T00:00:00.000Z`) },
       };
     }
     const e = r.instrument as EquityInstrument;
@@ -364,6 +448,28 @@ export async function getPositionProvenance(row: PositionRow): Promise<InputProv
         { label: "Published yield", value: obs.sourceYieldPct === null ? "—" : `${fmtNum(obs.sourceYieldPct)}%` },
         { label: "Volume traded", value: obs.volumeTradedGhs === null ? "—" : `GHS ${fmtNum(obs.volumeTradedGhs)}` },
         { label: "Number of trades", value: obs.numberOfTrades === null ? "—" : String(obs.numberOfTrades) },
+      ],
+    };
+  }
+  if (row.valuation.detail.assetClass === "TREASURY_BILL" && row.instrument.kind === "TREASURY_BILL") {
+    const d = row.valuation.detail;
+    const auctionDate = new Date(`${d.rateObservationDate}T00:00:00.000Z`);
+    const rates = await prisma.treasuryRate.findMany({
+      where: { observationDate: auctionDate, instrument: { tenorDays: { in: d.nodes.map((n) => n.tenorDays) } } },
+      include: { instrument: { select: { tenorDays: true } }, source: { select: { name: true } } },
+      orderBy: { instrument: { tenorDays: "asc" } },
+    });
+    if (rates.length === 0) return null;
+    const newest = rates.reduce((a, b) => (a.retrievedAt > b.retrievedAt ? a : b));
+    return {
+      sourceName: newest.source.name,
+      ingestionRunId: newest.ingestionRunId,
+      retrievedAt: newest.retrievedAt.toISOString(),
+      facts: [
+        { label: "Evidence type", value: "Bank of Ghana primary-auction rates (not a secondary-market quote)" },
+        { label: "Auction date", value: d.rateObservationDate },
+        ...rates.map((r) => ({ label: `${r.instrument.tenorDays}-day bill, tender ${r.tenderNumber ?? "—"}`, value: `interest rate ${fmtNum(r.interestRate, 4)}% · discount rate ${fmtNum(r.discountRate, 4)}%` })),
+        { label: "Rate used for this bill", value: `${fmtNum(d.referenceRatePct, 4)}% — ${d.methodDescription}` },
       ],
     };
   }

@@ -20,8 +20,9 @@ export const SCENARIO_TEMPLATES: ScenarioTemplate[] = [
   {
     id: "rate-pressure",
     name: "Rate pressure",
-    blurb: "Explore what happens if bond yields rise while equities are unchanged.",
+    blurb: "Explore what happens if Treasury-bill rates and bond yields rise while equities are unchanged.",
     assumptions: [
+      { assetClass: "TREASURY_BILL", value: 200 },
       { assetClass: "GOVERNMENT_BOND", value: 200 },
       { assetClass: "CORPORATE_BOND", value: 300 },
       { assetClass: "EQUITY", value: 0 },
@@ -30,8 +31,9 @@ export const SCENARIO_TEMPLATES: ScenarioTemplate[] = [
   {
     id: "broad-selloff",
     name: "Broad selloff",
-    blurb: "Explore simultaneous pressure across bonds and equities.",
+    blurb: "Explore simultaneous pressure across Treasury bills, bonds and equities.",
     assumptions: [
+      { assetClass: "TREASURY_BILL", value: 200 },
       { assetClass: "GOVERNMENT_BOND", value: 200 },
       { assetClass: "CORPORATE_BOND", value: 300 },
       { assetClass: "EQUITY", value: -10 },
@@ -40,7 +42,7 @@ export const SCENARIO_TEMPLATES: ScenarioTemplate[] = [
   {
     id: "equity-pullback",
     name: "Equity pullback",
-    blurb: "Explore a fall in equity prices while bond yields are unchanged.",
+    blurb: "Explore a fall in equity prices while Treasury-bill rates and bond yields are unchanged.",
     assumptions: [{ assetClass: "EQUITY", value: -10 }],
   },
 ];

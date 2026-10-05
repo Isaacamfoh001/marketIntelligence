@@ -99,7 +99,7 @@ function column(input: CompareInput): Omit<CompareColumn, "rank"> {
   return {
     id: input.id,
     name: input.name,
-    classAssumptions: { GOVERNMENT_BOND: classAssumption(result.rules, "GOVERNMENT_BOND"), CORPORATE_BOND: classAssumption(result.rules, "CORPORATE_BOND"), EQUITY: classAssumption(result.rules, "EQUITY") },
+    classAssumptions: Object.fromEntries(EXPOSURE_ASSET_CLASS_ORDER.map((c) => [c, classAssumption(result.rules, c)])) as Record<ExposureAssetClass, string | null>,
     startingValueGhs: p.referenceBasisGhs,
     scenarioValueGhs: p.scenarioValueGhs,
     impactGhs: p.impactGhs,

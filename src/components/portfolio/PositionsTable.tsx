@@ -15,9 +15,9 @@ const TH = "px-2 py-2 text-[11px] font-medium uppercase tracking-wide text-zinc-
 const TD = "whitespace-nowrap px-2 py-2";
 const NUM = "whitespace-nowrap px-2 py-2 text-right tabular-nums";
 
-const instrumentName = (r: PositionRow) => (r.instrument.kind === "BOND" ? r.instrument.label : r.instrument.ticker);
-const instrumentSub = (r: PositionRow) => (r.instrument.kind === "BOND" ? `${r.instrument.issuerName} · ${r.instrument.instrumentCode}` : r.instrument.companyName);
-const sizeText = (r: PositionRow) => (r.holding.assetClass === "BOND" ? formatGhs(r.holding.nominalGhs) : `${formatInt(r.holding.shares)} shares`);
+const instrumentName = (r: PositionRow) => (r.instrument.kind === "EQUITY" ? r.instrument.ticker : r.instrument.label);
+const instrumentSub = (r: PositionRow) => (r.instrument.kind === "BOND" ? `${r.instrument.issuerName} · ${r.instrument.instrumentCode}` : r.instrument.kind === "TREASURY_BILL" ? `${r.instrument.issuerName} · matures ${formatIsoDate(r.instrument.maturityDate)}` : r.instrument.companyName);
+const sizeText = (r: PositionRow) => (r.holding.assetClass === "BOND" ? formatGhs(r.holding.nominalGhs) : r.holding.assetClass === "TREASURY_BILL" ? `${formatGhs(r.holding.faceValueGhs)} face` : `${formatInt(r.holding.shares)} shares`);
 
 export function PositionsTable({ portfolioId, rows, selectedId }: { portfolioId: string; rows: PositionRow[]; selectedId?: string }) {
   return (
@@ -56,6 +56,7 @@ export function PositionsTable({ portfolioId, rows, selectedId }: { portfolioId:
                 <td className={TD}>
                   {v.status === "VALUED" && v.detail.assetClass === "BOND" && <span>Observed yield {formatPct(v.detail.observedYtmPct)}</span>}
                   {v.status === "VALUED" && v.detail.assetClass === "EQUITY" && <span>Last traded GHS {formatPrice(v.detail.priceGhs)}</span>}
+                  {v.status === "VALUED" && v.detail.assetClass === "TREASURY_BILL" && <span title={v.detail.methodDescription}>Auction-based rate {formatPct(v.detail.referenceRatePct)}</span>}
                   {v.status === "UNVALUED" && <span className="text-zinc-400 dark:text-zinc-500">No usable input</span>}
                 </td>
                 <td className={TD}>
@@ -73,6 +74,8 @@ export function PositionsTable({ portfolioId, rows, selectedId }: { portfolioId:
                   {v.status === "VALUED" ? (
                     v.detail.assetClass === "BOND" ? (
                       <span title={`Reference clean price per ${v.detail.faceValue} face, rolled to the valuation date`}>{formatPrice(v.detail.referenceCleanPrice)}</span>
+                    ) : v.detail.assetClass === "TREASURY_BILL" ? (
+                      <span title="Reference price per 100 of face value">{formatPrice(v.detail.referencePricePer100)}</span>
                     ) : (
                       <span>GHS {formatPrice(v.detail.priceGhs)}</span>
                     )
@@ -115,7 +118,11 @@ export function UnvaluedSection({ portfolioId, rows }: { portfolioId: string; ro
               <div className="text-sm text-zinc-700 dark:text-zinc-300">
                 <UnvaluedBadge code={v.code} /> <span className="ml-1">{v.reason}</span>
                 <div className="mt-1 text-xs">
-                  {r.instrument.kind === "BOND" ? (
+                  {r.instrument.kind === "TREASURY_BILL" ? (
+                    <Link href="/macro-rates#treasury-bills" className="text-blue-700 hover:underline dark:text-blue-400">
+                      Check the Bank of Ghana auction rates on Macro &amp; Rates
+                    </Link>
+                  ) : r.instrument.kind === "BOND" ? (
                     <Link href={`/fixed-income/${encodeURIComponent(r.instrument.instrumentCode)}#evidence`} className="text-blue-700 hover:underline dark:text-blue-400">
                       View this bond&rsquo;s evidence in Fixed Income
                     </Link>

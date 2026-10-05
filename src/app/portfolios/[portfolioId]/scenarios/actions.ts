@@ -61,12 +61,13 @@ function readHumanValue(formData: FormData, prefix: string, shockType: ShockType
 }
 
 const CORE: { prefix: string; assetClass: ExposureAssetClass }[] = [
+  { prefix: "tbill", assetClass: "TREASURY_BILL" },
   { prefix: "gov", assetClass: "GOVERNMENT_BOND" },
   { prefix: "corp", assetClass: "CORPORATE_BOND" },
   { prefix: "eq", assetClass: "EQUITY" },
 ];
 
-/** The "What do you want to test?" form: sets or clears the three asset-class assumptions together. Human (percentage points) and advanced (bps) entry resolve to the same stored value. */
+/** The "What do you want to test?" form: sets or clears the four asset-class assumptions together. Human (percentage points) and advanced (bps) entry resolve to the same stored value. */
 export async function saveCoreAssumptionsAction(portfolioId: string, scenarioId: string, _prev: ScenarioFormState, formData: FormData): Promise<ScenarioFormState> {
   const bondUnit: AmountUnit = text(formData, "mode") === "bps" ? "BPS" : "PP";
   const entries: { assetClass: ExposureAssetClass; value: number | null }[] = [];
@@ -85,7 +86,7 @@ export async function saveCoreAssumptionsAction(portfolioId: string, scenarioId:
 export async function addSpecificAssumptionAction(portfolioId: string, scenarioId: string, _prev: ScenarioFormState, formData: FormData): Promise<ScenarioFormState> {
   const target = parseTargetOption(text(formData, "target"));
   if (!target || target.kind === "ASSET_CLASS") return { error: "Choose what this assumption applies to." };
-  const shockType: ShockType = target.kind === "ISSUER" ? target.shockType : target.instrument === "BOND" ? "YIELD_BPS" : "PRICE_PCT";
+  const shockType: ShockType = target.kind === "ISSUER" ? target.shockType : target.instrument === "EQUITY" ? "PRICE_PCT" : "YIELD_BPS";
   const r = readHumanValue(formData, "v", shockType, shockType === "YIELD_BPS" ? (text(formData, "mode") === "bps" ? "BPS" : "PP") : "PCT");
   if (!r.ok) return { error: r.error };
   if (r.value === null) return { error: "Enter the size of the move." };

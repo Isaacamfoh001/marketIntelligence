@@ -307,7 +307,7 @@ describe("end-to-end: stored assumptions + current reference valuation → engin
 
     // The issuer label resolves from the live universe; the form options carry a type implied by each target.
     const opts = buildTargetOptions(portfolio);
-    expect(opts.filter((o) => o.group === "Asset class")).toHaveLength(3);
+    expect(opts.filter((o) => o.group === "Asset class")).toHaveLength(4);
     for (const o of opts) {
       const t = parseTargetOption(o.value);
       expect(t).not.toBeNull();

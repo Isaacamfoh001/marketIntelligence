@@ -22,3 +22,10 @@ export function checkEquityAddable(equity: { currency: string; active: boolean }
   if (!equity.active) return { addable: false, reason: "This security is inactive (delisted or suspended)." };
   return { addable: true };
 }
+
+/** A Treasury bill is addable until it matures; a matured bill is not a live holding. */
+export function checkBillAddable(bill: { currency: string; maturityDate: Date }, valuationDate: Date): Addable {
+  if (bill.currency !== "GHS") return { addable: false, reason: `Only GHS instruments are supported in portfolios (this one is ${bill.currency}).` };
+  if (bill.maturityDate.getTime() <= valuationDate.getTime()) return { addable: false, reason: "This Treasury bill has matured and can no longer be held." };
+  return { addable: true };
+}

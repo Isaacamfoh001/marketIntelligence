@@ -5,6 +5,7 @@
 // never predictive.
 // ---------------------------------------------------------------------------
 
+import { GOVERNMENT_OF_GHANA } from "../treasury-bills";
 import type { ParticipatingPositionResult, ScenarioPortfolioResult, ScenarioPositionResult, ScenarioShockRule } from "./types";
 
 const fmtGhs = (n: number) => `GHS ${Math.abs(n).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -18,12 +19,12 @@ export function describeShockChange(rule: Pick<ScenarioShockRule, "shockType" | 
   return `${be} ${rule.value > 0 ? "increased" : "decreased"} by ${fmtNum(rule.value)}${unit}`;
 }
 
-const ASSET_CLASS_SUBJECT = { GOVERNMENT_BOND: "Government bond yields", CORPORATE_BOND: "Corporate bond yields", EQUITY: "Equity prices" } as const;
+const ASSET_CLASS_SUBJECT = { TREASURY_BILL: "Treasury-bill rates", GOVERNMENT_BOND: "Government bond yields", CORPORATE_BOND: "Corporate bond yields", EQUITY: "Equity prices" } as const;
 
 export function describeRule(rule: ScenarioShockRule): string {
-  const noun = rule.shockType === "YIELD_BPS" ? "yield" : "price";
+  const noun = rule.shockType === "YIELD_BPS" ? "yield / rate" : "price";
   const plural = rule.selector.kind === "ASSET_CLASS";
-  const subject = rule.selector.kind === "ASSET_CLASS" ? ASSET_CLASS_SUBJECT[rule.selector.assetClass] : rule.selector.kind === "ISSUER" ? `${rule.targetLabel} ${rule.shockType === "YIELD_BPS" ? "bond yields" : "equity price"}` : `${rule.targetLabel} ${noun}`;
+  const subject = rule.selector.kind === "ASSET_CLASS" ? ASSET_CLASS_SUBJECT[rule.selector.assetClass] : rule.selector.kind === "ISSUER" ? `${rule.targetLabel} ${rule.shockType === "YIELD_BPS" ? (rule.targetLabel === GOVERNMENT_OF_GHANA ? "bond yields and Treasury-bill rates" : "bond yields") : "equity price"}` : `${rule.targetLabel} ${noun}`;
   const issuerPlural = rule.selector.kind === "ISSUER" && rule.shockType === "YIELD_BPS";
   return `${subject} ${describeShockChange(rule, plural || issuerPlural)}.`;
 }

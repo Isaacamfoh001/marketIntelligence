@@ -7,7 +7,7 @@
 // the add/edit form.
 // ---------------------------------------------------------------------------
 
-import { BOND_ASSUMPTION, RECENCY_LABEL, RECENCY_RULE, type PositionValuation } from "@/lib/portfolio";
+import { BILL_ASSUMPTION, BILL_BASIS_LABEL, BOND_ASSUMPTION, RECENCY_LABEL, RECENCY_RULE, type PositionValuation } from "@/lib/portfolio";
 import { formatGhs, formatIsoDate, formatPct } from "@/lib/fixed-income";
 import { ageText, formatInt, formatPrice, RecencyBadge } from "./ui";
 
@@ -64,6 +64,38 @@ export function ValuationBreakdown({ valuation }: { valuation: PositionValuation
           </p>
         )}
         <p className="mt-2 text-[11px] text-zinc-400 dark:text-zinc-500">{RECENCY_RULE.BOND}</p>
+      </div>
+    );
+  }
+
+  if (detail.assetClass === "TREASURY_BILL") {
+    return (
+      <div>
+        <dl>
+          <Row label="Face (maturity) value" value={formatGhs(detail.faceValueGhs)} sub="what the government pays at maturity" />
+          <Row label="Days to maturity" value={String(detail.daysToMaturity)} sub={`as at ${formatIsoDate(detail.valuationDate)}`} />
+          <Row label="Reference basis" value={BILL_BASIS_LABEL} sub={detail.methodDescription} />
+          <Row label="Reference rate" value={formatPct(detail.referenceRatePct, 4)} sub={`auction curve of ${formatIsoDate(detail.rateObservationDate)} · ${ageText(detail.ageDays)}`} />
+          <Row label="Input state" value={<span className="inline-flex items-center gap-1.5">{RECENCY_LABEL[valuation.recency]} <RecencyBadge recency={valuation.recency} /></span>} />
+          <Row label="Reference price" value={formatPrice(detail.referencePricePer100)} sub="per 100 of face" />
+          <Row label="Discount still to accrue" value={formatGhs(detail.remainingDiscountGhs)} sub="face value − reference value" />
+          <Row label="Reference value" value={formatGhs(valuation.referenceValueGhs)} strong />
+        </dl>
+        <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
+          {detail.convention}: reference value = face ÷ (1 + rate × days ÷ 365) = {formatInt(detail.faceValueGhs)} ÷ (1 + {(detail.referenceRatePct / 100).toFixed(6)} × {detail.daysToMaturity} ÷ 365)
+        </p>
+        <details className="mt-2 text-xs text-zinc-600 dark:text-zinc-400">
+          <summary className="cursor-pointer select-none">Sensitivity to the Treasury-bill rate</summary>
+          <dl className="mt-1">
+            <Row label="DV01" value={`${formatGhs(detail.dv01Ghs)} per bp`} sub="value change for a 1bp rise in the bill rate" />
+            <Row label="Modified duration" value={`${detail.modifiedDurationYears.toFixed(4)} years`} />
+          </dl>
+        </details>
+        <p className="mt-2 rounded border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs text-amber-900 dark:border-amber-900/50 dark:bg-amber-900/20 dark:text-amber-200">
+          <span className="font-medium">Assumption: </span>
+          {BILL_ASSUMPTION(formatIsoDate(detail.rateObservationDate), formatIsoDate(detail.valuationDate))}
+        </p>
+        <p className="mt-2 text-[11px] text-zinc-400 dark:text-zinc-500">{RECENCY_RULE.TREASURY_BILL}</p>
       </div>
     );
   }

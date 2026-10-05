@@ -8,6 +8,7 @@ import type { ExposureAssetClass } from "@/lib/portfolio";
 
 /** Same hues as AssetBadge so a class keeps one colour everywhere; labels always accompany them. */
 export const CLASS_BAR: Record<ExposureAssetClass, string> = {
+  TREASURY_BILL: "bg-teal-600 dark:bg-teal-500",
   GOVERNMENT_BOND: "bg-blue-600 dark:bg-blue-500",
   CORPORATE_BOND: "bg-sky-400 dark:bg-sky-400",
   EQUITY: "bg-violet-500 dark:bg-violet-400",

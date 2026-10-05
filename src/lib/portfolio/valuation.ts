@@ -23,6 +23,8 @@
 // ---------------------------------------------------------------------------
 
 import { computeAccruedInterest, priceFromYield, type BondTerms } from "../fixed-income";
+import { BILL_CONVENTION_LABEL, BILL_FORMULA, billDv01PerUnitFace, billModifiedDurationYears, billPricePer100, billPriceFactor, type CurveNode, type InterpolationMethod } from "../treasury-bills";
+import type { BillValuationInput } from "./bill-input";
 import type { BondValuationInput } from "./bond-input";
 import type { EquityValuationInput } from "./equity-input";
 import type { InputRecency, PortfolioAssetClass, Unvalued } from "./types";
@@ -59,6 +61,36 @@ export interface EquityValuationDetail {
   skippedNoTradeRows: number;
 }
 
+/**
+ * Treasury-bill reference valuation. Every term an analyst or expert needs to
+ * reproduce the figure is here: face, remaining days, the rate used and where
+ * it came from, the convention and the formula.
+ */
+export interface BillValuationDetail {
+  assetClass: "TREASURY_BILL";
+  /** Amount payable at maturity (the held face value), GHS. */
+  faceValueGhs: number;
+  valuationDate: string;
+  daysToMaturity: number;
+  /** Reference rate (percent, simple Act/365) the value rests on. */
+  referenceRatePct: number;
+  /** Date of the BoG auction curve behind the rate. */
+  rateObservationDate: string;
+  ageDays: number;
+  method: InterpolationMethod;
+  methodDescription: string;
+  nodes: CurveNode[];
+  /** Reference price per 100 of face. */
+  referencePricePer100: number;
+  /** face − reference value: the discount still to accrete by maturity. */
+  remainingDiscountGhs: number;
+  /** GHS per +1bp in the reference rate (positive magnitude). */
+  dv01Ghs: number;
+  modifiedDurationYears: number;
+  convention: string;
+  formula: string;
+}
+
 export interface ValuedPosition {
   status: "VALUED";
   assetClass: PortfolioAssetClass;
@@ -68,7 +100,7 @@ export interface ValuedPosition {
   /** The date of the observed input behind the value (bond: yield observed; equity: trade date). */
   inputDate: string;
   inputAgeDays: number;
-  detail: BondValuationDetail | EquityValuationDetail;
+  detail: BondValuationDetail | EquityValuationDetail | BillValuationDetail;
 }
 
 export interface UnvaluedPosition extends Unvalued {
@@ -112,6 +144,44 @@ export function valueBondPosition(nominalGhs: number, terms: BondTerms, input: B
       accruedInterest: accrued.accruedInterest,
       referenceDirtyPrice: dirty,
       pendingReview: input.pendingReview,
+    },
+  };
+}
+
+export function valueBillPosition(faceValueGhs: number, input: BillValuationInput | Unvalued, valuationDate: Date): PositionValuation {
+  if (!input.available) return { status: "UNVALUED", assetClass: "TREASURY_BILL", available: false, code: input.code, reason: input.reason };
+  const factor = billPriceFactor(input.referenceRatePct, input.daysToMaturity);
+  const dv01Unit = billDv01PerUnitFace(input.referenceRatePct, input.daysToMaturity);
+  const md = billModifiedDurationYears(input.referenceRatePct, input.daysToMaturity);
+  const price = billPricePer100(input.referenceRatePct, input.daysToMaturity);
+  if (factor === null || dv01Unit === null || md === null || price === null) {
+    return { status: "UNVALUED", assetClass: "TREASURY_BILL", available: false, code: "CALCULATION_FAILED", reason: "The reference value could not be calculated from this reference rate." };
+  }
+  const value = round2(faceValueGhs * factor);
+  return {
+    status: "VALUED",
+    assetClass: "TREASURY_BILL",
+    recency: input.recency,
+    referenceValueGhs: value,
+    inputDate: input.observationDate,
+    inputAgeDays: input.ageDays,
+    detail: {
+      assetClass: "TREASURY_BILL",
+      faceValueGhs,
+      valuationDate: isoDay(valuationDate),
+      daysToMaturity: input.daysToMaturity,
+      referenceRatePct: input.referenceRatePct,
+      rateObservationDate: input.observationDate,
+      ageDays: input.ageDays,
+      method: input.method,
+      methodDescription: input.methodDescription,
+      nodes: input.nodes,
+      referencePricePer100: price,
+      remainingDiscountGhs: round2(faceValueGhs - value),
+      dv01Ghs: faceValueGhs * dv01Unit,
+      modifiedDurationYears: md,
+      convention: BILL_CONVENTION_LABEL,
+      formula: BILL_FORMULA,
     },
   };
 }

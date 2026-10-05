@@ -11,7 +11,8 @@ export interface StoredShockRow {
   targetKind: "ASSET_CLASS" | "ISSUER" | "SECURITY";
   shockType: ShockType;
   value: number;
-  assetClass: "GOVERNMENT_BOND" | "CORPORATE_BOND" | "EQUITY" | null;
+  assetClass: "TREASURY_BILL" | "GOVERNMENT_BOND" | "CORPORATE_BOND" | "EQUITY" | null;
+  treasuryBillId: string | null;
   companyId: string | null;
   issuerNameKey: string | null;
   fixedIncomeSecurityId: string | null;
@@ -34,6 +35,7 @@ export function rowToSelector(row: StoredShockRow): ShockSelector | null {
   if (row.targetKind === "SECURITY") {
     if (row.fixedIncomeSecurityId) return { kind: "SECURITY", instrument: "BOND", instrumentId: row.fixedIncomeSecurityId };
     if (row.securityId) return { kind: "SECURITY", instrument: "EQUITY", instrumentId: row.securityId };
+    if (row.treasuryBillId) return { kind: "SECURITY", instrument: "TREASURY_BILL", instrumentId: row.treasuryBillId };
   }
   return null;
 }
@@ -44,13 +46,17 @@ export function rowToRule(row: StoredShockRow, targetLabel: string): ScenarioSho
 }
 
 /** Column values for inserting a selector. */
-export function selectorToColumns(selector: ShockSelector): Pick<StoredShockRow, "targetKind" | "assetClass" | "companyId" | "issuerNameKey" | "fixedIncomeSecurityId" | "securityId"> {
-  const none = { assetClass: null, companyId: null, issuerNameKey: null, fixedIncomeSecurityId: null, securityId: null };
+export function selectorToColumns(selector: ShockSelector): Pick<StoredShockRow, "targetKind" | "assetClass" | "companyId" | "issuerNameKey" | "fixedIncomeSecurityId" | "securityId" | "treasuryBillId"> {
+  const none = { assetClass: null, companyId: null, issuerNameKey: null, fixedIncomeSecurityId: null, securityId: null, treasuryBillId: null };
   switch (selector.kind) {
     case "ASSET_CLASS":
       return { ...none, targetKind: "ASSET_CLASS", assetClass: selector.assetClass };
     case "SECURITY":
-      return selector.instrument === "BOND" ? { ...none, targetKind: "SECURITY", fixedIncomeSecurityId: selector.instrumentId } : { ...none, targetKind: "SECURITY", securityId: selector.instrumentId };
+      return selector.instrument === "BOND"
+        ? { ...none, targetKind: "SECURITY", fixedIncomeSecurityId: selector.instrumentId }
+        : selector.instrument === "TREASURY_BILL"
+          ? { ...none, targetKind: "SECURITY", treasuryBillId: selector.instrumentId }
+          : { ...none, targetKind: "SECURITY", securityId: selector.instrumentId };
     case "ISSUER":
       return selector.issuerKey.startsWith("company:") ? { ...none, targetKind: "ISSUER", companyId: selector.issuerKey.slice("company:".length) } : { ...none, targetKind: "ISSUER", issuerNameKey: selector.issuerKey.replace(/^name:/, "") };
   }

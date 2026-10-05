@@ -9,7 +9,7 @@
 // ---------------------------------------------------------------------------
 
 import { redirect } from "next/navigation";
-import { addPosition, createPortfolio, removePosition, setPortfolioArchived, updatePosition } from "@/lib/portfolio-service";
+import { addPosition, addTreasuryBillPosition, createPortfolio, removePosition, setPortfolioArchived, updatePosition } from "@/lib/portfolio-service";
 import { parseEnteredNumber } from "@/lib/portfolio";
 
 export interface FormState {
@@ -39,12 +39,23 @@ export async function restorePortfolioAction(portfolioId: string): Promise<void>
   redirect(`/portfolios/${portfolioId}`);
 }
 
-/** Bonds carry `nominalGhs`, equities `shares` — never a generic quantity. */
-function readSize(assetClass: "BOND" | "EQUITY", formData: FormData): { nominalGhs?: number | null; shares?: number | null; error?: string } {
-  const raw = text(formData, assetClass === "BOND" ? "nominalGhs" : "shares");
-  const n = parseEnteredNumber(raw);
-  if (n === null) return { error: assetClass === "BOND" ? "Enter the nominal amount in GHS as a number." : "Enter the number of shares as a whole number." };
-  return assetClass === "BOND" ? { nominalGhs: n } : { shares: n };
+/** Bonds carry `nominalGhs`, Treasury bills their face amount (also `nominalGhs`), equities `shares` — never a generic quantity. */
+function readSize(assetClass: "BOND" | "EQUITY" | "TREASURY_BILL", formData: FormData): { nominalGhs?: number | null; shares?: number | null; error?: string } {
+  const amount = assetClass !== "EQUITY";
+  const n = parseEnteredNumber(text(formData, amount ? "nominalGhs" : "shares"));
+  if (n === null) return { error: assetClass === "TREASURY_BILL" ? "Enter the face amount in GHS as a number." : amount ? "Enter the nominal amount in GHS as a number." : "Enter the number of shares as a whole number." };
+  return amount ? { nominalGhs: n } : { shares: n };
+}
+
+/** Adds a Treasury bill holding from the analyst's description of it (tenor, maturity date, face amount). */
+export async function addTreasuryBillAction(portfolioId: string, _prev: FormState, formData: FormData): Promise<FormState> {
+  const tenorDays = Number(text(formData, "tenorDays"));
+  const faceValueGhs = parseEnteredNumber(text(formData, "faceValueGhs"));
+  if (faceValueGhs === null) return { error: "Enter the face amount in GHS as a number." };
+  const result = await addTreasuryBillPosition({ portfolioId, tenorDays, maturityDate: text(formData, "maturityDate"), faceValueGhs, isin: text(formData, "isin") });
+  if (result.ok) redirect(`/portfolios/${portfolioId}?position=${result.positionId}#inspect`);
+  if (result.existingPositionId) redirect(`/portfolios/${portfolioId}?position=${result.existingPositionId}&duplicate=1#inspect`);
+  return { error: result.error };
 }
 
 export async function addPositionAction(portfolioId: string, _prev: FormState, formData: FormData): Promise<FormState> {
@@ -62,7 +73,7 @@ export async function addPositionAction(portfolioId: string, _prev: FormState, f
   return { error: result.error };
 }
 
-export async function updatePositionAction(portfolioId: string, positionId: string, assetClass: "BOND" | "EQUITY", _prev: FormState, formData: FormData): Promise<FormState> {
+export async function updatePositionAction(portfolioId: string, positionId: string, assetClass: "BOND" | "EQUITY" | "TREASURY_BILL", _prev: FormState, formData: FormData): Promise<FormState> {
   const size = readSize(assetClass, formData);
   if (size.error) return { error: size.error };
   const result = await updatePosition({ positionId, nominalGhs: size.nominalGhs, shares: size.shares });

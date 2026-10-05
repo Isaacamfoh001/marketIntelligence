@@ -30,10 +30,12 @@
 // ---------------------------------------------------------------------------
 
 import { buildPricingPoints, computeDuration, priceFromYield } from "../fixed-income";
-import { EXPOSURE_ASSET_CLASS_ORDER, round2, type ValuedPosition, type BondValuationDetail, type EquityValuationDetail } from "../portfolio";
+import { BILL_CONVENTION_LABEL, BILL_FORMULA, billPriceFactor, billPricePer100 } from "../treasury-bills";
+import { EXPOSURE_ASSET_CLASS_ORDER, round2, type ValuedPosition, type BondValuationDetail, type BillValuationDetail, type EquityValuationDetail } from "../portfolio";
 import { explainScenario } from "./explain";
 import { resolveShock, validateRules } from "./shocks";
 import type {
+  BillScenarioDetail,
   BondScenarioDetail,
   EquityScenarioDetail,
   ParticipatingPositionResult,
@@ -123,6 +125,52 @@ interface ParticipatingValues {
   scenCents: number;
 }
 
+/**
+ * A Treasury bill is repriced with ITS OWN convention (simple interest, Act/365):
+ *   r1 = r0 + shockBps/100 ;  value = face / (1 + r1 × d/365)
+ * on the same valuation date and remaining days as the M8.1 reference value. The
+ * M7 compounding routine is deliberately not used (see treasury-bills/convention.ts).
+ */
+function repriceBill(valued: ValuedPosition, detail: BillValuationDetail, shockBps: number | null, explicitShock: boolean): Repriced<{ result: ParticipatingValues; detail: BillScenarioDetail; warnings: string[] }> {
+  const bps = shockBps ?? 0;
+  const r1 = detail.referenceRatePct + bps / 100;
+  const warnings: string[] = [];
+  const refCents = toCents(valued.referenceValueGhs);
+  let scenCents = refCents;
+  let price1 = detail.referencePricePer100;
+  if (explicitShock) {
+    const factor = billPriceFactor(r1, detail.daysToMaturity);
+    const p = billPricePer100(r1, detail.daysToMaturity);
+    if (factor === null || p === null || !(factor > 0)) return { ok: false, code: "INVALID_YIELD_DOMAIN", reason: `A scenario rate of ${r1.toFixed(4)}% is outside the range where this bill can be priced.` };
+    scenCents = toCents(round2(detail.faceValueGhs * factor));
+    price1 = p;
+  }
+  if (r1 < 0) warnings.push(`The scenario rate is negative (${r1.toFixed(2)}%).`);
+  const firstOrder = explicitShock ? 0 - detail.dv01Ghs * bps : 0; // `0 −` rather than unary minus: a zero shock must give +0, never −0
+  return {
+    ok: true,
+    value: {
+      result: { refCents, scenCents },
+      warnings,
+      detail: {
+        assetClass: "TREASURY_BILL",
+        faceValueGhs: detail.faceValueGhs,
+        daysToMaturity: detail.daysToMaturity,
+        referenceRatePct: detail.referenceRatePct,
+        appliedShockBps: bps,
+        scenarioRatePct: r1,
+        referencePricePer100: detail.referencePricePer100,
+        scenarioPricePer100: price1,
+        dv01Ghs: detail.dv01Ghs,
+        firstOrderImpactGhs: firstOrder,
+        firstOrderErrorGhs: fromCents(scenCents - refCents) - firstOrder,
+        convention: BILL_CONVENTION_LABEL,
+        formula: BILL_FORMULA,
+      },
+    },
+  };
+}
+
 function repriceEquity(valued: ValuedPosition, detail: EquityValuationDetail, shockPct: number | null, explicitShock: boolean): { result: ParticipatingValues; detail: EquityScenarioDetail } {
   const pct = shockPct ?? 0;
   const scenarioPrice = detail.priceGhs * (1 + pct / 100);
@@ -136,7 +184,7 @@ export function runScenario(input: ScenarioInput): ScenarioResult {
   if (errors.length > 0) return { ok: false, errors };
 
   const valuationDate = input.valuationDate;
-  type Interim = { position: ScenarioPosition; resolution: ShockResolution; values?: ParticipatingValues; detail?: BondScenarioDetail | EquityScenarioDetail; warnings?: string[]; fail?: UnavailablePositionResult };
+  type Interim = { position: ScenarioPosition; resolution: ShockResolution; values?: ParticipatingValues; detail?: BondScenarioDetail | EquityScenarioDetail | BillScenarioDetail; warnings?: string[]; fail?: UnavailablePositionResult };
   const interim: Interim[] = input.positions.map((position) => {
     const resolution = resolveShock(position, input.rules);
     const common = { positionId: position.positionId, label: position.label, assetClass: position.assetClass, issuer: position.issuer, resolution };
@@ -148,6 +196,11 @@ export function runScenario(input: ScenarioInput): ScenarioResult {
     const explicit = resolution.winner !== null;
     if (v.detail.assetClass === "BOND") {
       const r = repriceBond(position, v, v.detail, valuationDate, shock, explicit);
+      if (!r.ok) return { position, resolution, fail: { ...common, status: "UNAVAILABLE", code: r.code, upstreamCode: null, reason: r.reason } };
+      return { position, resolution, values: r.value.result, detail: r.value.detail, warnings: r.value.warnings };
+    }
+    if (v.detail.assetClass === "TREASURY_BILL") {
+      const r = repriceBill(v, v.detail, shock, explicit);
       if (!r.ok) return { position, resolution, fail: { ...common, status: "UNAVAILABLE", code: r.code, upstreamCode: null, reason: r.reason } };
       return { position, resolution, values: r.value.result, detail: r.value.detail, warnings: r.value.warnings };
     }

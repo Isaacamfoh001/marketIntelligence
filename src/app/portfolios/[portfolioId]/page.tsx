@@ -31,6 +31,7 @@ export default async function PortfolioPage({ params, searchParams }: { params: 
   const archived = portfolio.archivedAt !== null;
   const exposures = getPortfolioExposures(portfolio);
   const hasBonds = portfolio.positions.some((p) => p.holding.assetClass === "BOND");
+  const hasBills = portfolio.positions.some((p) => p.holding.assetClass === "TREASURY_BILL");
 
   return (
     <div className="mx-auto max-w-6xl space-y-5">
@@ -102,7 +103,7 @@ export default async function PortfolioPage({ params, searchParams }: { params: 
           {!archived && (
             <aside aria-label="Scenario Studio" className="flex flex-wrap items-center justify-between gap-2 rounded border border-zinc-200 bg-zinc-50 px-4 py-3 dark:border-zinc-800 dark:bg-zinc-900/60">
               <p className="text-sm text-zinc-700 dark:text-zinc-300">
-                <span className="font-medium text-zinc-900 dark:text-zinc-100">What if…?</span> Test an assumption about yields or equity prices against these exposures.
+                <span className="font-medium text-zinc-900 dark:text-zinc-100">What if…?</span> Test an assumption about Treasury-bill rates, bond yields or equity prices against these exposures.
               </p>
               <Link href={`/portfolios/${portfolio.id}/scenarios`} className="text-sm font-medium text-blue-700 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500 dark:text-blue-400">
                 Open Scenario Studio <span aria-hidden="true">→</span>
@@ -110,7 +111,7 @@ export default async function PortfolioPage({ params, searchParams }: { params: 
             </aside>
           )}
 
-          {hasBonds && (
+          {(hasBonds || hasBills) && (
             <>
               <section aria-label="Fixed-income profile" className="space-y-3">
                 <GroupHeading note="Rate sensitivity is market-based; the ladder is contractual">Fixed-income profile</GroupHeading>
@@ -119,9 +120,9 @@ export default async function PortfolioPage({ params, searchParams }: { params: 
               </section>
 
               <section aria-label="Contractual cash flows" className="space-y-3">
-                <GroupHeading note="Contractual — from bond terms, not market data">Contractual cash flows</GroupHeading>
+                <GroupHeading note="Contractual — from bond and bill terms, not market data">Contractual cash flows</GroupHeading>
                 <div className="grid gap-3 lg:grid-cols-2">
-                  <CouponPanel e={exposures} portfolioId={portfolio.id} />
+                  {hasBonds ? <CouponPanel e={exposures} portfolioId={portfolio.id} /> : <p className="rounded border border-zinc-200 bg-white p-4 text-sm text-zinc-600 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-400">Treasury bills pay no coupon: each pays its face value once, at maturity.</p>}
                   <UpcomingMaturitiesPanel e={exposures} portfolioId={portfolio.id} />
                 </div>
                 <p className="text-[11px] text-zinc-500 dark:text-zinc-400">{EXPOSURE_COPY.contractualVsMarket}</p>

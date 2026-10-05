@@ -25,6 +25,7 @@ export function UnvaluedBadge({ code }: { code: UnvaluedCode }) {
 }
 
 export function AssetBadge({ assetClass, classification }: { assetClass: PortfolioAssetClass; classification?: "GOVERNMENT_BOND" | "CORPORATE_BOND" }) {
+  if (assetClass === "TREASURY_BILL") return <span className={`${PILL} bg-teal-50 text-teal-700 dark:bg-teal-900/30 dark:text-teal-300`}>T-bill</span>;
   if (assetClass === "EQUITY") return <span className={`${PILL} bg-violet-50 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300`}>Equity</span>;
   return classification === "CORPORATE_BOND" ? (
     <span className={`${PILL} bg-sky-50 text-sky-700 dark:bg-sky-900/30 dark:text-sky-300`}>Corp bond</span>

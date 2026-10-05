@@ -10,7 +10,7 @@
 
 import Link from "next/link";
 import { useActionState, useMemo, useState } from "react";
-import { parseEnteredNumber, validatePositionDraft, valueBondPosition, valueEquityPosition } from "@/lib/portfolio";
+import { parseEnteredNumber, validatePositionDraft, valueBillPosition, valueBondPosition, valueEquityPosition } from "@/lib/portfolio";
 import type { HoldableInstrument } from "@/lib/queries/portfolio";
 import type { FormState } from "@/app/portfolios/actions";
 import { ValuationBreakdown } from "./ValuationBreakdown";
@@ -35,42 +35,46 @@ export function PositionSizeForm({
   const [state, formAction, pending] = useActionState<FormState, FormData>(action, {});
   const [raw, setRaw] = useState(initialValue);
   const isBond = instrument.kind === "BOND";
+  const isBill = instrument.kind === "TREASURY_BILL";
+  const isAmount = isBond || isBill; // GHS amount (nominal / face) rather than a share count
 
   const preview = useMemo(() => {
-    if (raw.trim() === "") return { hint: isBond ? "Enter a nominal amount to preview the reference value." : "Enter a number of shares to preview the reference value." } as const;
+    if (raw.trim() === "") return { hint: isBill ? "Enter the face amount to preview the reference value." : isBond ? "Enter a nominal amount to preview the reference value." : "Enter a number of shares to preview the reference value." } as const;
     const n = parseEnteredNumber(raw);
-    if (n === null) return { error: isBond ? "Enter the nominal as a number, e.g. 2,000,000." : "Enter shares as a whole number, e.g. 100,000." } as const;
-    const size = validatePositionDraft(isBond ? { assetClass: "BOND", nominalGhs: n, currency: "GHS" } : { assetClass: "EQUITY", shares: n, currency: "GHS" });
+    if (n === null) return { error: isBill ? "Enter the face amount as a number, e.g. 1,000,000." : isBond ? "Enter the nominal as a number, e.g. 2,000,000." : "Enter shares as a whole number, e.g. 100,000." } as const;
+    const size = validatePositionDraft(isBill ? { assetClass: "TREASURY_BILL", nominalGhs: n, currency: "GHS" } : isBond ? { assetClass: "BOND", nominalGhs: n, currency: "GHS" } : { assetClass: "EQUITY", shares: n, currency: "GHS" });
     if (!size.ok) return { error: size.error } as const;
     const valuationDate = new Date(`${valuationDateIso}T00:00:00.000Z`);
     const valuation =
       size.assetClass === "BOND" && instrument.kind === "BOND"
         ? valueBondPosition(size.nominalGhs, instrument.terms, instrument.input, valuationDate)
-        : size.assetClass === "EQUITY" && instrument.kind === "EQUITY"
-          ? valueEquityPosition(size.shares, instrument.input)
-          : null;
+        : size.assetClass === "TREASURY_BILL" && instrument.kind === "TREASURY_BILL"
+          ? valueBillPosition(size.faceValueGhs, instrument.input, valuationDate)
+          : size.assetClass === "EQUITY" && instrument.kind === "EQUITY"
+            ? valueEquityPosition(size.shares, instrument.input)
+            : null;
     return { valuation } as const;
-  }, [raw, instrument, isBond, valuationDateIso]);
+  }, [raw, instrument, isBond, isBill, valuationDateIso]);
 
-  const name = isBond ? "nominalGhs" : "shares";
+  const name = isAmount ? "nominalGhs" : "shares";
   return (
     <form action={formAction} className="space-y-3">
       <input type="hidden" name="assetClass" value={instrument.kind} />
       <input type="hidden" name="instrumentId" value={instrument.id} />
       <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-400">
-        {isBond ? "Nominal (GHS)" : "Shares"}
+        {isBill ? "Face (maturity) amount (GHS)" : isBond ? "Nominal (GHS)" : "Shares"}
         <input
           name={name}
           value={raw}
           onChange={(e) => setRaw(e.target.value)}
-          inputMode={isBond ? "decimal" : "numeric"}
+          inputMode={isAmount ? "decimal" : "numeric"}
           autoComplete="off"
           required
-          placeholder={isBond ? "2,000,000" : "100,000"}
+          placeholder={isBill ? "1,000,000" : isBond ? "2,000,000" : "100,000"}
           aria-describedby="size-preview"
           className={`${INPUT} mt-1 max-w-xs`}
         />
-        <span className="mt-1 block text-[11px] font-normal text-zinc-400 dark:text-zinc-500">{isBond ? "Face amount held, in Ghana cedis." : "Whole shares only."}</span>
+        <span className="mt-1 block text-[11px] font-normal text-zinc-400 dark:text-zinc-500">{isBill ? "The amount the government pays at maturity, in Ghana cedis — not what was paid, and not today's value." : isBond ? "Face amount held, in Ghana cedis." : "Whole shares only."}</span>
       </label>
 
       {(initialValue === "" || raw !== initialValue) && (

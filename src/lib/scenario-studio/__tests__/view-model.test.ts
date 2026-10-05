@@ -301,7 +301,7 @@ describe("comparison", () => {
     expect(c.columns[0].impactGhs).toBe(mild.portfolio.impactGhs);
     expect(c.columns[1].impactGhs).toBe(severe.portfolio.impactGhs);
     expect(c.columns[1].scenarioValueGhs).toBe(severe.portfolio.scenarioValueGhs);
-    expect(c.columns[0].classAssumptions).toEqual({ GOVERNMENT_BOND: "+100 bps", CORPORATE_BOND: "+150 bps", EQUITY: "0%" });
+    expect(c.columns[0].classAssumptions).toEqual({ TREASURY_BILL: null, GOVERNMENT_BOND: "+100 bps", CORPORATE_BOND: "+150 bps", EQUITY: "0%" });
     expect(c.columns[1].classAssumptions.EQUITY).toBe("−15%");
   });
   it("ranks the view with the larger decline first and explains why", () => {

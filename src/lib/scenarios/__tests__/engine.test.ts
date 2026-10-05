@@ -52,7 +52,7 @@ describe("zero-shock invariant", () => {
       if (p.detail.assetClass === "BOND") {
         expect(p.detail.scenarioDirtyPrice).toBeCloseTo(p.detail.referenceDirtyPrice, 12);
         expect(p.detail.scenarioYieldPct).toBe(p.detail.referenceYieldPct);
-      } else expect(p.detail.scenarioPriceGhs).toBe(p.detail.referencePriceGhs);
+      } else if (p.detail.assetClass === "EQUITY") expect(p.detail.scenarioPriceGhs).toBe(p.detail.referencePriceGhs);
     }
     expect(r.portfolio.impactGhs).toBe(0);
     expect(r.portfolio.scenarioValueGhs).toBe(r.portfolio.referenceBasisGhs);
@@ -336,11 +336,11 @@ describe("portfolio aggregation and contributions", () => {
 
   it("class rows exist for all three classes and equity-only / bond-only portfolios work", () => {
     const eqOnly = run([kasa(), gcb()], rules);
-    expect(eqOnly.portfolio.byAssetClass.map((c) => c.assetClass)).toEqual(["GOVERNMENT_BOND", "CORPORATE_BOND", "EQUITY"]);
-    expect(eqOnly.portfolio.byAssetClass[0]).toMatchObject({ participatingCount: 0, impactGhs: 0, impactPct: null });
+    expect(eqOnly.portfolio.byAssetClass.map((c) => c.assetClass)).toEqual(["TREASURY_BILL", "GOVERNMENT_BOND", "CORPORATE_BOND", "EQUITY"]);
+    expect(eqOnly.portfolio.byAssetClass[1]).toMatchObject({ participatingCount: 0, impactGhs: 0, impactPct: null });
     expect(eqOnly.portfolio.impactPct).toBeCloseTo(-10, 8);
     const bondOnly = run([govLong(), corp()], rules);
-    expect(bondOnly.portfolio.byAssetClass[2]).toMatchObject({ participatingCount: 0, referenceValueGhs: 0 });
+    expect(bondOnly.portfolio.byAssetClass[3]).toMatchObject({ participatingCount: 0, referenceValueGhs: 0 });
   });
 
   it("largest contributors are ordered, exclude zero impacts, and carry no 'winner/loser' vocabulary", () => {

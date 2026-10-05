@@ -83,8 +83,8 @@ describe("templates", () => {
   });
   it("match the product brief", () => {
     const by = Object.fromEntries(SCENARIO_TEMPLATES.map((t) => [t.id, t.assumptions.map((a) => `${a.assetClass}:${a.value}`)]));
-    expect(by["rate-pressure"]).toEqual(["GOVERNMENT_BOND:200", "CORPORATE_BOND:300", "EQUITY:0"]);
-    expect(by["broad-selloff"]).toEqual(["GOVERNMENT_BOND:200", "CORPORATE_BOND:300", "EQUITY:-10"]);
+    expect(by["rate-pressure"]).toEqual(["TREASURY_BILL:200", "GOVERNMENT_BOND:200", "CORPORATE_BOND:300", "EQUITY:0"]);
+    expect(by["broad-selloff"]).toEqual(["TREASURY_BILL:200", "GOVERNMENT_BOND:200", "CORPORATE_BOND:300", "EQUITY:-10"]);
     expect(by["equity-pullback"]).toEqual(["EQUITY:-10"]);
   });
   it("never use forecast language", () => {

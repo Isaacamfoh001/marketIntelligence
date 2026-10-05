@@ -137,7 +137,7 @@ export function MaturityLadderPanel({ e, portfolioId }: { e: PortfolioExposures;
     <ExposurePanel
       id="maturity"
       title="Maturity ladder"
-      basis="Contractual nominal"
+      basis="Contractual nominal / face"
       method={
         <>
           <p>{EXPOSURE_COPY.maturity}</p>
@@ -146,7 +146,7 @@ export function MaturityLadderPanel({ e, portfolioId }: { e: PortfolioExposures;
       }
     >
       {m.eligibleCount === 0 ? (
-        <p className="text-sm text-zinc-500 dark:text-zinc-400">{m.bondPositionCount === 0 ? "No bond positions." : "No bond has reliable maturity terms to place on the ladder."}</p>
+        <p className="text-sm text-zinc-500 dark:text-zinc-400">{m.bondPositionCount + m.treasuryBillPositionCount === 0 ? "No bond or Treasury-bill positions." : "No bond or Treasury bill has reliable maturity terms to place on the ladder."}</p>
       ) : (
         <>
           <MaturityLadderChart data={m.buckets.map((b) => ({ label: b.label, nominalGhs: b.nominalGhs, nominalPct: b.nominalPct, positionCount: b.positionCount, valuedReferenceValueGhs: b.valuedReferenceValueGhs, valuedCount: b.valuedCount, unvaluedNominalGhs: b.unvaluedNominalGhs }))} />
@@ -155,8 +155,8 @@ export function MaturityLadderPanel({ e, portfolioId }: { e: PortfolioExposures;
               <thead>
                 <tr className="text-[11px] uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
                   <th className="py-1 pr-2 text-left font-medium">Maturing</th>
-                  <th className="py-1 pr-2 text-right font-medium">Nominal</th>
-                  <th className="py-1 pr-2 text-right font-medium">% of nominal</th>
+                  <th className="py-1 pr-2 text-right font-medium">Nominal / face</th>
+                  <th className="py-1 pr-2 text-right font-medium">% of total</th>
                   <th className="py-1 text-right font-medium">Valued ref. value</th>
                 </tr>
               </thead>
@@ -175,7 +175,8 @@ export function MaturityLadderPanel({ e, portfolioId }: { e: PortfolioExposures;
             </table>
           </div>
           <p className="mt-2 text-[11px] text-zinc-500 dark:text-zinc-400">
-            % of eligible bond nominal ({formatGhs(m.eligibleNominalGhs)}, {plural(m.eligibleCount, "bond")}). Includes bonds without a market valuation; reference-value column is valued bonds only.
+            % of eligible nominal / face ({formatGhs(m.eligibleNominalGhs)}, {plural(m.eligibleCount, "bond or bill", "bonds and bills")}). Includes positions without a market valuation; reference-value column is valued positions only.
+            {m.buckets.some((b) => b.treasuryBillFaceGhs > 0) && ` Treasury bills (${formatGhs(m.buckets.reduce((s, b) => s + b.treasuryBillFaceGhs, 0))} face) each repay their face value once, at maturity.`}
           </p>
         </>
       )}
@@ -202,6 +203,35 @@ function Excluded({ title, items, portfolioId }: { title: string; items: { posit
   );
 }
 
+function BillRates({ b, portfolioId }: { b: PortfolioExposures["rates"]["treasuryBills"]; portfolioId: string }) {
+  return (
+    <div className="mb-4 border-b border-zinc-100 pb-4 dark:border-zinc-800">
+      <h4 className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Treasury bills — sensitivity to the short-term rate</h4>
+      {b.dv01Ghs === null ? (
+        <p className="text-sm text-zinc-500 dark:text-zinc-400">No Treasury bill can be valued today, so its rate sensitivity cannot be calculated.</p>
+      ) : (
+        <>
+          <dl className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-4">
+            <Metric label="T-bill DV01" value={formatGhs(b.dv01Ghs)} sub="per 1bp rise in bill rates" hint="Approximate change in valued Treasury-bill reference value for a 1bp parallel rise in the bill reference rate" />
+            <Metric label="Modified duration" value={b.weightedModifiedDurationYears === null ? "—" : `${b.weightedModifiedDurationYears.toFixed(2)} yrs`} sub="reference-value weighted" />
+          </dl>
+          <ul className="mt-2 space-y-1 text-xs text-zinc-600 dark:text-zinc-400">
+            {b.contributors.map((p) => (
+              <li key={p.positionId}>
+                <Link href={posHref(portfolioId, p.positionId)} className="font-medium text-zinc-800 hover:underline dark:text-zinc-200">
+                  {p.label}
+                </Link>{" "}
+                — {ghs0(p.dv01Ghs)}/bp · {p.daysToMaturity} days left · reference rate {p.referenceRatePct.toFixed(2)}%{p.recency === "STALE" && " · stale auction rate"}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      {b.excluded.length > 0 && <Excluded title={`No sensitivity figure for ${plural(b.excluded.length, "Treasury bill")}`} items={b.excluded} portfolioId={portfolioId} />}
+    </div>
+  );
+}
+
 export function RateSensitivityPanel({ e, portfolioId }: { e: PortfolioExposures; portfolioId: string }) {
   const r = e.rates;
   const max = r.contributors[0]?.dv01Ghs ?? 0;
@@ -209,10 +239,13 @@ export function RateSensitivityPanel({ e, portfolioId }: { e: PortfolioExposures
   return (
     <ExposurePanel
       id="rates"
-      title="Interest-rate sensitivity — bond sleeve"
-      basis="Valued bonds only"
+      title="Interest-rate sensitivity"
+      basis="Valued fixed-income positions"
       method={
         <>
+          <p>
+            <strong>Treasury-bill DV01.</strong> {EXPOSURE_COPY.billDv01}
+          </p>
           <p>
             <strong>Bond DV01.</strong> {EXPOSURE_COPY.dv01}
           </p>
@@ -222,7 +255,8 @@ export function RateSensitivityPanel({ e, portfolioId }: { e: PortfolioExposures
         </>
       }
     >
-      {r.bondDv01Ghs === null ? (
+      {r.treasuryBills.billPositionCount > 0 && <BillRates b={r.treasuryBills} portfolioId={portfolioId} />}
+      {c.bondPositionCount === 0 && r.treasuryBills.billPositionCount > 0 ? null : r.bondDv01Ghs === null ? (
         <p className="text-sm text-zinc-500 dark:text-zinc-400">{c.bondPositionCount === 0 ? "No bond positions, so there is no interest-rate sensitivity." : "No bond can be valued today, so its rate sensitivity cannot be calculated."}</p>
       ) : (
         <>
@@ -323,15 +357,15 @@ export function UpcomingMaturitiesPanel({ e, portfolioId }: { e: PortfolioExposu
   return (
     <ExposurePanel id="upcoming" title="Upcoming maturities" basis="Nearest contractual principal" method={<p>{EXPOSURE_COPY.upcoming}</p>}>
       {e.upcoming.length === 0 ? (
-        <p className="text-sm text-zinc-500 dark:text-zinc-400">No bond with reliable maturity terms.</p>
+        <p className="text-sm text-zinc-500 dark:text-zinc-400">No bond or Treasury bill with reliable maturity terms.</p>
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full min-w-[26rem] text-xs">
             <thead>
               <tr className="text-[11px] uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-                <th className="py-1 pr-2 text-left font-medium">Bond</th>
+                <th className="py-1 pr-2 text-left font-medium">Holding</th>
                 <th className="py-1 pr-2 text-left font-medium">Matures</th>
-                <th className="py-1 pr-2 text-right font-medium">Nominal held</th>
+                <th className="py-1 pr-2 text-right font-medium">Nominal / face held</th>
                 <th className="py-1 text-right font-medium">Reference value</th>
               </tr>
             </thead>

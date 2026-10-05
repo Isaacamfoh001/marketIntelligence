@@ -14,7 +14,7 @@ export const MAX_SHARES = 2_147_483_647;
 
 export interface PositionDraft {
   assetClass: PortfolioAssetClass;
-  /** Bonds only. */
+  /** Bonds: nominal; Treasury bills: face (maturity) amount. */
   nominalGhs?: number | null;
   /** Equities only. */
   shares?: number | null;
@@ -22,7 +22,7 @@ export interface PositionDraft {
   currency: string;
 }
 
-export type PositionSize = { ok: true; assetClass: "BOND"; nominalGhs: number } | { ok: true; assetClass: "EQUITY"; shares: number } | { ok: false; error: string };
+export type PositionSize = { ok: true; assetClass: "BOND"; nominalGhs: number } | { ok: true; assetClass: "TREASURY_BILL"; faceValueGhs: number } | { ok: true; assetClass: "EQUITY"; shares: number } | { ok: false; error: string };
 
 /**
  * Validates a position's size for its asset class. Rejects: non-GHS
@@ -33,6 +33,15 @@ export type PositionSize = { ok: true; assetClass: "BOND"; nominalGhs: number } 
 export function validatePositionDraft(draft: PositionDraft): PositionSize {
   if (draft.currency !== "GHS") {
     return { ok: false, error: `Only GHS instruments are supported (this one is ${draft.currency}).` };
+  }
+  if (draft.assetClass === "TREASURY_BILL") {
+    if (draft.shares !== null && draft.shares !== undefined) return { ok: false, error: "A Treasury bill is recorded as a face (maturity) amount in GHS, not shares." };
+    const n = draft.nominalGhs;
+    if (n === null || n === undefined || !Number.isFinite(n)) return { ok: false, error: "Enter the face (maturity) amount in GHS." };
+    if (n <= 0) return { ok: false, error: "Face value must be greater than zero — short and zero positions are not supported." };
+    if (n > MAX_NOMINAL_GHS) return { ok: false, error: "Face value is implausibly large." };
+    if (Math.abs(n * 100 - Math.round(n * 100)) > 1e-6) return { ok: false, error: "Face value can have at most two decimal places." };
+    return { ok: true, assetClass: "TREASURY_BILL", faceValueGhs: Math.round(n * 100) / 100 };
   }
   if (draft.assetClass === "BOND") {
     if (draft.shares !== null && draft.shares !== undefined) return { ok: false, error: "A bond position is recorded as a nominal GHS amount, not shares." };
@@ -57,6 +66,7 @@ export function findExistingPosition(positions: PositionHolding[], candidate: In
   return (
     positions.find((p) => {
       if (p.assetClass !== candidate.assetClass) return false;
+      if (p.assetClass === "TREASURY_BILL") return p.treasuryBillId === (candidate as { treasuryBillId: string }).treasuryBillId;
       return p.assetClass === "BOND" ? p.fixedIncomeSecurityId === (candidate as { fixedIncomeSecurityId: string }).fixedIncomeSecurityId : p.securityId === (candidate as { securityId: string }).securityId;
     }) ?? null
   );

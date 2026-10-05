@@ -29,7 +29,7 @@ export default async function ScenarioPage({ params, searchParams }: { params: P
   const options = buildTargetOptions(portfolio);
   const view = studio.view;
 
-  const initial: Record<ExposureAssetClass, number | null> = { GOVERNMENT_BOND: null, CORPORATE_BOND: null, EQUITY: null };
+  const initial: Record<ExposureAssetClass, number | null> = { TREASURY_BILL: null, GOVERNMENT_BOND: null, CORPORATE_BOND: null, EQUITY: null };
   for (const { rule } of scenario.shocks) if (rule.selector.kind === "ASSET_CLASS") initial[rule.selector.assetClass] = rule.value;
   const editorOpen = !locked && scenario.shocks.length === 0;
 

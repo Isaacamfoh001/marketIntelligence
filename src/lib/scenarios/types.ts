@@ -18,6 +18,9 @@ import type { ExposureAssetClass, InputRecency, IssuerRef, UnvaluedCode } from "
 
 export type ShockType = "YIELD_BPS" | "PRICE_PCT";
 
+/** Which table a SECURITY-level target id refers to. TREASURY_BILL ids are TreasuryBill ids (M8.5). */
+export type SecurityInstrument = "BOND" | "EQUITY" | "TREASURY_BILL";
+
 /** V1 input bounds. Violations are REJECTED, never clamped. */
 export const SHOCK_BOUNDS = {
   /** ±2000 bps = ±20 percentage points: wider than any plausible Ghana-market assumption (secondary yields sit ~15–35%) yet small enough to keep every supported bond in a well-behaved numerical range. */
@@ -32,7 +35,7 @@ export type ShockSelector =
   | { kind: "ASSET_CLASS"; assetClass: ExposureAssetClass }
   /** `issuerKey` is the M8.2 issuer identity: "company:<id>" or "name:<normalised name>". The shock TYPE decides whether it reaches the issuer's bonds (YIELD_BPS) or equity (PRICE_PCT). */
   | { kind: "ISSUER"; issuerKey: string }
-  | { kind: "SECURITY"; instrument: "BOND" | "EQUITY"; instrumentId: string };
+  | { kind: "SECURITY"; instrument: SecurityInstrument; instrumentId: string };
 
 export type SelectorKind = ShockSelector["kind"];
 
@@ -83,7 +86,7 @@ export interface ShockResolution {
 export type ScenarioUnavailableCode =
   | "UNVALUED_REFERENCE" // M8.1 produced no reference value — no baseline, no scenario
   | "INVALID_YIELD_DOMAIN" // scenario yield makes the pricing function undefined / non-positive
-  | "PRICING_FAILED" // M7 refused to price the bond
+  | "PRICING_FAILED" // M7 refused to price the bond / the bill formula was undefined
   | "MISSING_TERMS";
 
 export interface BondScenarioDetail {
@@ -106,6 +109,29 @@ export interface BondScenarioDetail {
   firstOrderImpactGhs: number | null;
   /** exact impact − first-order estimate (what convexity and rounding account for). */
   firstOrderErrorGhs: number | null;
+}
+
+/**
+ * Treasury-bill scenario: the shock moves the bill REFERENCE RATE (simple
+ * Act/365) by `appliedShockBps`; the bill is revalued with the bill formula,
+ * never the coupon-bond / ZERO_COUPON compounding routine.
+ */
+export interface BillScenarioDetail {
+  assetClass: "TREASURY_BILL";
+  faceValueGhs: number;
+  daysToMaturity: number;
+  referenceRatePct: number;
+  appliedShockBps: number;
+  scenarioRatePct: number;
+  referencePricePer100: number;
+  scenarioPricePer100: number;
+  /** GHS per +1bp at the reference rate (positive magnitude). */
+  dv01Ghs: number;
+  /** FIRST-ORDER estimate −DV01 × shockBps. NOT the scenario result. */
+  firstOrderImpactGhs: number;
+  firstOrderErrorGhs: number;
+  convention: string;
+  formula: string;
 }
 
 export interface EquityScenarioDetail {
@@ -138,7 +164,7 @@ export interface ParticipatingPositionResult extends ScenarioPositionCommon {
   impactPct: number | null;
   /** Contribution to the portfolio: impact ÷ portfolio scenario reference basis × 100 (percentage points of the basis). Null if the basis is 0. */
   contributionPct: number | null;
-  detail: BondScenarioDetail | EquityScenarioDetail;
+  detail: BondScenarioDetail | EquityScenarioDetail | BillScenarioDetail;
   warnings: string[];
 }
 

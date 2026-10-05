@@ -445,7 +445,7 @@ function buildInvestigations(result: OkResult, headline: HeadlineView, drivers: 
     .filter((x) => x.assetClass !== "EQUITY" && x.impactGhs !== 0 && !used.has(x.positionId))
     .sort((a, b) => Math.abs(b.impactGhs) - Math.abs(a.impactGhs) || a.label.localeCompare(b.label))[0];
   if (bond) {
-    const cls = EXPOSURE_ASSET_CLASS_LABEL[bond.assetClass].toLowerCase().replace(/s$/, "");
+    const cls = bond.assetClass === "TREASURY_BILL" ? "Treasury bill" : EXPOSURE_ASSET_CLASS_LABEL[bond.assetClass].toLowerCase().replace(/s$/, "");
     const isLargestOfClass = !part.some((x) => x.assetClass === bond.assetClass && Math.abs(x.impactGhs) > Math.abs(bond.impactGhs));
     items.push({
       kind: "RATE_SENSITIVE",
@@ -453,7 +453,7 @@ function buildInvestigations(result: OkResult, headline: HeadlineView, drivers: 
       positionId: bond.positionId,
       positionLabel: bond.label,
       headline: `Scenario impact: ${signedGhsWhole(bond.impactGhs)}`,
-      why: `${isLargestOfClass ? `It is the largest ${cls} contributor under this scenario.` : "It is the largest bond contributor not already listed above."}${staleNote(bond)}`,
+      why: `${isLargestOfClass ? `It is the largest ${cls} contributor under this scenario.` : "It is the largest fixed-income contributor not already listed above."}${staleNote(bond)}`,
       link: linkFor(bond.positionId, "analysis"),
     });
     used.add(bond.positionId);
@@ -527,6 +527,16 @@ function simpleBond(pos: Participating, d: Extract<Participating["detail"], { as
   const dirText = same ? "stays at" : rising ? "rises from" : "falls from";
   const first = same ? `Under this scenario, its assumed yield stays at ${pct2(d.referenceYieldPct)}.` : `Under this scenario, its assumed yield ${dirText} ${pct2(d.referenceYieldPct)} to ${pct2(d.scenarioYieldPct)}.`;
   const second = same ? "" : `Because bond prices move in the opposite direction to yields, its value ${rising ? "falls" : "rises"} from ${ghsCompact(pos.referenceValueGhs)} to ${ghsCompact(pos.scenarioValueGhs)}.`;
+  const third = pos.impactGhs === 0 ? "That leaves the portfolio unchanged." : `That ${pos.impactGhs < 0 ? "reduces" : "increases"} the portfolio by approximately ${ghsCompact(pos.impactGhs)}.`;
+  return [[first, second, third].filter(Boolean).join(" ")];
+}
+
+function simpleBill(pos: Participating, d: Extract<Participating["detail"], { assetClass: "TREASURY_BILL" }>): string[] {
+  if (pos.outcome === "UNCHANGED") return [`No assumption reaches this holding, so it keeps its starting value of ${ghsCompact(pos.referenceValueGhs)} (reference rate ${pct2(d.referenceRatePct)}, ${d.daysToMaturity} days to maturity).`];
+  const rising = d.scenarioRatePct > d.referenceRatePct;
+  const same = d.scenarioRatePct === d.referenceRatePct;
+  const first = same ? `Under this scenario, its reference rate stays at ${pct2(d.referenceRatePct)}.` : `Under this scenario, its reference rate ${rising ? "rises" : "falls"} from ${pct2(d.referenceRatePct)} to ${pct2(d.scenarioRatePct)}.`;
+  const second = same ? "" : `A Treasury bill pays its face value of ${ghsCompact(d.faceValueGhs)} in ${d.daysToMaturity} days, so a higher rate means a lower value today (and the reverse): its value ${rising ? "falls" : "rises"} from ${ghsCompact(pos.referenceValueGhs)} to ${ghsCompact(pos.scenarioValueGhs)}.`;
   const third = pos.impactGhs === 0 ? "That leaves the portfolio unchanged." : `That ${pos.impactGhs < 0 ? "reduces" : "increases"} the portfolio by approximately ${ghsCompact(pos.impactGhs)}.`;
   return [[first, second, third].filter(Boolean).join(" ")];
 }
@@ -614,6 +624,37 @@ function buildPosition(result: OkResult, pos: OkResult["positions"][number], lin
               { label: "Exact repricing difference", value: signedGhsExact(d.firstOrderErrorGhs), note: "Exact impact minus the first-order estimate. Exact cash-flow repricing is used for the scenario result; DV01 is shown only as an approximation of small rate changes." },
             ],
     });
+  } else if (d.assetClass === "TREASURY_BILL") {
+    groups.push({
+      title: "Rate and price",
+      rows: [
+        { label: "Face (maturity) value", value: ghsExact(d.faceValueGhs), note: "What the government pays at maturity." },
+        { label: "Days to maturity", value: String(d.daysToMaturity) },
+        { label: "Reference rate", value: pct4(d.referenceRatePct), note: "Interpolated from the latest Bank of Ghana auction curve — an interpolated estimate from auctions of new bills, not a secondary-market quote for this bill, so treat it as indicative." },
+        { label: "Applied assumption", value: d.appliedShockBps === 0 && !pos.resolution.winner ? "None" : `${signOf(d.appliedShockBps)}${Math.abs(d.appliedShockBps)} bps` },
+        { label: "Scenario rate", value: pct4(d.scenarioRatePct) },
+        { label: "Reference price (per 100 of face)", value: num6(d.referencePricePer100) },
+        { label: "Scenario price (per 100 of face)", value: num6(d.scenarioPricePer100) },
+        { label: "Convention", value: d.convention },
+        { label: "Formula", value: d.formula },
+      ],
+    });
+    groups.push({
+      title: "Value",
+      rows: [
+        { label: "Reference value", value: ghsExact(pos.referenceValueGhs), note: STARTING_VALUE_HELP },
+        { label: "Scenario value", value: ghsExact(pos.scenarioValueGhs), note: "Exact Treasury-bill repricing at the scenario rate." },
+        { label: "Exact impact", value: signedGhsExact(pos.impactGhs) },
+      ],
+    });
+    groups.push({
+      title: "Rate sensitivity (DV01)",
+      rows: [
+        { label: "DV01", value: `${ghsExact(d.dv01Ghs)}/bp`, note: "For a very small increase in the Treasury-bill rate, this position changes by roughly this much per basis point." },
+        { label: "First-order DV01 estimate", value: signedGhsExact(d.firstOrderImpactGhs), note: "−DV01 × shock. A small-move approximation shown for comparison only." },
+        { label: "Exact repricing difference", value: signedGhsExact(d.firstOrderErrorGhs), note: "Exact impact minus the first-order estimate (curvature and pesewa rounding)." },
+      ],
+    });
   } else {
     groups.push({
       title: "Price and value",
@@ -645,7 +686,7 @@ function buildPosition(result: OkResult, pos: OkResult["positions"][number], lin
     scenarioText: ghsWhole(pos.scenarioValueGhs),
     impactText: signedGhsWhole(pos.impactGhs),
     impactPctText: signedPct(pos.impactPct),
-    simple: d.assetClass === "BOND" ? simpleBond(pos, d) : simpleEquity(pos, d),
+    simple: d.assetClass === "BOND" ? simpleBond(pos, d) : d.assetClass === "TREASURY_BILL" ? simpleBill(pos, d) : simpleEquity(pos, d),
     freshnessNote: pos.recency === "STALE" ? STALE_SENTENCE : null,
     technical: groups,
   };

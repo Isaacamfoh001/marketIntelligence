@@ -222,7 +222,7 @@ export default async function MacroRatesPage() {
       </section>
 
       {/* ------------------------------------------------------------ */}
-      <section>
+      <section id="treasury-bills" className="scroll-mt-4">
         <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
           Treasury Bills
           <ConditionBadge result={ratesCondition} />

@@ -14,7 +14,7 @@
 // price, and every position states exactly which input it rests on.
 // ---------------------------------------------------------------------------
 
-export type PortfolioAssetClass = "BOND" | "EQUITY";
+export type PortfolioAssetClass = "BOND" | "EQUITY" | "TREASURY_BILL";
 
 /**
  * Whether the observed input behind a valuation is recent or stale at the
@@ -25,16 +25,20 @@ export type InputRecency = "RECENT" | "STALE";
 
 /** Bond: M7's weekly tolerance (observationFreshness("WEEKLY")) — kept in sync by a test. */
 export const BOND_RECENT_WINDOW_DAYS = 10;
+/** Treasury bill: BoG auctions weekly, so the same weekly tolerance as bonds (observationFreshness("WEEKLY")) — kept in sync by a test. */
+export const BILL_RECENT_WINDOW_DAYS = 10;
 /** Equity: an input observed within this many calendar days of the valuation date is recent (M8 decision 3). */
 export const EQUITY_RECENT_WINDOW_DAYS = 7;
 
 /** A recorded holding, as the analyst entered it. */
 export type PositionHolding =
   | { assetClass: "BOND"; positionId: string; fixedIncomeSecurityId: string; nominalGhs: number }
-  | { assetClass: "EQUITY"; positionId: string; securityId: string; shares: number };
+  | { assetClass: "EQUITY"; positionId: string; securityId: string; shares: number }
+  /** `faceValueGhs` is the amount the government pays at maturity — NOT what was paid, NOT today's value. */
+  | { assetClass: "TREASURY_BILL"; positionId: string; treasuryBillId: string; faceValueGhs: number };
 
 /** Which instrument a (candidate) position refers to — the key of the one-position-per-instrument rule. */
-export type InstrumentRef = { assetClass: "BOND"; fixedIncomeSecurityId: string } | { assetClass: "EQUITY"; securityId: string };
+export type InstrumentRef = { assetClass: "BOND"; fixedIncomeSecurityId: string } | { assetClass: "EQUITY"; securityId: string } | { assetClass: "TREASURY_BILL"; treasuryBillId: string };
 
 /** Why a position cannot be given a reference value. Always paired with a human reason — never a silent zero. */
 export type UnvaluedCode =
@@ -45,6 +49,7 @@ export type UnvaluedCode =
   | "TERMS_UNSUPPORTED"
   | "TERMS_CONFLICT"
   | "NO_OBSERVATION"
+  | "NO_REFERENCE_RATE"
   | "NO_TRADE"
   | "UNDER_REVIEW"
   | "OBSERVATION_EXCLUDED"

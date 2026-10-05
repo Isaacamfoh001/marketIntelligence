@@ -43,13 +43,16 @@
 // ---------------------------------------------------------------------------
 
 import { computeDuration, daysBetween, paymentsPerYear, shiftMonths, type BondTerms } from "../fixed-income";
+import { billDaysToMaturity } from "../treasury-bills";
 import type { PositionValuation, ValuedPosition } from "./valuation";
 
-export type ExposureAssetClass = "GOVERNMENT_BOND" | "CORPORATE_BOND" | "EQUITY";
+export type ExposureAssetClass = "TREASURY_BILL" | "GOVERNMENT_BOND" | "CORPORATE_BOND" | "EQUITY";
 
-export const EXPOSURE_ASSET_CLASS_ORDER: ExposureAssetClass[] = ["GOVERNMENT_BOND", "CORPORATE_BOND", "EQUITY"];
+/** Treasury bills are their own asset class (M8.5): a discount instrument with a single payment, valued and shocked differently from a coupon bond — never merged into "Government bonds". */
+export const EXPOSURE_ASSET_CLASS_ORDER: ExposureAssetClass[] = ["TREASURY_BILL", "GOVERNMENT_BOND", "CORPORATE_BOND", "EQUITY"];
 
 export const EXPOSURE_ASSET_CLASS_LABEL: Record<ExposureAssetClass, string> = {
+  TREASURY_BILL: "Treasury bills",
   GOVERNMENT_BOND: "Government bonds",
   CORPORATE_BOND: "Corporate bonds",
   EQUITY: "Equities",
@@ -73,6 +76,15 @@ export interface BondContractFacts {
   couponConflict: boolean;
 }
 
+/** Contractual facts of a held Treasury bill. A bill has ONE contractual payment: its face value at maturity. */
+export interface BillContractFacts {
+  faceValueGhs: number;
+  currency: string;
+  tenorDays: number;
+  issueDate: Date;
+  maturityDate: Date;
+}
+
 export interface ExposurePosition {
   positionId: string;
   label: string;
@@ -80,8 +92,10 @@ export interface ExposurePosition {
   issuer: IssuerRef;
   /** The trusted M8.1 valuation of this position. */
   valuation: PositionValuation;
-  /** Present for bonds only. */
+  /** Present for coupon bonds only. */
   bond: BondContractFacts | null;
+  /** Present for Treasury bills only. */
+  bill?: BillContractFacts | null;
 }
 
 const toCents = (ghs: number) => Math.round(ghs * 100);
@@ -101,6 +115,13 @@ export function resolveIssuerRef(input: { companyId: string | null; issuerName: 
 // ---------------------------------------------------------------------------
 
 export type ContractualExclusionCode = "NOT_GHS" | "MATURED" | "NOT_OUTSTANDING" | "MATURITY_CONFLICT" | "COUPON_CONFLICT" | "FLOATING_RATE" | "TERMS_INCOMPLETE";
+
+/** Ladder / upcoming-maturity eligibility for a bill: a live GHS bill with a future maturity. */
+export function checkBillMaturityEligibility(bill: BillContractFacts, valuationDate: Date): ContractualCheck {
+  if (bill.currency !== "GHS") return { eligible: false, code: "NOT_GHS", reason: `Not a GHS instrument (${bill.currency}).` };
+  if (bill.maturityDate.getTime() <= valuationDate.getTime()) return { eligible: false, code: "MATURED", reason: "Matured — no remaining contractual exposure." };
+  return { eligible: true };
+}
 
 export type ContractualCheck = { eligible: true } | { eligible: false; code: ContractualExclusionCode; reason: string };
 
@@ -203,8 +224,10 @@ export function maturityBucketOf(maturityDate: Date, valuationDate: Date): Matur
 export interface MaturityBucketRow {
   key: MaturityBucketKey;
   label: string;
-  /** PRIMARY measure: contractual principal maturing in the bucket. */
+  /** PRIMARY measure: contractual principal maturing in the bucket (bond nominal + Treasury-bill face). */
   nominalGhs: number;
+  /** Of `nominalGhs`, the Treasury-bill face amount (single maturity payment, no coupon). */
+  treasuryBillFaceGhs: number;
   /** Share of eligible fixed-income nominal, 0–100 (null when there is none). */
   nominalPct: number | null;
   positionCount: number;
@@ -227,7 +250,9 @@ export interface MaturityLadder {
   /** Σ nominal of every bond that passed the maturity eligibility check (== Σ bucket nominal). */
   eligibleNominalGhs: number;
   eligibleCount: number;
+  /** Coupon bonds and Treasury bills held (the positions the ladder considers). */
   bondPositionCount: number;
+  treasuryBillPositionCount: number;
   excluded: ExcludedBond[];
 }
 
@@ -270,7 +295,32 @@ export interface Dv01Row {
   recency: ValuedPosition["recency"];
 }
 
+export interface BillDv01Row {
+  positionId: string;
+  label: string;
+  faceValueGhs: number;
+  referenceValueGhs: number;
+  daysToMaturity: number;
+  referenceRatePct: number;
+  modifiedDurationYears: number;
+  /** GHS per 1bp in the Treasury-bill reference rate, positive magnitude, rounded to 0.01. */
+  dv01Ghs: number;
+  sharePct: number;
+  recency: ValuedPosition["recency"];
+}
+
+/** Sensitivity to the SHORT-TERM (Treasury-bill) rate — a separate measure from the bond-yield DV01, never silently added to it. */
+export interface BillRateSensitivity {
+  dv01Ghs: number | null;
+  weightedModifiedDurationYears: number | null;
+  contributors: BillDv01Row[];
+  billPositionCount: number;
+  excluded: { positionId: string; label: string; reason: string }[];
+}
+
 export interface RateSensitivity {
+  /** Treasury bills: DV01 to the short-term rate. Bond fields below cover coupon bonds only. */
+  treasuryBills: BillRateSensitivity;
   /** Σ position DV01 (GHS/bp); null when no bond could contribute. */
   bondDv01Ghs: number | null;
   governmentDv01Ghs: number;
@@ -297,6 +347,7 @@ export interface RateSensitivity {
 export interface UpcomingMaturity {
   positionId: string;
   label: string;
+  assetClass: ExposureAssetClass;
   issuerName: string;
   maturityDate: string;
   daysRemaining: number;
@@ -330,6 +381,8 @@ export const UPCOMING_MATURITIES_LIMIT = 5;
 
 type BondPosition = ExposurePosition & { bond: BondContractFacts; assetClass: "GOVERNMENT_BOND" | "CORPORATE_BOND" };
 const isBond = (p: ExposurePosition): p is BondPosition => p.bond !== null && p.assetClass !== "EQUITY";
+type BillPosition = ExposurePosition & { bill: BillContractFacts; assetClass: "TREASURY_BILL" };
+const isBill = (p: ExposurePosition): p is BillPosition => !!p.bill && p.assetClass === "TREASURY_BILL";
 const isValued = (p: ExposurePosition): p is ExposurePosition & { valuation: ValuedPosition } => p.valuation.status === "VALUED";
 
 const pct = (part: number, total: number) => (total > 0 ? (part / total) * 100 : 0);
@@ -341,10 +394,12 @@ export function computeExposures(positions: ExposurePosition[], summary: { refer
   const allocation = computeAllocation(positions, valued, denomCents);
   const issuers = computeIssuers(positions, valued, denomCents);
   const bonds = positions.filter(isBond);
-  const maturity = computeMaturityLadder(bonds, valuationDate);
+  const bills = positions.filter(isBill);
+  const maturity = computeMaturityLadder(bonds, bills, valuationDate);
   const coupon = computeCoupon(bonds, valuationDate);
   const rates = computeRates(bonds, valuationDate);
-  const upcoming = computeUpcoming(bonds, valuationDate);
+  rates.treasuryBills = computeBillRates(bills);
+  const upcoming = computeUpcoming(bonds, bills, valuationDate);
 
   const exposures: PortfolioExposures = {
     valuationDate: summary.valuationDate,
@@ -432,8 +487,8 @@ function computeIssuers(positions: ExposurePosition[], valued: (ExposurePosition
   return { denominatorGhs: denomCents === null ? null : fromCents(denomCents), rows, unvaluedOnly };
 }
 
-function computeMaturityLadder(bonds: BondPosition[], valuationDate: Date): MaturityLadder {
-  const acc = new Map(MATURITY_BUCKETS.map((b) => [b.key, { nominalCents: 0, count: 0, valuedCents: 0, valuedCount: 0, unvaluedNominalCents: 0 }]));
+function computeMaturityLadder(bonds: BondPosition[], bills: BillPosition[], valuationDate: Date): MaturityLadder {
+  const acc = new Map(MATURITY_BUCKETS.map((b) => [b.key, { nominalCents: 0, billCents: 0, count: 0, valuedCents: 0, valuedCount: 0, unvaluedNominalCents: 0 }]));
   const excluded: ExcludedBond[] = [];
   let eligibleCents = 0;
   let eligibleCount = 0;
@@ -460,12 +515,37 @@ function computeMaturityLadder(bonds: BondPosition[], valuationDate: Date): Matu
     }
   }
 
+  // Treasury bills: ONE contractual payment (face) at maturity — no coupon is invented.
+  for (const p of bills) {
+    const check = checkBillMaturityEligibility(p.bill, valuationDate);
+    if (!check.eligible) {
+      excluded.push({ positionId: p.positionId, label: p.label, code: check.code, reason: check.reason });
+      continue;
+    }
+    const key = maturityBucketOf(p.bill.maturityDate, valuationDate);
+    if (key === null) continue;
+    const a = acc.get(key)!;
+    const face = toCents(p.bill.faceValueGhs);
+    a.nominalCents += face;
+    a.billCents += face;
+    a.count += 1;
+    eligibleCents += face;
+    eligibleCount += 1;
+    if (p.valuation.status === "VALUED") {
+      a.valuedCents += toCents(p.valuation.referenceValueGhs);
+      a.valuedCount += 1;
+    } else {
+      a.unvaluedNominalCents += face;
+    }
+  }
+
   return {
     buckets: MATURITY_BUCKETS.map((b) => {
       const a = acc.get(b.key)!;
       return {
         key: b.key,
         label: b.label,
+        treasuryBillFaceGhs: fromCents(a.billCents),
         nominalGhs: fromCents(a.nominalCents),
         nominalPct: eligibleCents > 0 ? pct(a.nominalCents, eligibleCents) : null,
         positionCount: a.count,
@@ -477,6 +557,7 @@ function computeMaturityLadder(bonds: BondPosition[], valuationDate: Date): Matu
     eligibleNominalGhs: fromCents(eligibleCents),
     eligibleCount,
     bondPositionCount: bonds.length,
+    treasuryBillPositionCount: bills.length,
     excluded,
   };
 }
@@ -573,6 +654,7 @@ function computeRates(bonds: BondPosition[], valuationDate: Date): RateSensitivi
   const stale = rows.filter((r) => r.recency === "STALE");
 
   return {
+    treasuryBills: { dv01Ghs: null, weightedModifiedDurationYears: null, contributors: [], billPositionCount: 0, excluded: [] },
     bondDv01Ghs: rows.length > 0 ? fromCents(totalCents) : null,
     governmentDv01Ghs: fromCents(sumCents(rows.filter((r) => r.assetClass === "GOVERNMENT_BOND"))),
     corporateDv01Ghs: fromCents(sumCents(rows.filter((r) => r.assetClass === "CORPORATE_BOND"))),
@@ -591,15 +673,49 @@ function computeRates(bonds: BondPosition[], valuationDate: Date): RateSensitivi
   };
 }
 
-function computeUpcoming(bonds: BondPosition[], valuationDate: Date): UpcomingMaturity[] {
+function computeBillRates(bills: BillPosition[]): BillRateSensitivity {
+  const rows: Omit<BillDv01Row, "sharePct">[] = [];
+  const excluded: { positionId: string; label: string; reason: string }[] = [];
+  let durationNumerator = 0;
+  let basisCents = 0;
+  for (const p of bills) {
+    const v = p.valuation;
+    if (v.status !== "VALUED" || v.detail.assetClass !== "TREASURY_BILL") {
+      excluded.push({ positionId: p.positionId, label: p.label, reason: v.status === "UNVALUED" ? `Not valued — ${v.reason}` : "Not a bill valuation." });
+      continue;
+    }
+    rows.push({
+      positionId: p.positionId,
+      label: p.label,
+      faceValueGhs: v.detail.faceValueGhs,
+      referenceValueGhs: v.referenceValueGhs,
+      daysToMaturity: v.detail.daysToMaturity,
+      referenceRatePct: v.detail.referenceRatePct,
+      modifiedDurationYears: v.detail.modifiedDurationYears,
+      dv01Ghs: fromCents(toCents(v.detail.dv01Ghs)),
+      recency: v.recency,
+    });
+    basisCents += toCents(v.referenceValueGhs);
+    durationNumerator += v.referenceValueGhs * v.detail.modifiedDurationYears;
+  }
+  const totalCents = rows.reduce((s, r) => s + toCents(r.dv01Ghs), 0);
+  return {
+    dv01Ghs: rows.length > 0 ? fromCents(totalCents) : null,
+    weightedModifiedDurationYears: basisCents > 0 ? durationNumerator / fromCents(basisCents) : null,
+    contributors: rows.map((r) => ({ ...r, sharePct: pct(toCents(r.dv01Ghs), totalCents) })).sort((a, b) => b.dv01Ghs - a.dv01Ghs || a.label.localeCompare(b.label)),
+    billPositionCount: bills.length,
+    excluded,
+  };
+}
+
+function computeUpcoming(bonds: BondPosition[], bills: BillPosition[], valuationDate: Date): UpcomingMaturity[] {
   const horizon = shiftMonths(valuationDate, 12).getTime();
-  return bonds
+  const fromBonds: UpcomingMaturity[] = bonds
     .filter((p) => checkMaturityEligibility(p.bond, valuationDate).eligible)
-    .sort((a, b) => a.bond.terms.maturityDate.getTime() - b.bond.terms.maturityDate.getTime() || a.label.localeCompare(b.label))
-    .slice(0, UPCOMING_MATURITIES_LIMIT)
     .map((p) => ({
       positionId: p.positionId,
       label: p.label,
+      assetClass: p.assetClass,
       issuerName: p.issuer.name,
       maturityDate: isoDay(p.bond.terms.maturityDate),
       daysRemaining: daysBetween(valuationDate, p.bond.terms.maturityDate),
@@ -608,6 +724,21 @@ function computeUpcoming(bonds: BondPosition[], valuationDate: Date): UpcomingMa
       unvaluedReason: p.valuation.status === "UNVALUED" ? p.valuation.reason : null,
       withinNext12Months: p.bond.terms.maturityDate.getTime() < horizon,
     }));
+  const fromBills: UpcomingMaturity[] = bills
+    .filter((p) => checkBillMaturityEligibility(p.bill, valuationDate).eligible)
+    .map((p) => ({
+      positionId: p.positionId,
+      label: p.label,
+      assetClass: p.assetClass,
+      issuerName: p.issuer.name,
+      maturityDate: isoDay(p.bill.maturityDate),
+      daysRemaining: billDaysToMaturity(p.bill.maturityDate, valuationDate),
+      nominalGhs: p.bill.faceValueGhs,
+      referenceValueGhs: p.valuation.status === "VALUED" ? p.valuation.referenceValueGhs : null,
+      unvaluedReason: p.valuation.status === "UNVALUED" ? p.valuation.reason : null,
+      withinNext12Months: p.bill.maturityDate.getTime() < horizon,
+    }));
+  return [...fromBonds, ...fromBills].sort((a, b) => a.maturityDate.localeCompare(b.maturityDate) || a.label.localeCompare(b.label)).slice(0, UPCOMING_MATURITIES_LIMIT);
 }
 
 // ---------------------------------------------------------------------------
@@ -621,6 +752,9 @@ export function buildCallouts(e: PortfolioExposures): string[] {
   const out: string[] = [];
   const top = e.allocation.rows.length > 0 ? [...e.allocation.rows].sort((a, b) => b.pct - a.pct)[0] : null;
   if (top) out.push(`${top.label} are the largest asset class: ${fmtPct(top.pct)} of valued reference value.`);
+
+  const bills = e.allocation.rows.find((r) => r.assetClass === "TREASURY_BILL");
+  if (bills && top && top.assetClass !== "TREASURY_BILL") out.push(`Treasury bills are ${fmtPct(bills.pct)} of valued reference value.`);
 
   const issuer = e.issuers.rows[0];
   if (issuer) out.push(`${issuer.issuer.name} is the largest valued issuer exposure: ${fmtPct(issuer.pct)} of valued reference value.`);

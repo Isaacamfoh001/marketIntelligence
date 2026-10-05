@@ -110,6 +110,7 @@ function Preview({ result, blankHint = "Leave blank to leave this out of the sce
 }
 
 const CORE: { prefix: string; assetClass: ExposureAssetClass; label: string; shockType: ShockType; verbs: [string, string] }[] = [
+  { prefix: "tbill", assetClass: "TREASURY_BILL", label: "Treasury bills", shockType: "YIELD_BPS", verbs: ["Rates rise", "Rates fall"] },
   { prefix: "gov", assetClass: "GOVERNMENT_BOND", label: "Government bonds", shockType: "YIELD_BPS", verbs: ["Yields rise", "Yields fall"] },
   { prefix: "corp", assetClass: "CORPORATE_BOND", label: "Corporate bonds", shockType: "YIELD_BPS", verbs: ["Yields rise", "Yields fall"] },
   { prefix: "eq", assetClass: "EQUITY", label: "Equities", shockType: "PRICE_PCT", verbs: ["Prices rise", "Prices fall"] },
@@ -117,7 +118,7 @@ const CORE: { prefix: string; assetClass: ExposureAssetClass; label: string; sho
 
 const fmtAmount = (n: number) => String(Number(n.toFixed(6)));
 
-/** "What do you want to test?" — the three broad assumptions in human terms, with an advanced basis-point mode. Both modes save the identical rule. */
+/** "What do you want to test?" — the four broad assumptions in human terms, with an advanced basis-point mode. Both modes save the identical rule. */
 export function CoreAssumptionsForm({ portfolioId, scenarioId, initial }: { portfolioId: string; scenarioId: string; initial: Record<ExposureAssetClass, number | null> }) {
   const [state, action, pending] = useActionState<ScenarioFormState, FormData>(saveCoreAssumptionsAction.bind(null, portfolioId, scenarioId), {});
   const [mode, setMode] = useState<Mode>("pp");
@@ -156,7 +157,7 @@ export function CoreAssumptionsForm({ portfolioId, scenarioId, initial }: { port
           Advanced: enter basis points
         </label>
       </div>
-      <div className="grid gap-4 lg:grid-cols-3">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         {CORE.map((c) => {
           const row = rows[c.prefix];
           const unit: AmountUnit = c.shockType === "PRICE_PCT" ? "PCT" : mode === "bps" ? "BPS" : "PP";
@@ -213,7 +214,7 @@ export function SpecificAssumptionForm({ portfolioId, scenarioId, kind, options 
             ))}
           </select>
         </label>
-        <DirectionToggle name="v_dir" value={dir} onChange={setDir} labels={yields ? ["Yields rise", "Yields fall"] : ["Prices rise", "Prices fall"]} />
+        <DirectionToggle name="v_dir" value={dir} onChange={setDir} labels={yields ? (option.value.startsWith("SECURITY|TREASURY_BILL") ? ["Rate rises", "Rate falls"] : ["Yields rise", "Yields fall"]) : ["Prices rise", "Prices fall"]} />
         <div className="flex items-center gap-2">
           <input name="v_amount" aria-label={`Amount in ${yields ? (mode === "bps" ? "basis points" : "percentage points") : "percent"}`} value={amount} onChange={(e) => setAmount(e.target.value)} inputMode="decimal" placeholder={yields ? (mode === "bps" ? "e.g. 400" : "e.g. 4.0") : "e.g. 15"} className={`${INPUT} w-24`} />
           {yields ? (

@@ -33,7 +33,7 @@ export default async function PortfoliosPage() {
     <div className="mx-auto max-w-5xl space-y-6">
       <header>
         <h1 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">Portfolios</h1>
-        <p className="mt-0.5 text-sm text-zinc-500 dark:text-zinc-400">Record bond and equity holdings and see what they can responsibly be said to be worth today. Reference values as of {valuedOn}.</p>
+        <p className="mt-0.5 text-sm text-zinc-500 dark:text-zinc-400">Record Treasury-bill, bond and equity holdings and see what they can responsibly be said to be worth today. Reference values as of {valuedOn}.</p>
       </header>
 
       <section aria-label="Create portfolio" className="rounded border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
@@ -44,7 +44,7 @@ export default async function PortfoliosPage() {
       <section aria-label="Active portfolios">
         <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Active portfolios</h2>
         {active.length === 0 ? (
-          <p className="rounded border border-dashed border-zinc-300 px-4 py-8 text-center text-sm text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">No portfolios yet. Create one above, then add Government of Ghana bonds, corporate bonds and Ghana-listed equities.</p>
+          <p className="rounded border border-dashed border-zinc-300 px-4 py-8 text-center text-sm text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">No portfolios yet. Create one above, then add Treasury bills, Government of Ghana bonds, corporate bonds and Ghana-listed equities.</p>
         ) : (
           <div className="overflow-x-auto rounded border border-zinc-200 dark:border-zinc-800">
             <table className="w-full min-w-[38rem] border-collapse text-sm">

@@ -8,6 +8,7 @@
 // ---------------------------------------------------------------------------
 
 import type { ExposureAssetClass } from "../portfolio";
+import { GOVERNMENT_OF_GHANA } from "../treasury-bills";
 import { SHOCK_BOUNDS, validateShockValue, type ScenarioShockRule, type SelectorKind, type ShockType } from "../scenarios";
 import { MINUS_SIGN, signOf } from "./format";
 
@@ -28,7 +29,7 @@ const clean = (n: number) => {
 export function toShockValue(input: { shockType: ShockType; direction: Direction; amount: number; unit: AmountUnit }): { ok: true; value: number } | { ok: false; message: string } {
   const { shockType, direction, amount, unit } = input;
   if (!Number.isFinite(amount) || amount < 0) return { ok: false, message: "Enter the size of the move as a positive number — use the rise/fall choice for direction." };
-  if (shockType === "YIELD_BPS" && unit === "PCT") return { ok: false, message: "Bond yields are entered in percentage points or basis points." };
+  if (shockType === "YIELD_BPS" && unit === "PCT") return { ok: false, message: "Bond yields and Treasury-bill rates are entered in percentage points or basis points." };
   if (shockType === "PRICE_PCT" && unit !== "PCT") return { ok: false, message: "Equity prices are entered as a percentage." };
   const magnitude = shockType === "YIELD_BPS" && unit === "PP" ? amount * 100 : amount;
   const value = clean(direction === "DOWN" ? -magnitude : magnitude);
@@ -63,7 +64,7 @@ export function technicalLabel(rule: Pick<ScenarioShockRule, "shockType" | "valu
   return rule.shockType === "YIELD_BPS" ? `${sign}${trimNum(rule.value)} bps` : `${sign}${trimNum(rule.value)}%`;
 }
 
-const CLASS_YIELD_SUBJECT = { GOVERNMENT_BOND: "Government bond yields", CORPORATE_BOND: "Corporate bond yields" } as const;
+const CLASS_YIELD_SUBJECT = { TREASURY_BILL: "Treasury-bill rates", GOVERNMENT_BOND: "Government bond yields", CORPORATE_BOND: "Corporate bond yields" } as const;
 
 /**
  * The plain-English sentence for one assumption, in the present tense an
@@ -73,6 +74,7 @@ const CLASS_YIELD_SUBJECT = { GOVERNMENT_BOND: "Government bond yields", CORPORA
 export interface SelectorLike {
   kind: SelectorKind;
   assetClass?: ExposureAssetClass;
+  instrument?: "BOND" | "EQUITY" | "TREASURY_BILL";
 }
 
 export function describeAssumptionPlain(rule: { selector: SelectorLike; shockType: ShockType; value: number; targetLabel: string }): string {
@@ -84,10 +86,10 @@ export function describeAssumptionPlain(rule: { selector: SelectorLike; shockTyp
     isPlural = true;
     subject = selector.assetClass === "EQUITY" ? "Equity prices" : selector.assetClass ? CLASS_YIELD_SUBJECT[selector.assetClass] : "Yields";
   } else if (selector.kind === "ISSUER") {
-    subject = yields ? `${targetLabel} bond yields` : `${targetLabel} share price`;
+    subject = yields ? `${targetLabel} bond yields${targetLabel === GOVERNMENT_OF_GHANA ? " and Treasury-bill rates" : ""}` : `${targetLabel} share price`;
     isPlural = yields;
   } else {
-    subject = yields ? `${targetLabel} yield` : `${targetLabel} share price`;
+    subject = yields ? `${targetLabel} ${selector.instrument === "TREASURY_BILL" ? "rate" : "yield"}` : `${targetLabel} share price`;
   }
   if (value === 0) return `${subject} ${isPlural ? "are" : "is"} held unchanged.`;
   const verb = yields ? (value > 0 ? "rise" : "fall") : value > 0 ? "rise" : "fall";

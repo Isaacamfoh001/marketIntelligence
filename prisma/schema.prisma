@@ -80,10 +80,13 @@ enum FixedIncomeClassification {
 }
 
 /// Treasury bills are NOT modeled here — they already have a complete,
-/// working domain (TreasuryInstrument/TreasuryRate, M4) that this milestone
+/// working RATE domain (TreasuryInstrument/TreasuryRate, M4) that this milestone
 /// explicitly must not duplicate (M7 §3: "We do NOT want another page that
 /// simply duplicates Treasury rates"). FixedIncomeSecurity models the two
-/// coupon-bearing instrument shapes Treasury doesn't cover.
+/// coupon-bearing instrument shapes Treasury doesn't cover. A bill a portfolio
+/// HOLDS (a specific maturing instrument) is the separate TreasuryBill model
+/// (M8.5): a discount instrument with one payment and a different pricing
+/// convention (simple Act/365), not a coupon bond.
 enum FixedIncomeInstrumentType {
   GOVERNMENT_BOND
   CORPORATE_BOND
@@ -399,8 +402,38 @@ model TreasuryInstrument {
   updatedAt DateTime @updatedAt
 
   treasuryRates TreasuryRate[]
+  heldBills     TreasuryBill[]
 
   @@index([active])
+}
+
+/// A specific Treasury bill that can be HELD in a portfolio (M8.5) — an
+/// instrument, not a rate series. Identity is (instrument/tenor, maturityDate);
+/// `issueDate` is implied (maturityDate − tenor) and kept for provenance.
+///
+/// PROVENANCE: the terms are ANALYST-ENTERED — Korbly's BoG ingestion publishes
+/// auction RATES only (no per-bill maturity dates or ISINs), so no bill identity
+/// is fabricated from it. `isin` is optional and never invented. The valuation
+/// EVIDENCE (the auction rates) keeps full TreasuryRate → DataSource →
+/// IngestionRun provenance. There is no purchase amount/price/date here: face
+/// value belongs to the position and no cost basis is recorded (M8 scope).
+model TreasuryBill {
+  id           String   @id @default(cuid())
+  instrumentId String
+  issueDate    DateTime @db.Date
+  maturityDate DateTime @db.Date
+  isin         String?  @unique
+  currency     String   @default("GHS")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  instrument         TreasuryInstrument  @relation(fields: [instrumentId], references: [id], onDelete: Restrict)
+  portfolioPositions PortfolioPosition[]
+  scenarioShocks     ScenarioShock[]
+
+  @@unique([instrumentId, maturityDate])
+  @@index([maturityDate])
 }
 
 /// A single auction/issue-date observation for a Treasury instrument.
@@ -822,9 +855,9 @@ model SecurityPrice {
 }
 
 // ---------------------------------------------------------------------------
-// Fixed Income (M7) — coupon-bearing bonds only. Treasury bills stay in the
-// TreasuryInstrument/TreasuryRate domain above; see FixedIncomeInstrumentType
-// for why they are not duplicated here.
+// Fixed Income (M7) — coupon-bearing bonds only. Treasury-bill RATES stay in the
+// TreasuryInstrument/TreasuryRate domain above (held bills: TreasuryBill); see
+// FixedIncomeInstrumentType for why they are not duplicated here.
 // ---------------------------------------------------------------------------
 
 /// A specific fixed-income instrument's contractual identity — issuer,
@@ -957,6 +990,8 @@ model FixedIncomeObservation {
 enum PortfolioAssetClass {
   BOND
   EQUITY
+  /// A held Treasury bill (M8.5): treasuryBillId + faceValueGhs (stored in nominalGhs).
+  TREASURY_BILL
 }
 
 model Portfolio {
@@ -978,8 +1013,9 @@ model Portfolio {
 /// One holding. Exactly one instrument reference is set, matching `assetClass`
 /// (enforced by the "PortfolioPosition_shape_check" CHECK constraint in the
 /// migration, which Prisma cannot express):
-///   BOND   → fixedIncomeSecurityId + nominalGhs (> 0, GHS face amount); securityId, shares null
-///   EQUITY → securityId + shares (> 0, whole shares);                 fixedIncomeSecurityId, nominalGhs null
+///   BOND          → fixedIncomeSecurityId + nominalGhs (> 0, GHS face amount); securityId, shares, treasuryBillId null
+///   EQUITY        → securityId + shares (> 0, whole shares);                  fixedIncomeSecurityId, nominalGhs, treasuryBillId null
+///   TREASURY_BILL → treasuryBillId + nominalGhs (> 0, GHS FACE / maturity amount — not purchase cost, not value); the rest null
 /// One position per instrument per portfolio (the two unique indexes; Postgres
 /// treats NULLs as distinct so each applies only to its own asset class).
 /// Instruments are never deleted from under a portfolio (Restrict).
@@ -996,15 +1032,21 @@ model PortfolioPosition {
   /// Whole shares held.
   shares     Int?
 
+  /// Treasury bill held; its face (maturity) amount is `nominalGhs`.
+  treasuryBillId String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  treasuryBill        TreasuryBill?        @relation(fields: [treasuryBillId], references: [id], onDelete: Restrict)
   portfolio           Portfolio            @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
   fixedIncomeSecurity FixedIncomeSecurity? @relation(fields: [fixedIncomeSecurityId], references: [id], onDelete: Restrict)
   security            Security?            @relation(fields: [securityId], references: [id], onDelete: Restrict)
 
   @@unique([portfolioId, fixedIncomeSecurityId])
   @@unique([portfolioId, securityId])
+  @@unique([portfolioId, treasuryBillId])
+  @@index([treasuryBillId])
   @@index([portfolioId])
   @@index([fixedIncomeSecurityId])
   @@index([securityId])
@@ -1046,6 +1088,8 @@ enum ScenarioTargetKind {
 }
 
 enum ScenarioAssetClass {
+  /// Treasury bills (M8.5): YIELD_BPS moves the bill reference RATE (simple Act/365).
+  TREASURY_BILL
   GOVERNMENT_BOND
   CORPORATE_BOND
   EQUITY
@@ -1082,10 +1126,12 @@ model ScenarioShock {
   issuerNameKey         String?
   fixedIncomeSecurityId String?
   securityId            String?
+  treasuryBillId        String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  treasuryBill        TreasuryBill?        @relation(fields: [treasuryBillId], references: [id], onDelete: Restrict)
   scenario            Scenario             @relation(fields: [scenarioId], references: [id], onDelete: Cascade)
   company             Company?             @relation(fields: [companyId], references: [id], onDelete: Restrict)
   fixedIncomeSecurity FixedIncomeSecurity? @relation(fields: [fixedIncomeSecurityId], references: [id], onDelete: Restrict)
@@ -1096,6 +1142,8 @@ model ScenarioShock {
   @@unique([scenarioId, shockType, issuerNameKey])
   @@unique([scenarioId, fixedIncomeSecurityId])
   @@unique([scenarioId, securityId])
+  @@unique([scenarioId, treasuryBillId])
+  @@index([treasuryBillId])
   @@index([scenarioId])
   @@index([companyId])
   @@index([fixedIncomeSecurityId])

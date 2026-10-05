@@ -26,8 +26,8 @@ export function PositionDrilldown({
   notice?: "duplicate" | "saved";
 }) {
   const { instrument, holding, valuation } = row;
-  const title = instrument.kind === "BOND" ? instrument.label : `${instrument.ticker} — ${instrument.companyName}`;
-  const initial = holding.assetClass === "BOND" ? String(holding.nominalGhs) : String(holding.shares);
+  const title = instrument.kind === "EQUITY" ? `${instrument.ticker} — ${instrument.companyName}` : instrument.label;
+  const initial = holding.assetClass === "BOND" ? String(holding.nominalGhs) : holding.assetClass === "TREASURY_BILL" ? String(holding.faceValueGhs) : String(holding.shares);
   const update = updatePositionAction.bind(null, portfolioId, row.positionId, holding.assetClass);
   const remove = removePositionAction.bind(null, portfolioId, row.positionId);
 
@@ -40,6 +40,12 @@ export function PositionDrilldown({
             <AssetBadge assetClass={holding.assetClass} classification={instrument.kind === "BOND" ? instrument.instrumentType : undefined} />
             {title}
           </h2>
+          {instrument.kind === "TREASURY_BILL" && (
+            <p className="text-xs text-zinc-500 dark:text-zinc-400">
+              {instrument.issuerName} · {instrument.tenorDays}-day bill · issued {formatIsoDate(instrument.issueDate)} · matures {formatIsoDate(instrument.maturityDate)}
+              {instrument.isin ? ` · ${instrument.isin}` : ""} · no coupon: one payment of face value at maturity
+            </p>
+          )}
           {instrument.kind === "BOND" && (
             <p className="text-xs text-zinc-500 dark:text-zinc-400">
               {instrument.issuerName} · {instrument.couponRatePct !== null ? `${instrument.couponRatePct.toFixed(2)}% coupon` : "zero coupon"} · matures {formatIsoDate(instrument.maturityDate)} ·{" "}
