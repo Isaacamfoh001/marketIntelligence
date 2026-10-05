@@ -48,13 +48,21 @@ export default async function PortfolioPage({ params, searchParams }: { params: 
         </div>
         <div className="flex items-center gap-2">
           {archived ? (
+            <>
+            <Link href={`/portfolios/${portfolio.id}/scenarios`} className="rounded border border-zinc-300 px-3 py-1.5 text-sm text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">
+              Scenarios
+            </Link>
             <form action={restorePortfolioAction.bind(null, portfolio.id)}>
               <button type="submit" className="rounded border border-zinc-300 px-3 py-1.5 text-sm text-zinc-700 hover:bg-zinc-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">
                 Restore portfolio
               </button>
             </form>
+            </>
           ) : (
             <>
+              <Link href={`/portfolios/${portfolio.id}/scenarios`} className="rounded border border-zinc-300 px-3 py-1.5 text-sm text-zinc-700 hover:bg-zinc-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">
+                Scenarios
+              </Link>
               <Link href={`/portfolios/${portfolio.id}/add`} className="rounded bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300">
                 Add position
               </Link>

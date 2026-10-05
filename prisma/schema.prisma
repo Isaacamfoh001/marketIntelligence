@@ -610,6 +610,7 @@ model Company {
   securities            Security[]
   financialPeriods      FinancialPeriod[]
   fixedIncomeSecurities FixedIncomeSecurity[]
+  scenarioShocks        ScenarioShock[]
 
   @@index([active])
 }
@@ -765,6 +766,7 @@ model Security {
   company            Company             @relation(fields: [companyId], references: [id], onDelete: Restrict)
   prices             SecurityPrice[]
   portfolioPositions PortfolioPosition[]
+  scenarioShocks     ScenarioShock[]
 
   @@index([companyId])
   @@index([active])
@@ -877,6 +879,7 @@ model FixedIncomeSecurity {
   ingestionRun       IngestionRun             @relation(fields: [ingestionRunId], references: [id], onDelete: Restrict)
   observations       FixedIncomeObservation[]
   portfolioPositions PortfolioPosition[]
+  scenarioShocks     ScenarioShock[]
 
   @@index([instrumentType])
   @@index([classification])
@@ -967,6 +970,7 @@ model Portfolio {
   updatedAt DateTime @updatedAt
 
   positions PortfolioPosition[]
+  scenarios Scenario[]
 
   @@index([archivedAt])
 }
@@ -1002,6 +1006,98 @@ model PortfolioPosition {
   @@unique([portfolioId, fixedIncomeSecurityId])
   @@unique([portfolioId, securityId])
   @@index([portfolioId])
+  @@index([fixedIncomeSecurityId])
+  @@index([securityId])
+}
+
+// ---------------------------------------------------------------------------
+// Scenarios (M8.3) — saved ASSUMPTIONS only. A scenario is a named set of
+// explicit shocks; its results are never stored (they are recomputed from the
+// current portfolio + reference valuation + these assumptions by the pure
+// engine in src/lib/scenarios/). ScenarioRun snapshots are M8.5.
+//
+// SELECTOR INTEGRITY: instead of a free `selectorKey` string, each shock row
+// carries typed, nullable target columns. Exactly one is set, matching
+// `targetKind` (CHECK "ScenarioShock_target_check" in the migration):
+//   ASSET_CLASS → assetClass (enum)
+//   SECURITY    → fixedIncomeSecurityId (FK) XOR securityId (FK)
+//   ISSUER      → companyId (FK) XOR issuerNameKey
+// An issuer with no Company row (e.g. Government of Ghana) has no table to
+// reference, so it is keyed by the normalised issuer name — the same identity
+// M8.2's resolveIssuerRef uses ("name:<lower>"); the service validates it
+// against real bond issuers.
+// The shock type fixes the asset domain (YIELD_BPS → bonds, PRICE_PCT →
+// equities), so an issuer's bond shock can never touch its equity. The CHECK
+// constraints reject incompatible type/target pairs and out-of-bound values;
+// the partial-by-NULL unique indexes forbid two shocks at the same target.
+// ---------------------------------------------------------------------------
+
+enum ScenarioShockType {
+  /// Parallel change in yield, in basis points (+200 = +2.00 percentage points).
+  YIELD_BPS
+  /// Percentage change in an equity price (-10 = -10%).
+  PRICE_PCT
+}
+
+enum ScenarioTargetKind {
+  ASSET_CLASS
+  ISSUER
+  SECURITY
+}
+
+enum ScenarioAssetClass {
+  GOVERNMENT_BOND
+  CORPORATE_BOND
+  EQUITY
+}
+
+model Scenario {
+  id          String    @id @default(cuid())
+  portfolioId String
+  name        String
+  description String?
+  /// Soft archive — an archived scenario is read-only but can still be run.
+  archivedAt  DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  portfolio Portfolio       @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
+  shocks    ScenarioShock[]
+
+  @@index([portfolioId])
+  @@index([archivedAt])
+}
+
+model ScenarioShock {
+  id         String             @id @default(cuid())
+  scenarioId String
+  targetKind ScenarioTargetKind
+  shockType  ScenarioShockType
+  /// YIELD_BPS: basis points in [-2000, 2000]. PRICE_PCT: percent in [-100, 1000]. Zero is a valid explicit assumption.
+  value      Decimal            @db.Decimal(9, 2)
+
+  assetClass            ScenarioAssetClass?
+  companyId             String?
+  issuerNameKey         String?
+  fixedIncomeSecurityId String?
+  securityId            String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  scenario            Scenario             @relation(fields: [scenarioId], references: [id], onDelete: Cascade)
+  company             Company?             @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  fixedIncomeSecurity FixedIncomeSecurity? @relation(fields: [fixedIncomeSecurityId], references: [id], onDelete: Restrict)
+  security            Security?            @relation(fields: [securityId], references: [id], onDelete: Restrict)
+
+  @@unique([scenarioId, assetClass])
+  @@unique([scenarioId, shockType, companyId])
+  @@unique([scenarioId, shockType, issuerNameKey])
+  @@unique([scenarioId, fixedIncomeSecurityId])
+  @@unique([scenarioId, securityId])
+  @@index([scenarioId])
+  @@index([companyId])
   @@index([fixedIncomeSecurityId])
   @@index([securityId])
 }
