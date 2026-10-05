@@ -8,6 +8,7 @@ const NAV_ITEMS = [
   { href: "/macro-rates", label: "Macro & Rates" },
   { href: "/equities", label: "Equities" },
   { href: "/fixed-income", label: "Fixed Income" },
+  { href: "/portfolios", label: "Portfolios" },
   { href: "/companies", label: "Companies" },
   { href: "/data-centre", label: "Data Centre" },
 ] as const;

@@ -1,0 +1,8 @@
+// Barrel export for the portfolio domain (M8.1) — mirrors src/lib/fixed-income/index.ts.
+export * from "./types";
+export * from "./positions";
+export * from "./eligibility";
+export * from "./bond-input";
+export * from "./equity-input";
+export * from "./valuation";
+export * from "./copy";

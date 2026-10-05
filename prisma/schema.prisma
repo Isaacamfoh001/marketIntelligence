@@ -762,8 +762,9 @@ model Security {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  company Company         @relation(fields: [companyId], references: [id], onDelete: Restrict)
-  prices  SecurityPrice[]
+  company            Company             @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  prices             SecurityPrice[]
+  portfolioPositions PortfolioPosition[]
 
   @@index([companyId])
   @@index([active])
@@ -871,10 +872,11 @@ model FixedIncomeSecurity {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  company      Company?                 @relation(fields: [companyId], references: [id], onDelete: SetNull)
-  source       DataSource               @relation(fields: [sourceId], references: [id], onDelete: Restrict)
-  ingestionRun IngestionRun             @relation(fields: [ingestionRunId], references: [id], onDelete: Restrict)
-  observations FixedIncomeObservation[]
+  company            Company?                 @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  source             DataSource               @relation(fields: [sourceId], references: [id], onDelete: Restrict)
+  ingestionRun       IngestionRun             @relation(fields: [ingestionRunId], references: [id], onDelete: Restrict)
+  observations       FixedIncomeObservation[]
+  portfolioPositions PortfolioPosition[]
 
   @@index([instrumentType])
   @@index([classification])
@@ -899,23 +901,23 @@ model FixedIncomeObservation {
   securityId      String
   observationDate DateTime @db.Date
 
-  cleanPrice      Decimal?        @db.Decimal(12, 4)
-  sourceYieldPct  Decimal?        @db.Decimal(9, 4)
-  volumeTradedGhs Decimal?        @db.Decimal(20, 2)
+  cleanPrice                Decimal?                @db.Decimal(12, 4)
+  sourceYieldPct            Decimal?                @db.Decimal(9, 4)
+  volumeTradedGhs           Decimal?                @db.Decimal(20, 2)
   /// Primary auction clearing rate vs. secondary-market trade — see
   /// ObservationKind. Required: every observation must state which kind
   /// it is, never left ambiguous (M7.1 §8).
-  observationKind ObservationKind
+  observationKind           ObservationKind
   /// See ObservationTradeStatus. Null = source does not report trade activity.
-  tradeStatus     ObservationTradeStatus?
+  tradeStatus               ObservationTradeStatus?
   /// Number of trades the source reports for this security on this date.
-  numberOfTrades  Int?
+  numberOfTrades            Int?
   /// The security description and maturity date exactly as printed on the
   /// source row (M7.3.1) — provenance for checking that the ISIN match and
   /// the Securities Master's contractual terms agree with what the source
   /// itself says. Never used as terms; only compared against them.
   sourceSecurityDescription String?
-  sourceMaturityDate        DateTime? @db.Date
+  sourceMaturityDate        DateTime?               @db.Date
 
   sourceId       String
   ingestionRunId String
@@ -933,4 +935,73 @@ model FixedIncomeObservation {
   @@index([observationDate])
   @@index([sourceId])
   @@index([ingestionRunId])
+}
+
+// ---------------------------------------------------------------------------
+// Portfolios (M8.1) — an analyst-recorded set of holdings, valued by the pure
+// domain layer in src/lib/portfolio/. Positions record ONLY what the analyst
+// holds (nominal GHS for bonds, whole shares for equities): no cost basis,
+// lots, transactions or P/L, and no stored valuation — a reference value is
+// always recomputed from the latest market data so it can never go stale in
+// the database.
+//
+// OWNERSHIP (M8 internal MVP): a single shared, unauthenticated workspace.
+// There is deliberately no owner column yet; adding a nullable `ownerId` to
+// Portfolio later is a non-breaking migration. Portfolio mutations MUST NOT be
+// exposed on a public deployment without authentication/authorisation.
+// ---------------------------------------------------------------------------
+
+enum PortfolioAssetClass {
+  BOND
+  EQUITY
+}
+
+model Portfolio {
+  id          String    @id @default(cuid())
+  name        String
+  description String?
+  /// Soft archive — an archived portfolio leaves the active list but keeps its positions.
+  archivedAt  DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  positions PortfolioPosition[]
+
+  @@index([archivedAt])
+}
+
+/// One holding. Exactly one instrument reference is set, matching `assetClass`
+/// (enforced by the "PortfolioPosition_shape_check" CHECK constraint in the
+/// migration, which Prisma cannot express):
+///   BOND   → fixedIncomeSecurityId + nominalGhs (> 0, GHS face amount); securityId, shares null
+///   EQUITY → securityId + shares (> 0, whole shares);                 fixedIncomeSecurityId, nominalGhs null
+/// One position per instrument per portfolio (the two unique indexes; Postgres
+/// treats NULLs as distinct so each applies only to its own asset class).
+/// Instruments are never deleted from under a portfolio (Restrict).
+model PortfolioPosition {
+  id          String              @id @default(cuid())
+  portfolioId String
+  assetClass  PortfolioAssetClass
+
+  fixedIncomeSecurityId String?
+  /// Nominal (face) amount held, in GHS. Never a quantity of units.
+  nominalGhs            Decimal? @db.Decimal(20, 2)
+
+  securityId String?
+  /// Whole shares held.
+  shares     Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  portfolio           Portfolio            @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
+  fixedIncomeSecurity FixedIncomeSecurity? @relation(fields: [fixedIncomeSecurityId], references: [id], onDelete: Restrict)
+  security            Security?            @relation(fields: [securityId], references: [id], onDelete: Restrict)
+
+  @@unique([portfolioId, fixedIncomeSecurityId])
+  @@unique([portfolioId, securityId])
+  @@index([portfolioId])
+  @@index([fixedIncomeSecurityId])
+  @@index([securityId])
 }
