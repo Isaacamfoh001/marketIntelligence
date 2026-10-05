@@ -192,7 +192,12 @@ describe("getCompanyRatios — market + financial join, missing-data handling", 
   });
 });
 
-describe("getCompanyHighlights — cross-company leaders, only where genuinely comparable", () => {
+// getCompanyHighlights() walks EVERY company with several queries each (N+1). That is ~200 ms on an idle machine but, measured inside the
+// full parallel suite, ranged from ~150 ms to >5 s depending on CPU/DB contention — so the default 5 s limit was a coin-flip, not a bound
+// on correctness. A generous per-block limit; assertions are unchanged and a genuine hang still fails.
+const HIGHLIGHTS_TIMEOUT_MS = 30_000;
+
+describe("getCompanyHighlights — cross-company leaders, only where genuinely comparable", { timeout: HIGHLIGHTS_TIMEOUT_MS }, () => {
   const EXTREME_TICKER = "ZZQRY4";
 
   afterAll(async () => {

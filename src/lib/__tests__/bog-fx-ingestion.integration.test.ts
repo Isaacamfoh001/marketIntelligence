@@ -24,7 +24,10 @@ const db = getPrisma();
 const mockFetch = vi.mocked(fetchBogText);
 const mockPost = vi.mocked(postBogForm);
 
+// This file owns January 2099 only. bog-fx-freshness.test.ts owns March–August 2099 and runs in parallel against the same table, so each
+// file must clean up ONLY its own window — an unbounded `>= 2099-01-01` delete wipes the other file's rows mid-test.
 const SYNTHETIC_FLOOR = new Date("2099-01-01T00:00:00.000Z");
+const SYNTHETIC_CEILING = new Date("2099-02-01T00:00:00.000Z");
 
 // ingestBogFxDaily/ingestBogFxBackfill upsert against the SAME DataSource
 // row live ingestion uses (there's no test-only source to isolate into —
@@ -68,7 +71,7 @@ beforeEach(() => {
 });
 
 afterAll(async () => {
-  await db.exchangeRate.deleteMany({ where: { observationDate: { gte: SYNTHETIC_FLOOR } } });
+  await db.exchangeRate.deleteMany({ where: { observationDate: { gte: SYNTHETIC_FLOOR, lt: SYNTHETIC_CEILING } } });
   await db.ingestionRun.deleteMany({ where: { id: { in: createdRunIds } } });
 });
 

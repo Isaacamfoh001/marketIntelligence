@@ -27,7 +27,9 @@ const mockFetch = vi.mocked(fetchBogText);
 
 const FX_DATA_SOURCE_NAME = "Bank of Ghana — Daily Interbank FX Rates";
 const PAIR_CODE = "USDGHS";
-const SYNTHETIC_FLOOR = new Date("2099-01-01T00:00:00.000Z");
+// This file owns March–December 2099 only; bog-fx-ingestion.integration.test.ts owns January 2099 and runs in parallel on the same table,
+// so cleanup must not reach below March (see that file).
+const SYNTHETIC_FLOOR = new Date("2099-03-01T00:00:00.000Z");
 
 function dailyHtml(dateLabel: string, mid: string): string {
   return `<html><body><table><tbody><tr><td>${dateLabel}</td><td>US Dollar</td><td>USDGHS</td><td>${mid}</td><td>${mid}</td><td>${mid}</td></tr></tbody></table></body></html>`;

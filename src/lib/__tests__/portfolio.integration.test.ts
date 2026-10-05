@@ -15,6 +15,15 @@ const db = getPrisma();
 const TAG = "ZZPF";
 const d = (iso: string) => new Date(`${iso}T00:00:00.000Z`);
 
+/**
+ * Real market instruments only. Every other integration file creates and deletes
+ * its own transient ZZ-prefixed bonds/securities in the SAME database while files
+ * run in parallel, so a "first valued instrument" lookup over the shared universe
+ * can return one of them and then lose it mid-test (FK violation / vanished
+ * position). Exclude them; fixture instruments this file needs are its own.
+ */
+const isTransientFixture = (code: string) => code.startsWith("ZZ");
+
 let sourceId: string;
 let runId: string;
 let companyId: string;
@@ -61,7 +70,10 @@ async function makeSecurity(ticker: string, over: Record<string, unknown> = {}) 
 }
 
 beforeAll(async () => {
-  const run = await db.ingestionRun.findFirstOrThrow({ select: { id: true, dataSourceId: true } });
+  // The bond table's provenance FKs are Restrict, so the run/source these bonds point at must outlive this file. Take a run of a REAL source:
+  // other files create and delete ZZ-prefixed sources/runs concurrently, and an arbitrary `findFirst` can return one of them — which then
+  // cannot be deleted by its owner while our bonds reference it (their teardown fails and leaves orphans behind).
+  const run = await db.ingestionRun.findFirstOrThrow({ where: { dataSource: { name: { not: { startsWith: "ZZ" } } } }, select: { id: true, dataSourceId: true } });
   sourceId = run.dataSourceId;
   runId = run.id;
   companyId = (await db.company.create({ data: { name: `${TAG} Company` } })).id;
@@ -261,15 +273,17 @@ describe("archive behaviour", () => {
 describe("valuation through the query layer", () => {
   it("values stored positions from market data and summarises coverage over the valued portion", async () => {
     const ctx = await getInstrumentContext();
-    const valuedBond = ctx.bonds.find((b) => b.input.available && b.addable.addable && !b.instrumentCode.startsWith(TAG));
-    const valuedEquity = ctx.equities.find((e) => e.input.available && e.addable.addable);
-    const unvaluedBond = ctx.bonds.find((b) => !b.input.available && b.addable.addable);
+    const valuedBond = ctx.bonds.find((b) => b.input.available && b.addable.addable && !isTransientFixture(b.instrumentCode));
+    const valuedEquity = ctx.equities.find((e) => e.input.available && e.addable.addable && !isTransientFixture(e.ticker));
+    // This file's own bond has no market observation, so it is unvalued by construction (not by whatever the shared data happens to hold).
+    const unvaluedBond = ctx.bondById.get(bondId);
     expect(valuedBond && valuedEquity && unvaluedBond).toBeTruthy();
+    expect(unvaluedBond!.input.available).toBe(false);
 
     const pid = await newPortfolio();
-    await addPosition({ portfolioId: pid, assetClass: "BOND", instrumentId: valuedBond!.id, nominalGhs: 2_000_000 });
-    await addPosition({ portfolioId: pid, assetClass: "EQUITY", instrumentId: valuedEquity!.id, shares: 100_000 });
-    await addPosition({ portfolioId: pid, assetClass: "BOND", instrumentId: unvaluedBond!.id, nominalGhs: 500_000 });
+    expect(await addPosition({ portfolioId: pid, assetClass: "BOND", instrumentId: valuedBond!.id, nominalGhs: 2_000_000 })).toMatchObject({ ok: true });
+    expect(await addPosition({ portfolioId: pid, assetClass: "EQUITY", instrumentId: valuedEquity!.id, shares: 100_000 })).toMatchObject({ ok: true });
+    expect(await addPosition({ portfolioId: pid, assetClass: "BOND", instrumentId: unvaluedBond!.id, nominalGhs: 500_000 })).toMatchObject({ ok: true });
 
     const detail = await getPortfolio(pid);
     expect(detail).not.toBeNull();
@@ -315,12 +329,12 @@ describe("exposure analytics through the query layer (M8.2)", () => {
 
   it("a valued real portfolio satisfies the allocation/issuer invariants against the M8.1 summary", async () => {
     const ctx = await getInstrumentContext();
-    const bonds = ctx.bonds.filter((b) => b.input.available && b.addable.addable && !b.instrumentCode.startsWith(TAG)).slice(0, 3);
-    const eq = ctx.equities.find((x) => x.input.available && x.addable.addable);
+    const bonds = ctx.bonds.filter((b) => b.input.available && b.addable.addable && !isTransientFixture(b.instrumentCode)).slice(0, 3);
+    const eq = ctx.equities.find((x) => x.input.available && x.addable.addable && !isTransientFixture(x.ticker));
     expect(bonds.length).toBeGreaterThan(0);
     const pid = await newPortfolio();
-    for (const b of bonds) await addPosition({ portfolioId: pid, assetClass: "BOND", instrumentId: b.id, nominalGhs: 1_000_000 });
-    if (eq) await addPosition({ portfolioId: pid, assetClass: "EQUITY", instrumentId: eq.id, shares: 10_000 });
+    for (const b of bonds) expect(await addPosition({ portfolioId: pid, assetClass: "BOND", instrumentId: b.id, nominalGhs: 1_000_000 })).toMatchObject({ ok: true });
+    if (eq) expect(await addPosition({ portfolioId: pid, assetClass: "EQUITY", instrumentId: eq.id, shares: 10_000 })).toMatchObject({ ok: true });
 
     const detail = (await getPortfolio(pid))!;
     const e = getPortfolioExposures(detail);
