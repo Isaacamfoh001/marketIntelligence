@@ -2,9 +2,9 @@
 // ---------------------------------------------------------------------------
 // GSE Daily Shares & ETFs — security price import CLI.
 //
-// Manual/semi-automated import (CLAUDE.md §20/§29): gse.com.gh blocks AI
-// agents site-wide via robots.txt (see gse-security-provider.ts), so this
-// reads a CSV/Excel file a human obtained through their own browser.
+// Controlled import (CLAUDE.md §20/§29): reads the official "Daily Shares & ETFs"
+// CSV/Excel export a person downloaded from gse.com.gh/trading-and-data/ (see
+// gse-security-provider.ts for why this is not fetched automatically).
 //
 // Two-stage workflow — preview is the default, nothing is persisted until
 // --commit is passed explicitly:
@@ -72,7 +72,8 @@ async function main() {
   console.log(`Securities detected: ${result.tickers.length}${result.tickers.length > 0 ? ` (${result.tickers.join(", ")})` : ""}`);
   console.log(`Trading date range:  ${result.earliestTradingDate ?? "—"} → ${result.latestTradingDate ?? "—"}`);
   if (commit) {
-    console.log(`Persisted:           ${result.persisted} (${result.inserted} new, ${result.updated} updated)`);
+    console.log(`Persisted:           ${result.persisted} (${result.inserted} new, ${result.updated} revised); ${result.unchanged} already stored & identical (left untouched)`);
+    if (result.newSecurities.length > 0) console.log(`New securities:      ${result.newSecurities.join(", ")} (created from GSE share codes — review)`);
     console.log(`Run status:          ${result.status}`);
     console.log(`Run ID:              ${result.runId ?? "—"}`);
   }

@@ -52,10 +52,13 @@ export async function startRun(ctx: RunContext): Promise<StartRunResult> {
 export async function completeRun(
   runId: string,
   counts: { recordsRead: number; recordsAccepted: number; recordsRejected: number },
+  /** Non-fatal warning (e.g. rows rejected) kept on a SUCCESS run so a partial import is diagnosable from the audit trail. */
+  warning?: string,
 ): Promise<CompleteRunResult> {
   const run = await getPrisma().ingestionRun.update({
     where: { id: runId },
     data: {
+      ...(warning ? { errorMessage: warning } : {}),
       status: "SUCCESS",
       completedAt: new Date(),
       recordsRead: counts.recordsRead,

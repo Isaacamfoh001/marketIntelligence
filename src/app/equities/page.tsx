@@ -13,6 +13,7 @@ import {
 import { evaluateEquityMomentumCondition } from "@/lib/intelligence";
 import { computeReturn } from "@/lib/returns";
 import { ConditionBadge } from "@/components/ConditionBadge";
+import { EquitySourceNotice } from "@/components/EquitySourceNotice";
 
 export const dynamic = "force-dynamic";
 
@@ -166,6 +167,8 @@ export default async function EquitiesPage() {
         </p>
       </div>
 
+      <EquitySourceNotice mode="always" />
+
       {/* ------------------------------------------------------------ */}
       <section>
         <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
@@ -199,7 +202,7 @@ export default async function EquitiesPage() {
         </div>
         {!hasAnyIndexData && (
           <p className="mt-2 text-[11px] text-zinc-400 dark:text-zinc-500">
-            Latest trading date: {formatDate(latestTradingDate)}
+            Latest GSE report date: {formatDate(latestTradingDate)}
           </p>
         )}
       </section>
@@ -301,9 +304,9 @@ export default async function EquitiesPage() {
           <div className="rounded border border-zinc-200 bg-white px-6 py-16 text-center dark:border-zinc-800 dark:bg-zinc-900">
             <p className="text-sm font-medium text-zinc-700 dark:text-zinc-300">Awaiting first official GSE import</p>
             <p className="mx-auto mt-2 max-w-md text-xs text-zinc-400 dark:text-zinc-500">
-              GSE market data is configured for validated official-file ingestion. Ghana Stock Exchange&rsquo;s public
-              website blocks automated agents, so security prices and index levels are imported from official GSE
-              exports (CSV/Excel) through the Data Centre&rsquo;s import pipeline rather than scraped live. Once a file
+              GSE market data is configured for validated official-file ingestion. Security prices and index levels are
+              imported from official GSE exports (CSV/Excel) through the Data Centre&rsquo;s import pipeline; GSE&rsquo;s
+              automated data feed is a commercial Data Services product, so Korbly does not scrape the website. Once a file
               is imported, securities, returns, and market activity will populate this page automatically.
             </p>
           </div>

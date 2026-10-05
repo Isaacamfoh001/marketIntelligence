@@ -10,6 +10,7 @@ import { GroupHeading } from "@/components/portfolio/exposure-ui";
 import { MethodologyDisclosure } from "@/components/portfolio/MethodologyDisclosure";
 import { PositionDrilldown } from "@/components/portfolio/PositionDrilldown";
 import { PositionsTable, UnvaluedSection } from "@/components/portfolio/PositionsTable";
+import { EquitySourceNotice } from "@/components/EquitySourceNotice";
 
 export const dynamic = "force-dynamic";
 
@@ -83,6 +84,7 @@ export default async function PortfolioPage({ params, searchParams }: { params: 
       {archived && <p className="rounded border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs text-zinc-600 dark:border-zinc-700 dark:bg-zinc-800/50 dark:text-zinc-300">This portfolio is archived and read-only. Restore it to change positions.</p>}
       {query.removed && <p role="status" className="rounded border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-900 dark:border-emerald-900/50 dark:bg-emerald-900/20 dark:text-emerald-200">Position removed.</p>}
 
+      {portfolio.positions.some((p) => p.holding.assetClass === "EQUITY") && <EquitySourceNotice mode="problem-only" />}
       <CoverageSummary summary={portfolio.summary} />
 
       {portfolio.positions.length > 0 && (

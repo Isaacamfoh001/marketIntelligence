@@ -7,6 +7,7 @@ import { ensureGseIndexDataSources } from "@/lib/ingestion/gse-index-provider";
 import { ensureFinancialsDataSource } from "@/lib/ingestion/financials-provider";
 import { ensureFixedIncomeSecuritiesDataSource } from "@/lib/ingestion/fixed-income-securities-provider";
 import { ensureFixedIncomeObservationsDataSource } from "@/lib/ingestion/fixed-income-observations-provider";
+import { EquityPipelinePanel } from "@/components/EquityPipelinePanel";
 import { ensureGfimTradingReportDataSource } from "@/lib/ingestion/gfim-trading-report-provider";
 
 // Database-backed page: must reflect the latest ingestion state on every
@@ -241,6 +242,8 @@ export default async function DataCentrePage() {
           Import Market Data
         </Link>
       </div>
+
+      <EquityPipelinePanel />
 
       <section>
         <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">

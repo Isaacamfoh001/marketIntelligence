@@ -1,22 +1,22 @@
 // ---------------------------------------------------------------------------
 // GSE Daily Shares & ETFs — security price import provider.
 //
-// Source discovery: gse.com.gh's robots.txt explicitly names and disallows
-// AI-agent user agents (including this one — "User-agent: ClaudeBot /
-// Disallow: /"), enforced with a site-wide 403 at the edge (verified: even
-// a static PDF and /sitemap.xml were blocked, so this is not specific to
-// the market-data pages). That is a deliberate, explicit opt-out from the
-// site owner, not a login wall or paywall, and it is honoured in full: no
-// code in this repository fetches gse.com.gh automatically, under any
-// user agent. See CLAUDE.md §7.C, which already anticipated this exact
-// situation ("production-grade automated market feeds should not assume
-// unrestricted scraping... a future commercial feed/API agreement may be
-// required") and PROJECT.md §14.3.
+// Source discovery (re-verified 5 Oct 2026): the free official route is the
+// "Daily Shares & ETFs" table on https://gse.com.gh/trading-and-data/, which a
+// person can filter and export as CSV/Excel. Its data is published through an
+// undocumented WordPress/wpDataTables widget (a page-scoped nonce posted to
+// admin-ajax.php), not a documented API. GSE's own "Data Services" page states
+// that real-time / end-of-day / historical data is offered through an API
+// platform or direct request against a price list — i.e. automated delivery is
+// a COMMERCIAL product. An earlier version of this file recorded a robots.txt
+// opt-out for AI agents and a site-wide 403; on 5 Oct 2026 robots.txt allowed
+// all user agents and pages returned 200 — but robots.txt permitting access is
+// not a licence to build an unattended feed on an undocumented widget, so this
+// provider remains a controlled import of the OFFICIAL EXPORT. Unattended
+// automation should come from a GSE Data Services agreement (CLAUDE.md §7.C).
 //
-// This provider is therefore Mode B/C only (CLAUDE.md §20/§29): a human
-// obtains an official GSE export (through their own ordinary browser
-// session, which robots.txt does not restrict) and imports it as CSV or
-// Excel. Two DataSources exist for the same row shape:
+// A human exports the file (an analyst's ordinary browser session) and imports it
+// as CSV or Excel. Two DataSources exist for the same row shape:
 //   - "Ghana Stock Exchange — Daily Shares & ETFs": the routine daily
 //     export. Treated as the higher-priority source for any date it has
 //     data for.
@@ -29,9 +29,19 @@
 // ---------------------------------------------------------------------------
 
 import { getPrisma } from "../prisma";
+import type { Prisma } from "../../generated/prisma/client";
 import { parseImportFile } from "./file-parse";
 import { extractGseSecurityRows, validateGseSecurityRows, type NormalisedGseSecurityRow, type RawGseSecurityRow } from "./gse-security-parser";
 import { startRun, completeRun, failRun } from "./ingestion-service";
+
+/** Interactive-transaction ceiling for one file. A multi-week export is ~1,300 rows; the default 5s is too tight. */
+const PERSIST_TX_TIMEOUT_MS = 120_000;
+
+/** How a human-obtained official file reaches Korbly — recorded on every run (IngestionRun.acquisitionMethod). */
+export const GSE_ACQUISITION_METHOD = "MANUAL_FILE_IMPORT";
+
+/** GSE's public Trading & Data page (Daily Shares & ETFs table + CSV/Excel export). The previous /market-statistics/ URL now returns 404. */
+export const GSE_TRADING_DATA_URL = "https://gse.com.gh/trading-and-data/";
 import { KNOWN_COMPANY_NAMES, KNOWN_COMPANY_SECTORS } from "../gse-known-companies";
 
 export type SecurityImportKind = "daily" | "backfill";
@@ -65,12 +75,12 @@ async function ensureDataSource(kind: SecurityImportKind) {
   const name = kind === "daily" ? DAILY_SOURCE_NAME : BACKFILL_SOURCE_NAME;
   return db.dataSource.upsert({
     where: { name },
-    update: {},
+    update: { url: GSE_TRADING_DATA_URL },
     create: {
       name,
       provider: "Ghana Stock Exchange",
       sourceType: "MANUAL",
-      url: "https://gse.com.gh/market-statistics/",
+      url: GSE_TRADING_DATA_URL,
       expectedFrequency: kind === "daily" ? "DAILY" : "AD_HOC",
       ingestionMethod: "FILE_IMPORT",
       active: true,
@@ -83,11 +93,12 @@ async function ensureSecurity(
   companyName: string | null,
   securityType: string | null,
   cache: Map<string, string>,
+  db: Prisma.TransactionClient,
+  created: string[],
 ): Promise<string> {
   const cached = cache.get(ticker);
   if (cached) return cached;
 
-  const db = getPrisma();
   const existing = await db.security.findUnique({ where: { ticker } });
   if (existing) {
     cache.set(ticker, existing.id);
@@ -116,7 +127,30 @@ async function ensureSecurity(
     },
   });
   cache.set(ticker, security.id);
+  created.push(ticker);
   return security.id;
+}
+
+type StoredPrice = {
+  previousCloseVwap: unknown; openPrice: unknown; lastTransactionPrice: unknown; closeVwap: unknown; priceChange: unknown;
+  yearHigh: unknown; yearLow: unknown; closingBid: unknown; closingOffer: unknown; volume: bigint | null; valueTradedGhs: unknown;
+};
+
+function sameStoredObservation(stored: StoredPrice, row: NormalisedGseSecurityRow): boolean {
+  const eq = (a: unknown, b: string | null) => (a === null || a === undefined ? b === null : b !== null && Number(a) === Number(b));
+  return (
+    eq(stored.previousCloseVwap, row.previousCloseVwap) &&
+    eq(stored.openPrice, row.openPrice) &&
+    eq(stored.lastTransactionPrice, row.lastTransactionPrice) &&
+    eq(stored.closeVwap, row.closeVwap) &&
+    eq(stored.priceChange, row.priceChange) &&
+    eq(stored.yearHigh, row.yearHigh) &&
+    eq(stored.yearLow, row.yearLow) &&
+    eq(stored.closingBid, row.closingBid) &&
+    eq(stored.closingOffer, row.closingOffer) &&
+    eq(stored.valueTradedGhs, row.valueTraded) &&
+    (stored.volume === null ? row.sharesTraded === null : row.sharesTraded !== null && Number(stored.volume) === Math.round(Number(row.sharesTraded)))
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -132,6 +166,7 @@ export interface SecurityPriceConflict {
 }
 
 async function persistSecurityPrices(
+  db: Prisma.TransactionClient,
   runId: string,
   sourceId: string,
   importKind: SecurityImportKind,
@@ -139,10 +174,10 @@ async function persistSecurityPrices(
   backfillSourceId: string,
   securityIdByTicker: Map<string, string>,
   rows: NormalisedGseSecurityRow[],
-): Promise<{ persisted: number; inserted: number; updated: number; conflicts: SecurityPriceConflict[] }> {
-  const db = getPrisma();
+): Promise<{ persisted: number; inserted: number; updated: number; unchanged: number; conflicts: SecurityPriceConflict[] }> {
   let inserted = 0;
   let updated = 0;
+  let unchanged = 0;
   const conflicts: SecurityPriceConflict[] = [];
   const currentRank = SOURCE_PRIORITY[importKind];
 
@@ -168,6 +203,13 @@ async function persistSecurityPrices(
         }
         continue; // never let a lower-priority source overwrite a higher-priority observation
       }
+    }
+
+    // Re-importing an identical row must be a true no-op: leave the stored row —
+    // and its ORIGINAL ingestion run / source / retrievedAt provenance — untouched.
+    if (existing && sameStoredObservation(existing, row)) {
+      unchanged++;
+      continue;
     }
 
     await db.securityPrice.upsert({
@@ -210,7 +252,7 @@ async function persistSecurityPrices(
     else inserted++;
   }
 
-  return { persisted: inserted + updated, inserted, updated, conflicts };
+  return { persisted: inserted + updated, inserted, updated, unchanged, conflicts };
 }
 
 // ---------------------------------------------------------------------------
@@ -228,6 +270,10 @@ export interface GseSecurityImportResult {
   persisted: number;
   inserted: number;
   updated: number;
+  /** Rows already stored with identical values: skipped, original provenance preserved. */
+  unchanged: number;
+  /** Tickers that did not exist in the securities master and were created from this file (source identity = GSE share code). */
+  newSecurities: string[];
   tickers: string[];
   earliestTradingDate: string | null;
   latestTradingDate: string | null;
@@ -266,13 +312,13 @@ export async function importGseSecurityPrices(
   filename: string,
   buffer: Buffer,
   kind: SecurityImportKind,
-  opts: { commit: boolean; triggeredBy?: string } = { commit: false },
+  opts: { commit: boolean; triggeredBy?: string; /** Test seam: the clock used for the future-date plausibility check. */ now?: Date } = { commit: false },
 ): Promise<GseSecurityImportResult> {
   if (!opts.commit) {
     try {
       const parsedFile = await parseImportFile(filename, buffer);
       const rawRows = extractGseSecurityRows(parsedFile);
-      const validation = validateGseSecurityRows(rawRows);
+      const validation = validateGseSecurityRows(rawRows, { now: opts.now });
       const tickers = Array.from(new Set(validation.valid.map((r) => r.ticker))).sort();
       return {
         runId: null,
@@ -284,6 +330,8 @@ export async function importGseSecurityPrices(
         persisted: 0,
         inserted: 0,
         updated: 0,
+        unchanged: 0,
+        newSecurities: [],
         tickers,
         earliestTradingDate: earliestDate(validation.valid),
         latestTradingDate: latestDate(validation.valid),
@@ -303,6 +351,8 @@ export async function importGseSecurityPrices(
         persisted: 0,
         inserted: 0,
         updated: 0,
+        unchanged: 0,
+        newSecurities: [],
         tickers: [],
         earliestTradingDate: null,
         latestTradingDate: null,
@@ -316,35 +366,55 @@ export async function importGseSecurityPrices(
   const [dailySource, backfillSource] = await Promise.all([ensureDataSource("daily"), ensureDataSource("backfill")]);
   const activeSource = kind === "daily" ? dailySource : backfillSource;
 
-  const { runId } = await startRun({ dataSourceId: activeSource.id, triggeredBy: opts.triggeredBy ?? "cli", artifactName: filename });
+  const { runId } = await startRun({
+    dataSourceId: activeSource.id,
+    triggeredBy: opts.triggeredBy ?? "cli",
+    artifactName: filename,
+    acquisitionMethod: GSE_ACQUISITION_METHOD,
+  });
 
+  const empty = { recordsRead: 0, recordsAccepted: 0, recordsRejected: 0 };
   try {
     const parsedFile = await parseImportFile(filename, buffer);
     const rawRows = extractGseSecurityRows(parsedFile);
-    const validation = validateGseSecurityRows(rawRows);
+    const validation = validateGseSecurityRows(rawRows, { now: opts.now });
+    const counts = { recordsRead: rawRows.length, recordsAccepted: validation.valid.length, recordsRejected: validation.invalid.length };
     const tickers = Array.from(new Set(validation.valid.map((r) => r.ticker))).sort();
 
-    const securityIdByTicker = new Map<string, string>();
-    for (const row of validation.valid) {
-      const id = await ensureSecurity(row.ticker, row.companyName, row.securityType, securityIdByTicker);
-      securityIdByTicker.set(row.ticker, id);
+    // Whole-report rejection: a file in which NOTHING validates is a wrong/changed
+    // file, not a data update. Fail loudly instead of recording a "successful" no-op.
+    if (validation.valid.length === 0) {
+      const why = validation.invalid[0]?.errors[0] ?? "the file contains no data rows";
+      throw new ImportRejectedError(`No usable rows: 0 of ${rawRows.length} rows passed validation (first problem: ${why})`, counts);
     }
 
-    const { persisted, inserted, updated, conflicts } = await persistSecurityPrices(
-      runId,
-      activeSource.id,
-      kind,
-      dailySource.id,
-      backfillSource.id,
-      securityIdByTicker,
-      validation.valid,
+    // Row-level rejection for isolated bad rows (documented decision): good rows
+    // are imported, bad rows are listed on the run, and the import is reported
+    // with its reject count. All DB writes for the file happen in ONE transaction,
+    // so a database failure part-way leaves no partial file behind.
+    const db = getPrisma();
+    const newSecurities: string[] = [];
+    const persisted = await db.$transaction(
+      async (tx) => {
+        const securityIdByTicker = new Map<string, string>();
+        for (const row of validation.valid) {
+          if (!securityIdByTicker.has(row.ticker)) {
+            securityIdByTicker.set(row.ticker, await ensureSecurity(row.ticker, row.companyName, row.securityType, securityIdByTicker, tx, newSecurities));
+          }
+        }
+        return persistSecurityPrices(tx, runId, activeSource.id, kind, dailySource.id, backfillSource.id, securityIdByTicker, validation.valid);
+      },
+      { timeout: PERSIST_TX_TIMEOUT_MS, maxWait: 10_000 },
     );
 
-    const run = await completeRun(runId, {
-      recordsRead: rawRows.length,
-      recordsAccepted: validation.valid.length,
-      recordsRejected: validation.invalid.length,
-    });
+    const warning =
+      validation.invalid.length > 0
+        ? `${validation.invalid.length} row(s) rejected: ${validation.invalid
+            .slice(0, 5)
+            .map((i) => `row ${i.rowNumber}: ${i.errors.join("; ")}`)
+            .join(" | ")}${validation.invalid.length > 5 ? " | …" : ""}`
+        : undefined;
+    const run = await completeRun(runId, counts, warning);
 
     return {
       runId: run.runId,
@@ -353,35 +423,47 @@ export async function importGseSecurityPrices(
       recordsRead: run.recordsRead,
       recordsAccepted: run.recordsAccepted,
       recordsRejected: run.recordsRejected,
-      persisted,
-      inserted,
-      updated,
+      persisted: persisted.persisted,
+      inserted: persisted.inserted,
+      updated: persisted.updated,
+      unchanged: persisted.unchanged,
+      newSecurities,
       tickers,
       earliestTradingDate: earliestDate(validation.valid),
       latestTradingDate: latestDate(validation.valid),
       errors: validation.invalid,
-      conflicts,
+      conflicts: persisted.conflicts,
       sampleValid: validation.valid.slice(0, PREVIEW_SAMPLE_SIZE),
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    const run = await failRun(runId, message);
+    const counts = err instanceof ImportRejectedError ? err.counts : empty;
+    const run = await failRun(runId, message, counts);
     return {
       runId: run.runId,
       status: "FAILED",
       kind,
-      recordsRead: 0,
-      recordsAccepted: 0,
-      recordsRejected: 0,
+      ...counts,
       persisted: 0,
       inserted: 0,
       updated: 0,
+      unchanged: 0,
+      newSecurities: [],
       tickers: [],
       earliestTradingDate: null,
       latestTradingDate: null,
-      errors: [],
+      errors: [{ row: {}, errors: [message], rowNumber: 0 }],
       conflicts: [],
       sampleValid: [],
     };
+  }
+}
+
+class ImportRejectedError extends Error {
+  constructor(
+    message: string,
+    readonly counts: { recordsRead: number; recordsAccepted: number; recordsRejected: number },
+  ) {
+    super(message);
   }
 }

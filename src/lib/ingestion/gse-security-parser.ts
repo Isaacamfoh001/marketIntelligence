@@ -1,14 +1,9 @@
 // ---------------------------------------------------------------------------
 // GSE Daily Shares & ETFs — manual/semi-automated import parser.
 //
-// gse.com.gh's robots.txt explicitly disallows AI-agent user agents
-// (including this one, named directly) site-wide, enforced with a 403 at
-// the edge for every path tested — not a login wall or paywall, a
-// deliberate opt-out. No automated fetch of GSE's site is attempted
-// anywhere in this codebase as a result (see gse-security-provider.ts
-// header for the full note). This parser instead reads a file a human
-// obtained through their own normal browser session (robots.txt does not
-// restrict human visitors) and exported/saved as CSV or Excel.
+// Reads the official "Daily Shares & ETFs" export a person obtained from
+// gse.com.gh/trading-and-data/ (see gse-security-provider.ts for why Korbly does
+// not fetch it automatically) as CSV or Excel.
 //
 // Column contract: the canonical header names below are Korbly's own
 // documented template (see docs at the bottom of this file), but every
@@ -129,7 +124,12 @@ function optionalCount(raw: string | undefined, field: string, errors: string[])
   return optionalDecimal(raw, field, errors);
 }
 
-export function validateGseSecurityRows(rows: RawGseSecurityRow[]): GseSecurityValidationResult {
+/** A report date more than this many days after "now" cannot be a real GSE report date (allows timezone/publication skew). */
+const FUTURE_DATE_TOLERANCE_DAYS = 1;
+
+export function validateGseSecurityRows(rows: RawGseSecurityRow[], opts: { now?: Date } = {}): GseSecurityValidationResult {
+  const now = opts.now ?? new Date();
+  const latestPlausible = now.getTime() + FUTURE_DATE_TOLERANCE_DAYS * 24 * 60 * 60 * 1000;
   const valid: NormalisedGseSecurityRow[] = [];
   const invalid: { row: RawGseSecurityRow; errors: string[]; rowNumber: number }[] = [];
 
@@ -140,6 +140,9 @@ export function validateGseSecurityRows(rows: RawGseSecurityRow[]): GseSecurityV
 
     const dateResult = parseGseFileDate(row.trading_date ?? "", "trading_date");
     if (dateResult.error) errors.push(dateResult.error.message);
+    else if (dateResult.date.getTime() > latestPlausible) {
+      errors.push(`trading_date ${dateResult.date.toISOString().slice(0, 10)} is in the future`);
+    }
 
     // GSE's own real exports sometimes wrap a share code in asterisks
     // (e.g. "**ALW**", "PBC**") as a footnote/status marker, inconsistently
@@ -222,5 +225,66 @@ export function validateGseSecurityRows(rows: RawGseSecurityRow[]): GseSecurityV
     });
   });
 
-  return { valid, invalid };
+  return resolveDuplicateRows(valid, invalid, rows);
+}
+
+function sameObservation(a: NormalisedGseSecurityRow, b: NormalisedGseSecurityRow): boolean {
+  const n = (v: string | null) => (v === null ? null : Number(v));
+  return (
+    n(a.closeVwap) === n(b.closeVwap) &&
+    n(a.previousCloseVwap) === n(b.previousCloseVwap) &&
+    n(a.sharesTraded) === n(b.sharesTraded) &&
+    n(a.valueTraded) === n(b.valueTraded) &&
+    n(a.lastTransactionPrice) === n(b.lastTransactionPrice)
+  );
+}
+
+/**
+ * One source file must contain at most one row per (ticker, report date).
+ * - An identical repeat is rejected as a duplicate (the first is kept).
+ * - A CONFLICTING repeat (same key, different numbers) rejects EVERY row of that
+ *   key: Korbly cannot know which one GSE meant, and must not pick silently.
+ */
+function resolveDuplicateRows(
+  valid: NormalisedGseSecurityRow[],
+  invalid: GseSecurityValidationResult["invalid"],
+  allRaw: RawGseSecurityRow[],
+): GseSecurityValidationResult {
+  const rowNumberOf = new Map<NormalisedGseSecurityRow, number>();
+  // valid rows are in source order; recover each one's file row number from the raw list.
+  let cursor = 0;
+  const invalidRowNumbers = new Set(invalid.map((i) => i.rowNumber));
+  for (let i = 0; i < allRaw.length && cursor < valid.length; i++) {
+    if (invalidRowNumbers.has(i + 2)) continue;
+    rowNumberOf.set(valid[cursor++], i + 2);
+  }
+
+  const groups = new Map<string, NormalisedGseSecurityRow[]>();
+  for (const row of valid) {
+    const key = `${row.ticker}|${row.tradingDate.toISOString().slice(0, 10)}`;
+    const g = groups.get(key);
+    if (g) g.push(row);
+    else groups.set(key, [row]);
+  }
+
+  const dropped = new Set<NormalisedGseSecurityRow>();
+  for (const [key, group] of groups) {
+    if (group.length < 2) continue;
+    const conflicting = group.some((r) => !sameObservation(group[0], r));
+    const toDrop = conflicting ? group : group.slice(1);
+    for (const r of toDrop) {
+      dropped.add(r);
+      invalid.push({
+        row: { share_code: r.ticker, trading_date: key.split("|")[1] },
+        rowNumber: rowNumberOf.get(r) ?? 0,
+        errors: [
+          conflicting
+            ? `conflicting duplicate rows for ${key.replace("|", " ")} — none imported`
+            : `duplicate row for ${key.replace("|", " ")} (identical to an earlier row)`,
+        ],
+      });
+    }
+  }
+  invalid.sort((a, b) => a.rowNumber - b.rowNumber);
+  return { valid: valid.filter((r) => !dropped.has(r)), invalid };
 }

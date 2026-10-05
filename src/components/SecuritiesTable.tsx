@@ -102,7 +102,7 @@ export function SecuritiesTable({ securities }: { securities: SecuritySnapshot[]
         case "YTD": return s.returns.YTD?.pct ?? -Infinity;
         case "volume": return s.latestVolume ?? -Infinity;
         case "value": return s.latestValueTradedGhs ?? -Infinity;
-        case "lastTradingDate": return s.latestDate ?? "";
+        case "lastTradingDate": return s.lastTradeDate ?? "";
       }
     };
     const copy = [...filtered];
@@ -176,7 +176,7 @@ export function SecuritiesTable({ securities }: { securities: SecuritySnapshot[]
               <SortHeader label="YTD" sortKey="YTD" active={sortKey === "YTD"} dir={sortDir} onSort={handleSort} />
               <SortHeader label="Volume" sortKey="volume" active={sortKey === "volume"} dir={sortDir} onSort={handleSort} />
               <SortHeader label="Value Traded" sortKey="value" active={sortKey === "value"} dir={sortDir} onSort={handleSort} />
-              <SortHeader label="Last Trading Date" sortKey="lastTradingDate" active={sortKey === "lastTradingDate"} dir={sortDir} onSort={handleSort} />
+              <SortHeader label="Last Trade" sortKey="lastTradingDate" active={sortKey === "lastTradingDate"} dir={sortDir} onSort={handleSort} />
             </tr>
           </thead>
           <tbody>
@@ -191,6 +191,11 @@ export function SecuritiesTable({ securities }: { securities: SecuritySnapshot[]
                 <td className="max-w-[220px] truncate px-3 py-2.5 text-zinc-600 dark:text-zinc-400">{s.companyName}</td>
                 <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums text-zinc-900 dark:text-zinc-100">
                   {s.latestPrice !== null ? `GHS ${formatGhs(s.latestPrice)}` : "—"}
+                  {s.latestIsCarried && (
+                    <div className="text-[10px] font-normal text-zinc-400 dark:text-zinc-500" title="No trade in the latest GSE report: this is the previous close carried forward, not a new trade.">
+                      carried · no trade {formatDate(s.latestDate)}
+                    </div>
+                  )}
                 </td>
                 <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums"><ReturnCell pct={s.returns["1D"]?.pct ?? null} /></td>
                 <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums"><ReturnCell pct={s.returns["1M"]?.pct ?? null} /></td>
@@ -199,7 +204,7 @@ export function SecuritiesTable({ securities }: { securities: SecuritySnapshot[]
                 <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums text-zinc-600 dark:text-zinc-400">
                   {s.latestValueTradedGhs !== null ? `GHS ${formatCount(s.latestValueTradedGhs)}` : "—"}
                 </td>
-                <td className="whitespace-nowrap px-3 py-2.5 text-right text-zinc-500 dark:text-zinc-400">{formatDate(s.latestDate)}</td>
+                <td className="whitespace-nowrap px-3 py-2.5 text-right text-zinc-500 dark:text-zinc-400">{s.lastTradeDate ? formatDate(s.lastTradeDate) : <span title="No actual trade on record">never traded</span>}</td>
               </tr>
             ))}
             {pageRows.length === 0 && (

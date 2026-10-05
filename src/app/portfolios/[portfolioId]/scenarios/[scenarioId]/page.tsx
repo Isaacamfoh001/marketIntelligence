@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getInstrumentContext, getPortfolio } from "@/lib/queries/portfolio";
+import { EquitySourceNotice } from "@/components/EquitySourceNotice";
 import { buildTargetOptions, getScenario, getScenarioStudio } from "@/lib/queries/scenarios";
 import type { ExposureAssetClass } from "@/lib/portfolio";
 import { CoreAssumptionsForm, RenameScenarioForm, SpecificAssumptionForm } from "@/components/scenario/ScenarioForms";
@@ -80,6 +81,7 @@ export default async function ScenarioPage({ params, searchParams }: { params: P
           )}
         </div>
       </header>
+      {portfolio.positions.some((p) => p.holding.assetClass === "EQUITY") && <EquitySourceNotice mode="problem-only" />}
 
       <HypotheticalBanner />
 

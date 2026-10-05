@@ -83,7 +83,12 @@ export interface SecuritySnapshot {
   companyName: string;
   securityType: string;
   latestPrice: number | null;
+  /** Newest REPORT date held (GSE prints a row for every share every day; a no-trade row carries the previous close). */
   latestDate: string | null;
+  /** Newest date on which the security ACTUALLY traded (volume > 0). null = no actual trade on record. */
+  lastTradeDate: string | null;
+  /** True when the latest report row is a carried (volume = 0) price rather than a trade on that date. */
+  latestIsCarried: boolean;
   latestVolume: number | null;
   latestValueTradedGhs: number | null;
   yearHigh: number | null;
@@ -117,6 +122,7 @@ export async function getSecuritiesWithReturns(): Promise<SecuritySnapshot[]> {
 
       const history: DatedValue[] = prices.map((p) => ({ date: p.tradingDate, value: Number(p.closeVwap) }));
       const latest = prices[prices.length - 1];
+      const lastTraded = [...prices].reverse().find((p) => p.volume !== null && p.volume > BigInt(0));
 
       return {
         securityId: sec.id,
@@ -125,6 +131,8 @@ export async function getSecuritiesWithReturns(): Promise<SecuritySnapshot[]> {
         securityType: sec.securityType,
         latestPrice: latest ? Number(latest.closeVwap) : null,
         latestDate: latest ? latest.tradingDate.toISOString().slice(0, 10) : null,
+        lastTradeDate: lastTraded ? lastTraded.tradingDate.toISOString().slice(0, 10) : null,
+        latestIsCarried: !!latest && latest.volume !== null && latest.volume === BigInt(0),
         latestVolume: latest?.volume != null ? Number(latest.volume) : null,
         latestValueTradedGhs: latest?.valueTradedGhs != null ? Number(latest.valueTradedGhs) : null,
         yearHigh: latest?.yearHigh != null ? Number(latest.yearHigh) : null,

@@ -120,7 +120,8 @@ describe("commitGseImportAction", () => {
     trackRun(r2);
 
     expect(r2.security?.inserted).toBe(0);
-    expect(r2.security?.updated).toBe(1);
+    expect(r2.security?.updated).toBe(0); // identical row: not rewritten (original provenance preserved)
+    expect(r2.security?.unchanged).toBe(1);
   });
 
   it("reports a conflict when a lower-priority backfill import disagrees with an existing daily-priority value", async () => {
