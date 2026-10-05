@@ -165,7 +165,7 @@ export function AssumptionEditor({
       {stored && (
         <>
           <p className="flex flex-wrap items-center gap-2 text-sm font-medium text-zinc-900 dark:text-zinc-100">
-            <BasisBadge basis="ANALYST_ASSUMPTION" /> {inForce ? "Starting assumption in use" : "Stored assumption (not in use)"}
+            <BasisBadge basis="ANALYST_ASSUMPTION" /> {inForce ? "Starting assumption in use" : "Stored assumption — not currently in use"}
           </p>
           {!inForce && <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">Korbly now has its own supported value, which an assumption never silently replaces. Remove this assumption, or update it to override Korbly deliberately.</p>}
           <details className="mt-2">

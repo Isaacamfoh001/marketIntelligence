@@ -13,6 +13,8 @@ import { formatIsoDate } from "@/lib/fixed-income";
 import { ghsCompact, ghsWhole } from "@/lib/scenario-studio/format";
 import { AssetBadge } from "@/components/portfolio/ui";
 import { BasisBadge } from "@/components/portfolio/basis";
+import { ThesisChip } from "@/components/thesis/HoldingThesis";
+import type { ThesisPresence } from "@/lib/queries/thesis";
 import { CLASS_VAR, FOCUS } from "./shared";
 
 export const LENSES: { id: HoldingsLens; param: string; label: string; question: string }[] = [
@@ -36,7 +38,7 @@ export function StatusChip({ h }: { h: HoldingView }) {
   return <span className={`${base} bg-emerald-50 text-emerald-800 dark:bg-emerald-400/10 dark:text-emerald-300`}>Recent</span>;
 }
 
-function Instrument({ h, href, selected }: { h: HoldingView; href: string; selected: boolean }) {
+function Instrument({ h, href, selected, thesis }: { h: HoldingView; href: string; selected: boolean; thesis?: ThesisPresence }) {
   return (
     <div className="min-w-0">
       <Link href={href} aria-current={selected ? "true" : undefined} className={`rounded text-sm font-semibold text-zinc-900 hover:underline dark:text-zinc-100 ${FOCUS}`}>
@@ -46,6 +48,7 @@ function Instrument({ h, href, selected }: { h: HoldingView; href: string; selec
         <AssetBadge assetClass={h.assetClass === "EQUITY" ? "EQUITY" : h.assetClass === "TREASURY_BILL" ? "TREASURY_BILL" : "BOND"} classification={h.assetClass === "CORPORATE_BOND" ? "CORPORATE_BOND" : h.assetClass === "GOVERNMENT_BOND" ? "GOVERNMENT_BOND" : undefined} />
         <span className="truncate">{h.issuerName}</span>
       </div>
+      <ThesisChip presence={thesis} />
     </div>
   );
 }
@@ -112,7 +115,7 @@ function QualityCell({ h }: { h: HoldingView }) {
 const TH = "px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400";
 const TD = "px-3 py-3 align-top";
 
-export function HoldingsView({ portfolioId, holdings, lens, selectedId, valueLabel = "Reference Value" }: { portfolioId: string; holdings: HoldingView[]; lens: HoldingsLens; selectedId?: string; /** "Reference Value", or "Analytical Starting Value" when assumptions participate. */ valueLabel?: string }) {
+export function HoldingsView({ portfolioId, holdings, lens, selectedId, valueLabel = "Reference Value", thesisPresence }: { portfolioId: string; holdings: HoldingView[]; lens: HoldingsLens; selectedId?: string; /** Live-thesis presence by positionId (M9.1). Optional. */ thesisPresence?: Record<string, ThesisPresence>; /** "Reference Value", or "Analytical Starting Value" when assumptions participate. */ valueLabel?: string }) {
   const lensMeta = LENSES.find((l) => l.id === lens)!;
   const hrefFor = (h: HoldingView) => `/portfolios/${portfolioId}?view=holdings&lens=${lensMeta.param}&position=${h.positionId}#inspect`;
   return (
@@ -164,7 +167,7 @@ export function HoldingsView({ portfolioId, holdings, lens, selectedId, valueLab
           <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
             {holdings.map((h) => (
               <tr key={h.positionId} className={selectedId === h.positionId ? "bg-blue-50/60 dark:bg-blue-900/10" : "hover:bg-zinc-50/70 dark:hover:bg-zinc-800/30"}>
-                <td className={TD}><Instrument h={h} href={hrefFor(h)} selected={selectedId === h.positionId} /></td>
+                <td className={TD}><Instrument h={h} href={hrefFor(h)} selected={selectedId === h.positionId} thesis={thesisPresence?.[h.positionId]} /></td>
                 {lens === "SIMPLE" && (
                   <>
                     <td className={TD}><Weight h={h} /><p className="mt-1 text-[11px] text-zinc-500 dark:text-zinc-400">{h.sizeText}</p></td>
@@ -202,7 +205,7 @@ export function HoldingsView({ portfolioId, holdings, lens, selectedId, valueLab
         {holdings.map((h) => (
           <li key={h.positionId} className={`rounded-xl border p-4 ${selectedId === h.positionId ? "border-blue-300 bg-blue-50/60 dark:border-blue-800 dark:bg-blue-900/10" : "border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900"}`}>
             <div className="flex items-start justify-between gap-3">
-              <Instrument h={h} href={hrefFor(h)} selected={selectedId === h.positionId} />
+              <Instrument h={h} href={hrefFor(h)} selected={selectedId === h.positionId} thesis={thesisPresence?.[h.positionId]} />
               <StatusChip h={h} />
             </div>
             <div className="mt-3 space-y-2">

@@ -198,6 +198,30 @@ describe("hierarchy and precedence", () => {
     expect(r.ignoredAssumption).toMatchObject({ kind: "YIELD_PCT", value: 28 });
   });
 
+  it("an override is NOT superseded when Korbly's value changes — the analyst chose it; Korbly's new value stays beside it", () => {
+    const k1 = valued(korblyValued());
+    const k2 = valued(resolveValuation(valueBondPosition(1e6, TERMS, bondIn(19), VAL), null, assumedAt(28)));
+    expect(k2.referenceValueGhs).not.toBe(k1.referenceValueGhs);
+    const r = valued(resolveValuation(k2, A("YIELD_PCT", 28, true), assumedAt(28)));
+    expect(r.basis).toBe("ANALYST_ASSUMPTION");
+    expect(r.korblyBasis?.valueGhs).toBe(k2.referenceValueGhs);
+    expect(r.ignoredAssumption).toBeNull();
+  });
+
+  it("fallback vs override are distinguishable from the stored flag, and the assumed value differs from the Reference Value", () => {
+    const fallback = valued(resolveValuation(valueBondPosition(1e6, TERMS, unv(), VAL), A("YIELD_PCT", 28, false), assumedAt(28)));
+    expect(fallback.korblyBasis).toBeNull();
+    const k = valued(korblyValued());
+    const override = valued(resolveValuation(k, A("YIELD_PCT", 28, true), assumedAt(28)));
+    expect(override.korblyBasis).not.toBeNull();
+    expect(override.referenceValueGhs).not.toBe(override.korblyBasis!.valueGhs);
+  });
+
+  it("an inactive (superseded) fallback is retained, described, and not deleted", () => {
+    const r = valued(resolveValuation(valued(korblyValued()), A("YIELD_PCT", 28, false), assumedAt(28)));
+    expect(r.ignoredAssumption?.summary).toBe("28.00% yield");
+  });
+
   it("removing the assumption restores Korbly's value, or unvalued when Korbly has none", () => {
     const k = valueBondPosition(1e6, TERMS, bondIn(25), VAL);
     expect(resolveValuation(k, null, assumedAt(28))).toBe(k);

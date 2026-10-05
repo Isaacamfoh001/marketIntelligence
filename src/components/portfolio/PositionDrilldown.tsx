@@ -15,6 +15,8 @@ import { BasisBadge } from "./basis";
 import { PositionSizeForm } from "./PositionSizeForm";
 import { ValuationBreakdown } from "./ValuationBreakdown";
 import { AssetBadge } from "./ui";
+import { ThesisPanel } from "@/components/thesis/HoldingThesis";
+import type { ThesisPresence } from "@/lib/queries/thesis";
 
 export function PositionDrilldown({
   portfolioId,
@@ -23,6 +25,8 @@ export function PositionDrilldown({
   valuationDateIso,
   notice,
   archived = false,
+  thesis,
+  createThesisHref,
 }: {
   portfolioId: string;
   row: PositionRow;
@@ -30,6 +34,9 @@ export function PositionDrilldown({
   valuationDateIso: string;
   notice?: "duplicate" | "saved" | "assumed" | "unassumed";
   archived?: boolean;
+  /** Live-thesis presence for this holding, and where "Create thesis" goes (M9.1). */
+  thesis?: ThesisPresence;
+  createThesisHref?: string;
 }) {
   const { instrument, holding, valuation } = row;
   const title = instrument.kind === "EQUITY" ? `${instrument.ticker} — ${instrument.companyName}` : instrument.label;
@@ -97,6 +104,8 @@ export function PositionDrilldown({
         </div>
 
         <div className="space-y-5">
+          {thesis && createThesisHref && <ThesisPanel presence={thesis} createHref={createThesisHref} />}
+
           <div>
             <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Valuation basis</h3>
             <AssumptionEditor

@@ -18,6 +18,8 @@ import {
 import { FINANCIAL_METRICS, type MetricPolarity } from "@/lib/financial-metrics";
 import { resolveFinancialProfile } from "@/lib/financial-profile";
 import type { RatioResult } from "@/lib/financial-ratios";
+import { getThesisPanelFor } from "@/lib/queries/thesis";
+import { ThesisPanel } from "@/components/thesis/HoldingThesis";
 
 export const dynamic = "force-dynamic";
 
@@ -138,6 +140,8 @@ export default async function CompanyExplorerPage({ params }: { params: Promise<
   ];
   const hasInsightStrip = insightStrip.some((i) => i.change !== null) || ratios.roe !== null;
 
+  const thesisPanel = await getThesisPanelFor({ ticker: company.ticker ?? ticker });
+
   return (
     <div className="space-y-8">
       <div>
@@ -156,6 +160,8 @@ export default async function CompanyExplorerPage({ params }: { params: Promise<
           </div>
         </div>
       </div>
+
+      {thesisPanel && <div className="max-w-xl"><ThesisPanel presence={thesisPanel.presence} createHref={thesisPanel.createHref} /></div>}
 
       {hasInsightStrip && (
         <div className="flex flex-wrap items-center gap-x-6 gap-y-2 rounded border border-zinc-200 bg-zinc-50 px-4 py-2.5 text-sm dark:border-zinc-800 dark:bg-zinc-900/50">

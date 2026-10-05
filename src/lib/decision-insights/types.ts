@@ -207,8 +207,12 @@ export interface QualityView {
   assumptionPct: number | null;
   /** "5 of 6 holdings use recent valuation evidence." — spelled out for the Data-quality panel. */
   summary: string;
-  /** Compact, count-first status for the hero, e.g. "7 recent · 1 older · 2 assumed · 1 not valued". Zero counts are omitted. */
-  heroLine: string;
+  /** VALUATION BASIS, e.g. "9 valued · 3 not valued". Independent of recency. */
+  basisLine: string;
+  /** e.g. "2 analyst assumptions"; empty when none. A basis, not a recency state. */
+  assumptionLine: string;
+  /** RECENCY of Korbly-supported evidence only, e.g. "4 recent · 2 older"; assumptions carry no observation date so are not counted. */
+  evidenceLine: string;
   /** Holdings that need a look, most material first. */
   needsReview: { positionId: string; label: string; message: string; href: string }[];
   /** True when any holding is a Treasury bill (indicative valuation disclosure applies). */

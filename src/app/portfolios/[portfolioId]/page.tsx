@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { getThesisPresenceForPositions, subjectRefForPosition } from "@/lib/queries/thesis";
 import { getInstrumentContext, getPortfolio, getPortfolioExposures, getPositionProvenance } from "@/lib/queries/portfolio";
 import { getScenarioLibrary } from "@/lib/queries/scenarios";
 import { buildWorkspace, getStressOutcome, getTemplatePreviews } from "@/lib/queries/workspace";
@@ -60,6 +61,11 @@ export default async function PortfolioPage({ params, searchParams }: { params: 
 
   const selected = view === "holdings" && query.position ? portfolio.positions.find((p) => p.positionId === query.position) : undefined;
   const provenance = selected ? await getPositionProvenance(selected) : null;
+  // Thesis presence (M9.1) only matters on the Holdings view; it is looked up by subject, never stored on a position.
+  const presence = view === "holdings" ? await getThesisPresenceForPositions(portfolio.positions) : null;
+  const thesisPresence = presence ? Object.fromEntries(presence) : undefined;
+  const selectedRef = selected ? await subjectRefForPosition(selected) : null;
+  const createThesisHref = selectedRef ? `/theses/new?subjectType=${selectedRef.type}&subjectId=${encodeURIComponent(selectedRef.id)}` : "/theses/new";
   const previews = view === "overview" && !empty ? getTemplatePreviews(portfolio) : [];
   const library = view === "scenarios" && !empty ? await getScenarioLibrary(portfolio, ctx) : null;
   const outcome = view === "scenarios" && (query.stress || query.scenario) ? await getStressOutcome(portfolio, ctx, { templateId: query.stress, scenarioId: query.scenario }) : null;
@@ -105,8 +111,8 @@ export default async function PortfolioPage({ params, searchParams }: { params: 
       ) : view === "holdings" ? (
         <section aria-labelledby="holdings-h" className="space-y-4">
           <SectionHeading id="holdings-h" hint="Select a holding to see its valuation, evidence and source.">Holdings</SectionHeading>
-          {selected && <PositionDrilldown portfolioId={portfolio.id} row={selected} provenance={provenance} valuationDateIso={portfolio.valuationDate} notice={query.duplicate ? "duplicate" : query.saved ? "saved" : query.assumed ? "assumed" : query.unassumed ? "unassumed" : undefined} archived={archived} />}
-          <HoldingsView portfolioId={portfolio.id} holdings={ws.holdings} lens={parseLens(query.lens)} selectedId={selected?.positionId} valueLabel={terms.label} />
+          {selected && <PositionDrilldown portfolioId={portfolio.id} row={selected} provenance={provenance} valuationDateIso={portfolio.valuationDate} notice={query.duplicate ? "duplicate" : query.saved ? "saved" : query.assumed ? "assumed" : query.unassumed ? "unassumed" : undefined} archived={archived} thesis={selected ? presence?.get(selected.positionId) : undefined} createThesisHref={createThesisHref} />}
+          <HoldingsView portfolioId={portfolio.id} holdings={ws.holdings} lens={parseLens(query.lens)} selectedId={selected?.positionId} valueLabel={terms.label} thesisPresence={thesisPresence} />
           <UnvaluedSection portfolioId={portfolio.id} rows={portfolio.positions} />
         </section>
       ) : view === "exposure" ? (

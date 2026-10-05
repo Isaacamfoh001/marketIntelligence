@@ -113,8 +113,14 @@ export function Hero({
         <div className="flex min-w-0 flex-col justify-between gap-6 border-t border-zinc-100 pt-6 dark:border-zinc-800 lg:border-l lg:border-t-0 lg:pl-10 lg:pt-0">
           <div>
             <p className={EYEBROW}>How much to trust it</p>
-            <p className="mt-2 text-sm font-semibold leading-snug tabular-nums text-zinc-900 dark:text-zinc-100">{quality.heroLine || quality.summary}</p>
+            <p className="mt-2 text-sm font-semibold leading-snug tabular-nums text-zinc-900 dark:text-zinc-100">{quality.basisLine}</p>
+            {quality.assumptionLine && <p className="text-sm font-semibold leading-snug tabular-nums text-indigo-800 dark:text-indigo-300">{quality.assumptionLine}</p>}
             <p className="text-[11px] text-zinc-500 dark:text-zinc-400">of {summary.positionCount} {summary.positionCount === 1 ? "holding" : "holdings"}</p>
+            {quality.evidenceLine && (
+              <p className="mt-2 text-xs text-zinc-700 dark:text-zinc-200">
+                <span className="text-zinc-500 dark:text-zinc-400">Korbly evidence:</span> <span className="font-semibold tabular-nums">{quality.evidenceLine}</span>
+              </p>
+            )}
             {holdings.length > 0 && (
               <div className="mt-3">
                 <CoverageSquares holdings={holdings} />

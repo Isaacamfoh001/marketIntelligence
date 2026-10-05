@@ -403,6 +403,7 @@ model TreasuryInstrument {
 
   treasuryRates TreasuryRate[]
   heldBills     TreasuryBill[]
+  theses        Thesis[]
 
   @@index([active])
 }
@@ -800,6 +801,7 @@ model Security {
   prices             SecurityPrice[]
   portfolioPositions PortfolioPosition[]
   scenarioShocks     ScenarioShock[]
+  theses             Thesis[]
 
   @@index([companyId])
   @@index([active])
@@ -913,6 +915,7 @@ model FixedIncomeSecurity {
   observations       FixedIncomeObservation[]
   portfolioPositions PortfolioPosition[]
   scenarioShocks     ScenarioShock[]
+  theses             Thesis[]
 
   @@index([instrumentType])
   @@index([classification])
@@ -1197,4 +1200,99 @@ model ScenarioShock {
   @@index([companyId])
   @@index([fixedIncomeSecurityId])
   @@index([securityId])
+}
+
+// ---------------------------------------------------------------------------
+// Investment theses (M9.1) — "what do we believe, why, what must be true, what
+// would prove us wrong". A thesis is ANALYST-AUTHORED judgment. Nothing here is
+// derived from market data, and nothing here is a market fact, a valuation, a
+// scenario, a recommendation or a decision.
+//
+// SUBJECT: exactly one of securityId (a listed equity) | fixedIncomeSecurityId
+// (a government or corporate bond) | treasuryInstrumentId (a Treasury-bill tenor —
+// the subject of a bill *view*, not one dated bill) is set (CHECK
+// "Thesis_subject_check"). A thesis is NOT a position: it exists whether or not the
+// subject is held, and holdings are discovered by joining on the subject at read
+// time. Several theses may share a subject (they never overwrite one another);
+// instruments are never deleted from under a thesis (Restrict).
+//
+// STATUS is analyst-controlled (the service enforces the allowed transitions;
+// nothing changes it automatically). CLOSED ("no longer tracked") is deliberately
+// distinct from INVALIDATED ("the reasoning no longer holds") — M9.5 review needs
+// the difference. `statusNote` records why, `statusChangedAt` when.
+//
+// CONFIDENCE is the analyst's own, coarse (LOW/MEDIUM/HIGH) — not a probability,
+// not a model output, not data quality. Both confidence and horizon may be unset
+// while DRAFT; activation requires them.
+//
+// The five lists are plain text[] — the minimum that is useful now. M9.2 (evidence
+// & catalysts) can attach evidence objects to the thesis id and promote a list
+// item to its own row without rewriting this one. The row is never destructively
+// replaced, so M9.x history can later snapshot it; createdAt/updatedAt are kept.
+// ---------------------------------------------------------------------------
+
+enum ThesisStatus {
+  DRAFT
+  ACTIVE
+  CHALLENGED
+  INVALIDATED
+  CLOSED
+}
+
+enum ThesisConfidence {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum ThesisHorizon {
+  /// Under 1 year.
+  SHORT
+  /// 1 to 3 years.
+  MEDIUM
+  /// More than 3 years.
+  LONG
+}
+
+model Thesis {
+  id        String @id @default(cuid())
+  title     String
+  /// WHAT WE BELIEVE — the core belief, one or two sentences.
+  belief    String
+  /// WHY WE BELIEVE IT — the analyst's reasoning (free prose; required to activate).
+  rationale String @default("")
+
+  securityId            String?
+  fixedIncomeSecurityId String?
+  treasuryInstrumentId  String?
+
+  status          ThesisStatus      @default(DRAFT)
+  statusNote      String?
+  statusChangedAt DateTime          @default(now())
+  confidence      ThesisConfidence?
+  horizon         ThesisHorizon?
+
+  /// WHAT MUST BE TRUE — conditions the thesis depends on.
+  mustBeTrue   String[]
+  /// WHAT COULD GO WRONG — risks that weaken the case (they do not, by themselves, refute it).
+  risks        String[]
+  /// WHAT COULD PROVE US WRONG — "we should reconsider if…" (required to activate).
+  invalidation String[]
+  /// CATALYSTS — developments that could make the thesis play out or become visible.
+  catalysts    String[]
+  /// WHAT WE'RE WATCHING — indicators and events to keep an eye on.
+  watching     String[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  security            Security?            @relation(fields: [securityId], references: [id], onDelete: Restrict)
+  fixedIncomeSecurity FixedIncomeSecurity? @relation(fields: [fixedIncomeSecurityId], references: [id], onDelete: Restrict)
+  treasuryInstrument  TreasuryInstrument?  @relation(fields: [treasuryInstrumentId], references: [id], onDelete: Restrict)
+
+  @@index([status])
+  @@index([securityId])
+  @@index([fixedIncomeSecurityId])
+  @@index([treasuryInstrumentId])
+  @@index([updatedAt])
 }

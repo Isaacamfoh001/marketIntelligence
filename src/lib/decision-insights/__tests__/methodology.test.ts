@@ -281,8 +281,13 @@ describe("hero and quality wording", () => {
   it("hero line is count-first and compact; zero counts are omitted", () => {
     const w = workspace(mixedBasis());
     const q = buildQuality(w, buildHoldings(w));
-    expect(q.heroLine).toBe("3 recent · 1 assumed · 1 not valued");
-    expect(buildQuality(workspace([equity("A", 1, 1)]), buildHoldings(workspace([equity("A", 1, 1)]))).heroLine).toBe("1 recent");
+    expect(q.basisLine).toBe("4 valued · 1 not valued");
+    expect(q.assumptionLine).toBe("1 analyst assumption");
+    expect(q.evidenceLine).toBe("3 recent");
+    expect(q.evidenceLine).not.toMatch(/assum/);
+    expect(q.basisLine).not.toMatch(/recent|older/);
+    const one = buildQuality(workspace([equity("A", 1, 1)]), buildHoldings(workspace([equity("A", 1, 1)])));
+    expect({ b: one.basisLine, a: one.assumptionLine, e: one.evidenceLine }).toEqual({ b: "1 valued", a: "", e: "1 recent" });
   });
 
   it("the quality summary with assumptions separates Korbly-supported from assumed", () => {

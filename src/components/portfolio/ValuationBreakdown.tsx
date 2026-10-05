@@ -28,8 +28,25 @@ function Row({ label, value, sub, strong = false }: { label: string; value: Reac
 function AssumptionBreakdown({ valuation }: { valuation: ValuedPosition }) {
   const a = valuation.assumption!;
   const d = valuation.detail;
+  const k = valuation.korblyBasis;
+  const delta = k ? (valuation.referenceValueGhs ?? 0) - (k.valueGhs ?? 0) : 0;
   return (
     <div>
+      {k && (
+        <div className="mb-2 grid gap-2 sm:grid-cols-2" role="group" aria-label="Reference basis compared with analytical basis">
+          <div className="rounded border border-zinc-200 bg-zinc-50 px-2.5 py-2 dark:border-zinc-700 dark:bg-zinc-800/50">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Reference basis · Korbly</p>
+            <p className="mt-0.5 text-sm font-semibold tabular-nums text-zinc-900 dark:text-zinc-100">{formatGhs(k.valueGhs)}</p>
+            <p className="text-[11px] text-zinc-600 dark:text-zinc-400">Korbly {k.basis === "REFERENCE" ? "Reference" : "Indicative"} value — unchanged{k.inputDate ? `, input of ${formatIsoDate(k.inputDate)}` : ""}</p>
+          </div>
+          <div className="rounded border border-indigo-200 bg-indigo-50/60 px-2.5 py-2 dark:border-indigo-400/30 dark:bg-indigo-400/10">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-indigo-800 dark:text-indigo-300">Analytical basis · your override</p>
+            <p className="mt-0.5 text-sm font-semibold tabular-nums text-indigo-950 dark:text-indigo-100">{formatGhs(valuation.referenceValueGhs)}</p>
+            <p className="text-[11px] text-indigo-900 dark:text-indigo-200">Used in this analysis · {delta >= 0 ? "+" : "−"}{formatGhs(Math.abs(delta))} vs Korbly</p>
+          </div>
+          <p className="text-[11px] text-zinc-500 dark:text-zinc-400 sm:col-span-2">You deliberately chose to test a different starting basis. It does not replace Korbly’s value, which stays as shown.</p>
+        </div>
+      )}
       <div className="rounded border border-indigo-200 bg-indigo-50/60 px-2.5 py-2 dark:border-indigo-400/30 dark:bg-indigo-400/10">
         <p className="flex flex-wrap items-center gap-2 text-xs font-medium text-indigo-950 dark:text-indigo-100">
           <BasisBadge basis="ANALYST_ASSUMPTION" /> {a.summary}
@@ -73,11 +90,6 @@ function AssumptionBreakdown({ valuation }: { valuation: ValuedPosition }) {
         </ol>
         <p className="mt-1 text-[11px] text-zinc-500 dark:text-zinc-400">Provenance: {a.provenance}. No analyst identity is recorded yet.</p>
       </details>
-      {valuation.korblyBasis && (
-        <p className="mt-2 rounded border border-zinc-200 bg-zinc-50 px-2.5 py-1.5 text-xs text-zinc-700 dark:border-zinc-700 dark:bg-zinc-800/50 dark:text-zinc-300">
-          <span className="font-medium">Korbly’s own {valuation.korblyBasis.basis === "REFERENCE" ? "Reference" : "Indicative"} value is {formatGhs(valuation.korblyBasis.valueGhs)}.</span> It is not used in this analysis because you chose to test a different starting assumption; it is unchanged.
-        </p>
-      )}
       <p className="mt-2 text-[11px] text-zinc-400 dark:text-zinc-500">An assumption is a disclosed analytical input. It has no observation date, so it is neither “recent” nor “stale”.</p>
     </div>
   );
@@ -100,7 +112,8 @@ export function ValuationBreakdown({ valuation }: { valuation: PositionValuation
   const detail = valuation.detail;
   const ignored = valuation.ignoredAssumption && (
     <p className="mb-2 rounded border border-zinc-200 bg-zinc-50 px-2.5 py-1.5 text-xs text-zinc-700 dark:border-zinc-700 dark:bg-zinc-800/50 dark:text-zinc-300">
-      A stored analyst assumption ({valuation.ignoredAssumption.summary}) is <span className="font-medium">not used</span>: Korbly now has its own supported value, which an assumption never silently replaces. Remove the assumption, or re-enter it to override deliberately.
+      <span className="mr-1.5 rounded border border-zinc-400 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide dark:border-zinc-500">Not currently in use</span>
+      A stored analyst assumption ({valuation.ignoredAssumption.summary}) is kept but <span className="font-medium">not applied</span>: Korbly now has its own supported value, which an assumption never silently replaces. Remove the assumption, or re-enter it to override deliberately.
     </p>
   );
   if (detail.assetClass === "BOND") {

@@ -67,7 +67,10 @@ describe("hero, holdings and quality with a mixed-basis portfolio", () => {
     expect(hero).toMatch(/not an observed market value, and it is not a Reference value/);
   });
   it("the hero evidence line is compact and count-first", () => {
-    expect(hero).toContain("3 recent · 1 assumed · 1 not valued");
+    expect(hero).toContain("4 valued · 1 not valued");
+    expect(hero).toContain("1 analyst assumption");
+    expect(hero).toContain("3 recent");
+    expect(hero).not.toMatch(/recent · \d+ assumed/);
     expect(hero).toContain("of 5 holdings");
   });
   it("coverage squares include a labelled assumption state", () => {
@@ -155,7 +158,7 @@ describe("assumption editor", () => {
 
   it("a stored assumption that yielded to a newer Reference Value is flagged as not in use", () => {
     const m = render({ korbly: { status: "VALUED", basisLabel: "Reference", valueGhs: 1_020_000, reason: null, availability: { assumable: true, kinds: [] } }, stored: { kind: "YIELD_PCT", value: 28, overridesReference: false }, inForce: false });
-    expect(m).toContain("Stored assumption (not in use)");
+    expect(m).toContain("not currently in use");
     expect(m).toMatch(/never silently replaces/);
   });
 
@@ -187,8 +190,11 @@ describe("calculation view", () => {
     const v = valueBondWithAssumption(1_000_000, TERMS, { kind: "PAR", value: null, overridesReference: true }, VAL);
     if (v.status !== "VALUED" || korbly.status !== "VALUED") throw new Error("valued");
     const m = html(createElement(ValuationBreakdown, { valuation: { ...v, korblyBasis: { basis: "REFERENCE", valueGhs: korbly.referenceValueGhs, inputDate: "2026-10-03", recency: "RECENT" } } }));
-    expect(m).toMatch(/Korbly’s own Reference value is GHS 1,000\.00/);
-    expect(m).toMatch(/it is unchanged/);
+    expect(m).toContain("Reference basis");
+    expect(m).toContain("Analytical basis");
+    expect(m).toMatch(/Korbly Reference value — unchanged/);
+    expect(m).toContain("GHS 1,000.00");
+    expect(m).toMatch(/does not replace Korbly’s value/);
   });
 
   it("an unvalued position says it is not zero", () => {

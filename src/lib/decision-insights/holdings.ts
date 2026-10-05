@@ -173,11 +173,13 @@ export function buildQuality(input: WorkspaceInput, holdings: HoldingView[]): Qu
     if (s.unvaluedCount > 0) parts.push(`${s.unvaluedCount} cannot be valued`);
     summary = `${parts.join("; ")}.${s.staleCount > 0 ? ` ${s.staleCount} of the supported ${plural(s.staleCount, "holding")} ${s.staleCount === 1 ? "uses" : "use"} older evidence.` : ""}`;
   }
-  const heroParts: string[] = [];
-  if (s.recentCount > 0) heroParts.push(`${s.recentCount} recent`);
-  if (s.staleCount > 0) heroParts.push(`${s.staleCount} older`);
-  if (s.assumptionCount > 0) heroParts.push(`${s.assumptionCount} assumed`);
-  if (s.unvaluedCount > 0) heroParts.push(`${s.unvaluedCount} not valued`);
+  // Two separate dimensions: what the value rests ON (basis) and how fresh the Korbly evidence is (recency).
+  const basisParts: string[] = [];
+  if (n > 0) basisParts.push(`${s.valuedCount} valued`);
+  if (s.unvaluedCount > 0) basisParts.push(`${s.unvaluedCount} not valued`);
+  const evidenceParts: string[] = [];
+  if (s.recentCount > 0) evidenceParts.push(`${s.recentCount} recent`);
+  if (s.staleCount > 0) evidenceParts.push(`${s.staleCount} older`);
   return {
     valuedCount: s.valuedCount,
     positionCount: n,
@@ -189,7 +191,9 @@ export function buildQuality(input: WorkspaceInput, holdings: HoldingView[]): Qu
     recentPct: s.recentPct,
     assumptionPct: s.assumptionPct,
     summary,
-    heroLine: heroParts.join(" · "),
+    basisLine: basisParts.join(" · "),
+    assumptionLine: s.assumptionCount > 0 ? `${s.assumptionCount} ${s.assumptionCount === 1 ? "analyst assumption" : "analyst assumptions"}` : "",
+    evidenceLine: evidenceParts.join(" · "),
     needsReview,
     hasBillDisclosure: input.positions.some((p) => p.assetClass === "TREASURY_BILL"),
   };

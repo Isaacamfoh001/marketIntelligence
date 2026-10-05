@@ -24,6 +24,8 @@ import {
   type ComparableRow,
 } from "@/lib/fixed-income";
 import { RatesChart } from "@/components/RatesChart";
+import { getThesisPanelFor } from "@/lib/queries/thesis";
+import { ThesisPanel } from "@/components/thesis/HoldingThesis";
 import { InvestmentCalculator } from "@/components/fixed-income/InvestmentCalculator";
 import { FindAlternatives } from "@/components/fixed-income/FindAlternatives";
 import { PriceSensitivity } from "@/components/fixed-income/PriceSensitivity";
@@ -149,6 +151,8 @@ export default async function FixedIncomeSecurityPage({ params }: { params: Prom
   const observedPriceLabel =
     reliable && security.latestObservationDate ? `${analytics.observationKind === "SECONDARY_MARKET" ? "GFIM secondary trade" : "primary auction"}, ${formatIsoDate(security.latestObservationDate)}` : null;
 
+  const thesisPanel = await getThesisPanelFor({ instrumentCode: security.instrumentCode });
+
   return (
     <div className="space-y-8">
       <FixedIncomeNav securityLabel={label} asOf={formatIsoDate(valuationIso)} />
@@ -194,6 +198,8 @@ export default async function FixedIncomeSecurityPage({ params }: { params: Prom
           </nav>
         )}
       </div>
+
+      {thesisPanel && <div className="max-w-xl"><ThesisPanel presence={thesisPanel.presence} createHref={thesisPanel.createHref} /></div>}
 
       {/* ------------------------------------------------------------ 2. Analyst view */}
       {!isMatured && (
