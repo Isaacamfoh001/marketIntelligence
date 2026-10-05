@@ -10,6 +10,7 @@ import { formatGhs, formatIsoDate, formatTimeRemaining } from "@/lib/fixed-incom
 import { CLASS_BAR, ExposurePanel, Metric, ghsCompact, plural } from "./exposure-ui";
 import { MaturityLadderChart } from "./MaturityLadderChart";
 import { RecencyBadge } from "./ui";
+import { BasisBadge } from "./basis";
 
 const pct1 = (n: number) => `${n.toFixed(1)}%`;
 const posHref = (portfolioId: string, positionId: string) => `/portfolios/${portfolioId}?position=${positionId}#inspect`;
@@ -29,15 +30,31 @@ export function Callouts({ callouts }: { callouts: string[] }) {
   );
 }
 
+/** "Reference value" while every valued position is Korbly-supported, "Analytical Starting Value" once any rests on an analyst assumption. */
+const valueNames = (e: PortfolioExposures) => (e.valueBasis.assumptionCount > 0 ? { title: "Analytical Starting Value", lower: "Analytical Starting Value" } : { title: "Reference value", lower: "reference value" });
+
+/** Discloses assumption dependence beside figures that are built from the starting value. */
+function AssumptionNote({ e }: { e: PortfolioExposures }) {
+  const b = e.valueBasis;
+  if (b.assumptionCount === 0 || b.assumptionPct === null) return null;
+  return (
+    <p className="mt-2 rounded border border-indigo-200 bg-indigo-50/60 px-2 py-1 text-[11px] text-indigo-950 dark:border-indigo-400/30 dark:bg-indigo-400/10 dark:text-indigo-100">
+      <span aria-hidden>◇ </span>
+      {b.assumptionPct.toFixed(b.assumptionPct >= 10 ? 0 : 1)}% of this value ({formatGhs(b.assumptionValueGhs)}) rests on analyst assumptions, not Korbly-supported valuations.
+    </p>
+  );
+}
+
 export function AssetAllocationPanel({ e }: { e: PortfolioExposures }) {
   const a = e.allocation;
+  const v = valueNames(e);
   return (
     <ExposurePanel id="allocation" title="Asset allocation" basis={a.rows.length > 0 ? "Valued positions only" : undefined} method={<p>{EXPOSURE_COPY.allocation}</p>}>
       {a.rows.length === 0 ? (
         <p className="text-sm text-zinc-500 dark:text-zinc-400">{e.positionCount === 0 ? "No positions yet." : "No position can be valued today, so there is no value-based allocation to show."}</p>
       ) : (
         <>
-          <div className="flex h-4 w-full overflow-hidden rounded bg-zinc-100 dark:bg-zinc-800" role="img" aria-label={`Allocation of valued reference value: ${a.rows.map((r) => `${r.label} ${pct1(r.pct)}`).join(", ")}`}>
+          <div className="flex h-4 w-full overflow-hidden rounded bg-zinc-100 dark:bg-zinc-800" role="img" aria-label={`Allocation of valued ${v.lower}: ${a.rows.map((r) => `${r.label} ${pct1(r.pct)}`).join(", ")}`}>
             {a.rows.map((r) => (
               <div key={r.assetClass} className={CLASS_BAR[r.assetClass]} style={{ width: `${r.pct}%` }} title={`${r.label}: ${formatGhs(r.referenceValueGhs)} (${pct1(r.pct)})`} />
             ))}
@@ -46,8 +63,8 @@ export function AssetAllocationPanel({ e }: { e: PortfolioExposures }) {
             <thead className="sr-only">
               <tr>
                 <th>Asset class</th>
-                <th>Reference value</th>
-                <th>Share of valued reference value</th>
+                <th>{v.title}</th>
+                <th>Share of valued {v.lower}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
@@ -71,7 +88,7 @@ export function AssetAllocationPanel({ e }: { e: PortfolioExposures }) {
             </tbody>
           </table>
           <p className="mt-2 text-[11px] text-zinc-500 dark:text-zinc-400">
-            % of valued reference value ({formatGhs(a.denominatorGhs as number)}).
+            % of valued {v.lower} ({formatGhs(a.denominatorGhs as number)}).
             {a.unvalued.count > 0 && (
               <>
                 {" "}
@@ -81,6 +98,7 @@ export function AssetAllocationPanel({ e }: { e: PortfolioExposures }) {
               </>
             )}
           </p>
+          <AssumptionNote e={e} />
         </>
       )}
     </ExposurePanel>
@@ -89,6 +107,7 @@ export function AssetAllocationPanel({ e }: { e: PortfolioExposures }) {
 
 export function IssuerPanel({ e }: { e: PortfolioExposures }) {
   const i = e.issuers;
+  const v = valueNames(e);
   const max = i.rows[0]?.pct ?? 0;
   return (
     <ExposurePanel id="issuers" title="Issuer concentration" basis={i.rows.length > 0 ? "Valued positions only" : undefined} method={<p>{EXPOSURE_COPY.issuer}</p>}>
@@ -124,7 +143,8 @@ export function IssuerPanel({ e }: { e: PortfolioExposures }) {
               No value-based share (all positions unvalued): {i.unvaluedOnly.map((u) => `${u.issuer.name} (${u.unvaluedCount})`).join(", ")}.
             </p>
           )}
-          <p className="mt-2 text-[11px] text-zinc-500 dark:text-zinc-400">% of valued reference value ({formatGhs(i.denominatorGhs as number)}). Bar colour shows the issuer&rsquo;s first asset class.</p>
+          <p className="mt-2 text-[11px] text-zinc-500 dark:text-zinc-400">% of valued {v.lower} ({formatGhs(i.denominatorGhs as number)}). Bar colour shows the issuer&rsquo;s first asset class.</p>
+          <AssumptionNote e={e} />
         </>
       )}
     </ExposurePanel>
@@ -280,6 +300,7 @@ export function RateSensitivityPanel({ e, portfolioId }: { e: PortfolioExposures
                       {p.label}
                     </Link>
                     {p.recency === "STALE" && <RecencyBadge recency="STALE" />}
+                    {p.basis === "ANALYST_ASSUMPTION" && <BasisBadge basis="ANALYST_ASSUMPTION" detail="assumed starting yield" />}
                   </span>
                   <span className="shrink-0 tabular-nums text-zinc-900 dark:text-zinc-100">
                     <span className="font-semibold">{ghs0(p.dv01Ghs)}</span>/bp <span className="text-[11px] text-zinc-500 dark:text-zinc-400">· {pct1(p.sharePct)}</span>
@@ -366,7 +387,7 @@ export function UpcomingMaturitiesPanel({ e, portfolioId }: { e: PortfolioExposu
                 <th className="py-1 pr-2 text-left font-medium">Holding</th>
                 <th className="py-1 pr-2 text-left font-medium">Matures</th>
                 <th className="py-1 pr-2 text-right font-medium">Nominal / face held</th>
-                <th className="py-1 text-right font-medium">Reference value</th>
+                <th className="py-1 text-right font-medium">{valueNames(e).title}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">

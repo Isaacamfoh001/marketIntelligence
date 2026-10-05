@@ -77,7 +77,7 @@ describe("workspace read model on real data", () => {
   it("an empty portfolio produces no conclusion and no error", async () => {
     const p = (await getPortfolio(emptyId, ctx))!;
     const ws = buildWorkspace(p, getPortfolioExposures(p));
-    expect(ws.insights).toEqual({ primary: null, insights: [], investigations: [] });
+    expect(ws.insights).toEqual({ context: "OVERVIEW", primary: null, insights: [], investigations: [] });
     expect(getTemplatePreviews(p).every((t) => t.impactGhs === null)).toBe(true);
     expect(await getStressOutcome(p, ctx, { templateId: "rate-pressure" })).toBeNull();
   });

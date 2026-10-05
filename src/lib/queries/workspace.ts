@@ -6,7 +6,7 @@
 // nothing is stored.
 // ---------------------------------------------------------------------------
 
-import { buildDecisionInsights, buildHoldings, buildMaturityProfile, buildQuality, buildScenarioInsight, type DecisionInsights, type HoldingView, type MaturityProfile, type QualityView, type ScenarioInsight, type WorkspaceInput } from "../decision-insights";
+import { buildDecisionInsights, buildHoldings, buildMaturityProfile, buildQuality, buildScenarioInsight, type DecisionInsights, type HoldingView, type InsightContext, type MaturityProfile, type QualityView, type ScenarioInsight, type WorkspaceInput } from "../decision-insights";
 import type { PortfolioExposures } from "../portfolio";
 import { runScenario } from "../scenarios";
 import { buildStudioView, getTemplate, SCENARIO_TEMPLATES, summariseAssumptions, templateToRules } from "../scenario-studio";
@@ -22,11 +22,14 @@ export interface Workspace {
   insights: DecisionInsights;
 }
 
-/** Pure assembly from an already-valued portfolio and its exposures. */
-export function buildWorkspace(portfolio: PortfolioDetail, exposures: PortfolioExposures): Workspace {
+/**
+ * Pure assembly from an already-valued portfolio and its exposures. `context` is the question the user is asking (the
+ * perspective they are on); it decides which analytical dimension leads the insights and the primary conclusion.
+ */
+export function buildWorkspace(portfolio: PortfolioDetail, exposures: PortfolioExposures, context: InsightContext = "OVERVIEW"): Workspace {
   const input: WorkspaceInput = { portfolioId: portfolio.id, valuationDate: portfolio.valuationDate, summary: portfolio.summary, exposures, positions: toExposurePositions(portfolio.positions) };
   const holdings = buildHoldings(input);
-  return { input, holdings, maturity: buildMaturityProfile(input), quality: buildQuality(input, holdings), insights: buildDecisionInsights(input) };
+  return { input, holdings, maturity: buildMaturityProfile(input), quality: buildQuality(input, holdings), insights: buildDecisionInsights(input, context) };
 }
 
 export interface TemplatePreview {

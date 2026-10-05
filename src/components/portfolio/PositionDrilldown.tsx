@@ -7,7 +7,11 @@
 import Link from "next/link";
 import type { InputProvenance, PositionRow } from "@/lib/queries/portfolio";
 import { formatIsoDate } from "@/lib/fixed-income";
-import { removePositionAction, updatePositionAction } from "@/app/portfolios/actions";
+import { removeAssumptionAction, removePositionAction, saveAssumptionAction, updatePositionAction } from "@/app/portfolios/actions";
+import { assumptionAvailability, kindsFor, type AssumptionSubject } from "@/lib/portfolio";
+import { billDaysToMaturity } from "@/lib/treasury-bills";
+import { AssumptionEditor } from "./AssumptionEditor";
+import { BasisBadge } from "./basis";
 import { PositionSizeForm } from "./PositionSizeForm";
 import { ValuationBreakdown } from "./ValuationBreakdown";
 import { AssetBadge } from "./ui";
@@ -18,18 +22,38 @@ export function PositionDrilldown({
   provenance,
   valuationDateIso,
   notice,
+  archived = false,
 }: {
   portfolioId: string;
   row: PositionRow;
   provenance: InputProvenance | null;
   valuationDateIso: string;
-  notice?: "duplicate" | "saved";
+  notice?: "duplicate" | "saved" | "assumed" | "unassumed";
+  archived?: boolean;
 }) {
   const { instrument, holding, valuation } = row;
   const title = instrument.kind === "EQUITY" ? `${instrument.ticker} — ${instrument.companyName}` : instrument.label;
   const initial = holding.assetClass === "BOND" ? String(holding.nominalGhs) : holding.assetClass === "TREASURY_BILL" ? String(holding.faceValueGhs) : String(holding.shares);
   const update = updatePositionAction.bind(null, portfolioId, row.positionId, holding.assetClass);
   const remove = removePositionAction.bind(null, portfolioId, row.positionId);
+
+  // Valuation assumption (M9.0.1): what Korbly itself supports, what may be assumed, and the plain facts the editor needs.
+  const valuationDate = new Date(`${valuationDateIso}T00:00:00.000Z`);
+  const subject: AssumptionSubject =
+    holding.assetClass === "BOND" && instrument.kind === "BOND"
+      ? { assetClass: "BOND", nominalGhs: holding.nominalGhs, terms: instrument.terms }
+      : holding.assetClass === "TREASURY_BILL" && instrument.kind === "TREASURY_BILL"
+        ? { assetClass: "TREASURY_BILL", faceValueGhs: holding.faceValueGhs, daysToMaturity: billDaysToMaturity(new Date(`${instrument.maturityDate}T00:00:00.000Z`), valuationDate) }
+        : { assetClass: "EQUITY", shares: holding.assetClass === "EQUITY" ? holding.shares : 0 };
+  const korbly = row.korblyValuation;
+  const korblyStanding = {
+    status: korbly.status,
+    basisLabel: korbly.status === "VALUED" ? (korbly.basis === "INDICATIVE" ? "Indicative" : "Reference") : null,
+    valueGhs: korbly.status === "VALUED" ? korbly.referenceValueGhs : null,
+    reason: korbly.status === "UNVALUED" ? korbly.reason : null,
+    availability: korbly.status === "VALUED" ? ({ assumable: true, kinds: kindsFor(holding.assetClass) } as const) : assumptionAvailability(holding.assetClass, korbly.code),
+  };
+  const basis = valuation.status === "VALUED" ? valuation.basis : "UNVALUED";
 
   return (
     <section id="inspect" aria-label={`Position detail: ${title}`} className="scroll-mt-4 rounded border border-blue-200 bg-white p-4 dark:border-blue-900/60 dark:bg-zinc-900">
@@ -39,6 +63,7 @@ export function PositionDrilldown({
           <h2 className="mt-0.5 flex flex-wrap items-center gap-1.5 text-base font-semibold text-zinc-900 dark:text-zinc-100">
             <AssetBadge assetClass={holding.assetClass} classification={instrument.kind === "BOND" ? instrument.instrumentType : undefined} />
             {title}
+            <BasisBadge basis={basis} detail={valuation.status === "VALUED" && valuation.assumption ? valuation.assumption.summary : null} />
           </h2>
           {instrument.kind === "TREASURY_BILL" && (
             <p className="text-xs text-zinc-500 dark:text-zinc-400">
@@ -61,6 +86,8 @@ export function PositionDrilldown({
       </div>
 
       {notice === "duplicate" && <p role="status" className="mb-3 rounded border border-blue-200 bg-blue-50 px-2.5 py-1.5 text-xs text-blue-900 dark:border-blue-900/50 dark:bg-blue-900/20 dark:text-blue-200">This instrument is already in the portfolio — a portfolio holds one position per instrument. Edit its size here.</p>}
+      {notice === "assumed" && <p role="status" className="mb-3 rounded border border-indigo-200 bg-indigo-50 px-2.5 py-1.5 text-xs text-indigo-900 dark:border-indigo-400/30 dark:bg-indigo-400/10 dark:text-indigo-200">Assumption saved. The analysis now uses it and labels it as an assumption.</p>}
+      {notice === "unassumed" && <p role="status" className="mb-3 rounded border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs text-emerald-900 dark:border-emerald-900/50 dark:bg-emerald-900/20 dark:text-emerald-200">Assumption removed. The holding is back to {valuation.status === "VALUED" ? "Korbly’s own valuation" : "unvalued"}.</p>}
       {notice === "saved" && <p role="status" className="mb-3 rounded border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs text-emerald-900 dark:border-emerald-900/50 dark:bg-emerald-900/20 dark:text-emerald-200">Position saved.</p>}
 
       <div className="grid gap-6 lg:grid-cols-2">
@@ -70,6 +97,20 @@ export function PositionDrilldown({
         </div>
 
         <div className="space-y-5">
+          <div>
+            <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Valuation basis</h3>
+            <AssumptionEditor
+              subject={subject}
+              valuationDateIso={valuationDateIso}
+              korbly={korblyStanding}
+              stored={row.assumption}
+              inForce={valuation.status === "VALUED" && valuation.basis === "ANALYST_ASSUMPTION"}
+              saveAction={saveAssumptionAction.bind(null, portfolioId, row.positionId)}
+              removeAction={removeAssumptionAction.bind(null, portfolioId, row.positionId)}
+              archived={archived}
+            />
+          </div>
+
           <div>
             <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Source &amp; provenance</h3>
             {provenance ? (
@@ -96,7 +137,7 @@ export function PositionDrilldown({
                 )}
               </>
             ) : (
-              <p className="text-xs text-zinc-500 dark:text-zinc-400">{valuation.status === "VALUED" ? "The source row for this observation could not be loaded." : "There is no observation behind this position, so there is nothing to trace."}</p>
+              <p className="text-xs text-zinc-500 dark:text-zinc-400">{valuation.status === "VALUED" ? (valuation.basis === "ANALYST_ASSUMPTION" ? "This value rests on an analyst assumption, not on a market observation, so there is no market source to trace. Provenance: Analyst assumption." : "The source row for this observation could not be loaded.") : "There is no observation behind this position, so there is nothing to trace."}</p>
             )}
           </div>
 

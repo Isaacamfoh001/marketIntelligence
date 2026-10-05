@@ -12,13 +12,14 @@ import type { HoldingsLens, HoldingView } from "@/lib/decision-insights";
 import { formatIsoDate } from "@/lib/fixed-income";
 import { ghsCompact, ghsWhole } from "@/lib/scenario-studio/format";
 import { AssetBadge } from "@/components/portfolio/ui";
+import { BasisBadge } from "@/components/portfolio/basis";
 import { CLASS_VAR, FOCUS } from "./shared";
 
 export const LENSES: { id: HoldingsLens; param: string; label: string; question: string }[] = [
   { id: "SIMPLE", param: "simple", label: "Simple", question: "What do we own, and how big is each holding?" },
   { id: "RATES", param: "rates", label: "Rates", question: "Which holdings move most when interest rates move?" },
   { id: "MATURITY", param: "maturity", label: "Maturity", question: "When does each holding pay back its principal?" },
-  { id: "QUALITY", param: "quality", label: "Data quality", question: "How recent is the evidence behind each value?" },
+  { id: "QUALITY", param: "quality", label: "Data quality", question: "How recent is the evidence behind each value? (Assumptions are not observed, so they have no recency.)" },
 ];
 
 export const parseLens = (raw: string | undefined): HoldingsLens => LENSES.find((l) => l.param === raw)?.id ?? "SIMPLE";
@@ -29,6 +30,8 @@ const wt = (n: number) => `${n.toFixed(n >= 10 ? 0 : 1)}%`;
 export function StatusChip({ h }: { h: HoldingView }) {
   const base = "inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-medium";
   if (h.status === "UNVALUED") return <span className={`${base} border border-dashed border-zinc-400 text-zinc-700 dark:border-zinc-500 dark:text-zinc-300`}>Needs review</span>;
+  // Evidence recency is a data-quality question; an assumption has no observation, so it is neither recent nor older.
+  if (h.basis === "ANALYST_ASSUMPTION") return <span className={`${base} bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300`}>Not observed</span>;
   if (h.quality.recency === "STALE") return <span className={`${base} bg-amber-50 text-amber-800 dark:bg-amber-400/10 dark:text-amber-300`}>Older evidence</span>;
   return <span className={`${base} bg-emerald-50 text-emerald-800 dark:bg-emerald-400/10 dark:text-emerald-300`}>Recent</span>;
 }
@@ -48,7 +51,15 @@ function Instrument({ h, href, selected }: { h: HoldingView; href: string; selec
 }
 
 function Weight({ h }: { h: HoldingView }) {
-  if (h.referenceValueGhs === null || h.weightPct === null) return <span className="text-sm text-zinc-500 dark:text-zinc-400">Not valued</span>;
+  if (h.referenceValueGhs === null || h.weightPct === null) {
+    return (
+      <div>
+        <span className="text-sm text-zinc-500 dark:text-zinc-400">Not valued</span>
+        <p className="mt-1"><BasisBadge basis="UNVALUED" /></p>
+        {h.canAssume && <p className="mt-1 max-w-[14rem] text-[11px] leading-snug text-zinc-500 dark:text-zinc-400">No reliable Reference Value. You can keep it unvalued or open it to add an assumption.</p>}
+      </div>
+    );
+  }
   return (
     <div>
       <p className="text-sm font-semibold tabular-nums text-zinc-900 dark:text-zinc-100">
@@ -57,6 +68,8 @@ function Weight({ h }: { h: HoldingView }) {
       <div className="mt-1 h-1.5 w-full max-w-[9rem] overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800" aria-hidden>
         <div className="h-full rounded-full" style={{ width: `${Math.max(2, h.weightPct)}%`, background: CLASS_VAR[h.assetClass] }} />
       </div>
+      <p className="mt-1.5"><BasisBadge basis={h.basis} detail={h.assumptionSummary} /></p>
+      {h.korblyValueGhs !== null && <p className="mt-1 text-[11px] text-zinc-500 dark:text-zinc-400">Korbly’s own value: {ghsWhole(h.korblyValueGhs)}</p>}
     </div>
   );
 }
@@ -99,7 +112,7 @@ function QualityCell({ h }: { h: HoldingView }) {
 const TH = "px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400";
 const TD = "px-3 py-3 align-top";
 
-export function HoldingsView({ portfolioId, holdings, lens, selectedId }: { portfolioId: string; holdings: HoldingView[]; lens: HoldingsLens; selectedId?: string }) {
+export function HoldingsView({ portfolioId, holdings, lens, selectedId, valueLabel = "Reference Value" }: { portfolioId: string; holdings: HoldingView[]; lens: HoldingsLens; selectedId?: string; /** "Reference Value", or "Analytical Starting Value" when assumptions participate. */ valueLabel?: string }) {
   const lensMeta = LENSES.find((l) => l.id === lens)!;
   const hrefFor = (h: HoldingView) => `/portfolios/${portfolioId}?view=holdings&lens=${lensMeta.param}&position=${h.positionId}#inspect`;
   return (
@@ -122,7 +135,7 @@ export function HoldingsView({ portfolioId, holdings, lens, selectedId }: { port
               <th scope="col" className={TH}>Instrument</th>
               {lens === "SIMPLE" && (
                 <>
-                  <th scope="col" className={TH}>Reference Value · weight</th>
+                  <th scope="col" className={TH}>{valueLabel} · weight</th>
                   <th scope="col" className={TH}>Matures</th>
                   <th scope="col" className={TH}>Status</th>
                 </>
@@ -130,14 +143,14 @@ export function HoldingsView({ portfolioId, holdings, lens, selectedId }: { port
               {lens === "RATES" && (
                 <>
                   <th scope="col" className={TH}>Rate sensitivity</th>
-                  <th scope="col" className={TH}>Reference Value</th>
+                  <th scope="col" className={TH}>{valueLabel}</th>
                 </>
               )}
               {lens === "MATURITY" && (
                 <>
                   <th scope="col" className={TH}>Matures</th>
                   <th scope="col" className={TH}>Principal</th>
-                  <th scope="col" className={TH}>Reference Value</th>
+                  <th scope="col" className={TH}>{valueLabel}</th>
                 </>
               )}
               {lens === "QUALITY" && (

@@ -6,6 +6,7 @@ export * from "./bond-input";
 export * from "./equity-input";
 export * from "./bill-input";
 export * from "./valuation";
+export * from "./assumptions";
 export * from "./copy";
 export * from "./exposures";
 export * from "./batch";

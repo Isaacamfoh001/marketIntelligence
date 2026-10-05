@@ -11,9 +11,9 @@ describe("batch validation — each asset class keeps its own semantics", () => 
     expect(r).toEqual({
       ok: true,
       entries: [
-        { key: "BOND:b1", assetClass: "BOND", instrumentId: "b1", nominalGhs: 1_000_000 },
-        { key: "EQUITY:e1", assetClass: "EQUITY", instrumentId: "e1", shares: 100_000 },
-        { key: "BILL#1", assetClass: "TREASURY_BILL", tenorDays: 364, maturityDate: "2027-06-07", faceValueGhs: 1_000_000, isin: null },
+        { key: "BOND:b1", assetClass: "BOND", instrumentId: "b1", nominalGhs: 1_000_000, assumption: null },
+        { key: "EQUITY:e1", assetClass: "EQUITY", instrumentId: "e1", shares: 100_000, assumption: null },
+        { key: "BILL#1", assetClass: "TREASURY_BILL", tenorDays: 364, maturityDate: "2027-06-07", faceValueGhs: 1_000_000, isin: null, assumption: null },
       ],
     });
   });

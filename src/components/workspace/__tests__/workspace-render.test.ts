@@ -120,7 +120,10 @@ describe("hero", () => {
     const m = render();
     expect(m).toContain("Reference Value");
     expect(m).toMatch(/7<\/span> holdings/);
-    expect(m).toContain("holdings use recent valuation evidence");
+    // M9.0.1: the hero states evidence compactly and in plain words ("5 recent · 1 older"), counts first; the full sentence lives in the Data-quality panel.
+    expect(m).toMatch(/\d+ recent/);
+    expect(m).toMatch(/of 7 holdings/);
+    expect(m).not.toContain("valuation evidence");
     expect(m).not.toMatch(/profit|P&amp;L|annuali[sz]ed|income earned/i);
     expect(m).toMatch(/not a market value, and not a return/);
   });

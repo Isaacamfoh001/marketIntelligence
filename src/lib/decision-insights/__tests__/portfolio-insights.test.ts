@@ -6,7 +6,7 @@ const kinds = (xs: Insight[]) => xs.map((i) => i.kind);
 
 describe("empty and single-holding portfolios", () => {
   it("empty portfolio → nothing to conclude", () => {
-    expect(buildDecisionInsights(workspace([]))).toEqual({ primary: null, insights: [], investigations: [] });
+    expect(buildDecisionInsights(workspace([]))).toEqual({ context: "OVERVIEW", primary: null, insights: [], investigations: [] });
   });
   it("one holding → a factual conclusion with no invented concentration warning", () => {
     const r = buildDecisionInsights(workspace([equity("GCB", 100_000, 40)]));
@@ -59,13 +59,15 @@ describe("mixed portfolio", () => {
     expect(r.insights.length).toBeLessThanOrEqual(MAX_INSIGHTS);
     expect(r.investigations.length).toBeLessThanOrEqual(MAX_INVESTIGATIONS);
   });
-  it("ranks by materiality, highest first (integrity findings aside)", () => {
-    const m = r.insights.map((i) => i.materiality);
-    expect(m).toEqual([...m].sort((a, b) => b - a));
+  it("ranks only WITHIN a dimension: each dimension's findings are ordered by that dimension's own share, never against another dimension's", () => {
+    const byDim = new Map<string, number[]>();
+    for (const i of buildDecisionInsights(workspace(mixed())).insights) byDim.set(i.dimension, [...(byDim.get(i.dimension) ?? []), i.share ?? -1]);
+    for (const shares of byDim.values()) expect(shares).toEqual([...shares].sort((a, b) => b - a));
   });
-  it("every insight states its materiality basis and carries evidence (traceability)", () => {
+  it("every insight names its dimension and the denominator its share is a share OF, and carries evidence (traceability)", () => {
     for (const i of r.insights) {
-      expect(i.materialityBasis.length).toBeGreaterThan(5);
+      expect(i.shareBasis.length).toBeGreaterThan(5);
+      expect(i.dimension).toBeTruthy();
       expect(i.evidence.length).toBeGreaterThan(0);
     }
     expect(r.primary!.basedOn.every((id) => r.insights.some((i) => i.id === id))).toBe(true);
@@ -111,12 +113,13 @@ describe("determinism and tie-breaking", () => {
     const b = buildDecisionInsights(workspace([ps[1], ps[0]]));
     expect(a.insights.map((i) => i.id)).toEqual(b.insights.map((i) => i.id));
   });
-  it("rate and maturity scores are scaled to the whole portfolio so they do not outrank a larger value share", () => {
-    const r = buildDecisionInsights(workspace(mixed()));
-    const cls = r.insights.find((i) => i.kind === "DOMINANT_ASSET_CLASS")!;
-    const rate = buildDecisionInsights(workspace(mixed())).insights.find((i) => i.kind === "RATE_DRIVER");
-    if (rate) expect(rate.materiality).toBeLessThan(cls.materiality);
-    expect(r.primary!.basedOn[0]).toBe(cls.id);
+  it("there is no universal score: rate and maturity shares are shares of THEIR OWN denominators, unscaled", () => {
+    const fi = buildDecisionInsights(workspace([gov({ id: "G1", label: "GoG Jul-34", nominal: 5_000_000, maturity: "2034-07-10", ytm: 21 }), equity("E", 100_000, 100)]));
+    const rate = fi.insights.find((i) => i.kind === "RATE_DRIVER")!;
+    expect(rate.dimension).toBe("RATE_SENSITIVITY");
+    // The only rate-sensitive holding carries 100% of the MEASURED sensitivity, even though equities hold half the value.
+    expect(rate.share).toBeCloseTo(100, 9);
+    expect(rate.shareBasis).toMatch(/measured rate sensitivity/);
   });
 });
 

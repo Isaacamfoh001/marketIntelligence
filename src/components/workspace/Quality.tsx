@@ -2,11 +2,16 @@
 import Link from "next/link";
 import type { HoldingView, QualityView } from "@/lib/decision-insights";
 import { formatIsoDate } from "@/lib/fixed-income";
+import type { PortfolioValuationSummary } from "@/lib/portfolio";
+import { BASIS_LABEL, BASIS_MEANING, valueTerms } from "@/lib/portfolio";
+import { BasisBadge, ValuationBasisBar, type BasisKey } from "@/components/portfolio/basis";
 import { EYEBROW, FOCUS, PANEL } from "./shared";
 import { StatusChip } from "./Holdings";
 
-export function QualityPanel({ quality, holdings }: { quality: QualityView; holdings: HoldingView[] }) {
+export function QualityPanel({ quality, holdings, summary }: { quality: QualityView; holdings: HoldingView[]; summary?: PortfolioValuationSummary }) {
   const valued = holdings.filter((h) => h.status === "VALUED");
+  const terms = summary ? valueTerms(summary) : { label: "Reference Value", analytical: false };
+  const unvaluedPrincipal = holdings.filter((h) => h.status === "UNVALUED").reduce((s, h) => s + (h.principalGhs ?? 0), 0);
   return (
     <section aria-label="Data quality" className={PANEL}>
       <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Data quality</h3>
@@ -19,7 +24,7 @@ export function QualityPanel({ quality, holdings }: { quality: QualityView; hold
         <div>
           <dt className={EYEBROW}>Recent evidence</dt>
           <dd className="mt-1 text-2xl font-semibold tabular-nums text-zinc-900 dark:text-zinc-100">{quality.recentPct === null ? "—" : `${quality.recentPct.toFixed(0)}%`}</dd>
-          <dd className="text-[11px] text-zinc-500 dark:text-zinc-400">of valued Reference Value</dd>
+          <dd className="text-[11px] text-zinc-500 dark:text-zinc-400">of valued {terms.label}</dd>
         </div>
         <div>
           <dt className={EYEBROW}>Older evidence</dt>
@@ -33,6 +38,22 @@ export function QualityPanel({ quality, holdings }: { quality: QualityView; hold
         </div>
       </dl>
       <p className="mt-4 text-sm text-zinc-800 dark:text-zinc-200">{quality.summary}</p>
+      {summary && summary.valuedCount > 0 && (
+        <div className="mt-5 rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
+          <ValuationBasisBar summary={summary} unvaluedPrincipalGhs={unvaluedPrincipal} />
+          <p className="mt-3 text-[11px] text-zinc-500 dark:text-zinc-400">
+            Valuation basis (what kind of value) is separate from data quality (how recent the evidence is). A recent assumption is still an assumption, and an older observed price is still Korbly-supported.
+          </p>
+          <dl className="mt-3 grid gap-x-6 gap-y-1.5 text-xs sm:grid-cols-2">
+            {(["REFERENCE", "INDICATIVE", "ANALYST_ASSUMPTION", "UNVALUED"] as BasisKey[]).map((k) => (
+              <div key={k} className="flex items-start gap-2">
+                <dt className="shrink-0"><BasisBadge basis={k} /></dt>
+                <dd className="text-zinc-600 dark:text-zinc-400"><span className="sr-only">{BASIS_LABEL[k]}: </span>{BASIS_MEANING[k]}</dd>
+              </div>
+            ))}
+          </dl>
+        </div>
+      )}
       {quality.needsReview.length > 0 && (
         <ul className="mt-3 space-y-2">
           {quality.needsReview.map((r) => (

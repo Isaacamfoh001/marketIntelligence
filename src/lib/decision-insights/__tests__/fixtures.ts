@@ -8,7 +8,10 @@ import {
   summarizePortfolio,
   valueBillPosition,
   valueBondPosition,
+  valueBondWithAssumption,
   valueEquityPosition,
+  valueEquityWithAssumption,
+  type StoredAssumption,
   type BondValuationInput,
   type EquityValuationInput,
   type ExposureAssetClass,
@@ -103,3 +106,26 @@ export function scenarioFor(positions: ExposurePosition[], rules: ScenarioShockR
 export const templateRules = (id: string) => templateToRules(getTemplate(id)!);
 
 export const classRule = (assetClass: ExposureAssetClass, value: number): ScenarioShockRule => ({ id: `r-${assetClass}`, selector: { kind: "ASSET_CLASS", assetClass }, shockType: assetClass === "EQUITY" ? "PRICE_PCT" : "YIELD_BPS", value, targetLabel: assetClass });
+
+/** A bond Korbly cannot value, carried at an explicit analyst assumption (M9.0.1). */
+export function assumedBond(cls: "GOVERNMENT_BOND" | "CORPORATE_BOND", o: Omit<BondOpts, "ytm" | "recency"> & { assumption: Pick<StoredAssumption, "kind" | "value"> }): ExposurePosition {
+  const t = terms(o.maturity, { couponRatePct: o.coupon ?? 20 });
+  const base = bond(cls, { ...o, ytm: null });
+  return { ...base, valuation: valueBondWithAssumption(o.nominal, t, { ...o.assumption, overridesReference: false }, VAL) };
+}
+
+export function assumedEquity(id: string, shares: number, price: number): ExposurePosition {
+  const base = equity(id, shares, null);
+  return { ...base, valuation: valueEquityWithAssumption(shares, { kind: "SHARE_PRICE_GHS", value: price, overridesReference: false }, VAL) };
+}
+
+/** Mixed book with every kind of value: Reference (gov bond, equity), Indicative (bill), Analyst assumption (corp bond), Unvalued (a second corporate bond). */
+export function mixedBasis(): ExposurePosition[] {
+  return [
+    bill("B364", 1_000_000, "2027-06-07", 364),
+    gov({ id: "GOG34", label: "GoG Jul-34", nominal: 1_500_000, maturity: "2034-07-10", ytm: 21 }),
+    equity("GCB", 100_000, 40),
+    assumedBond("CORPORATE_BOND", { id: "KASA28", label: "Kasapreko Sep-28", nominal: 1_000_000, maturity: "2028-09-12", assumption: { kind: "YIELD_PCT", value: 28 } }),
+    corp({ id: "CALPREF", label: "CALPREF", nominal: 500_000, maturity: "2029-03-01", ytm: null, issuer: { companyId: "co-cal", issuerName: "CAL Bank" } }),
+  ];
+}

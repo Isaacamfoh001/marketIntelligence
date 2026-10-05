@@ -11,6 +11,8 @@
 
 import { getPrisma } from "./prisma";
 import { classifyLifecycle, toValuationDate } from "./fixed-income";
+import { getInstrumentContext, evaluateAssumption, type AssumptionEvaluation, type AssumptionTarget } from "./queries/portfolio";
+import { validateAssumption, type AssumptionKind } from "./portfolio";
 import { batchIdentity, checkBillAddable, checkBondAddable, checkEquityAddable, validateBatchEntries, validatePositionDraft, type BatchEntryInput, type BatchRowError, type ParsedBatchEntry, type PortfolioAssetClass } from "./portfolio";
 import { checkBillIssued, parseIsoDate, validateBillTerms } from "./treasury-bills";
 
@@ -250,20 +252,35 @@ export async function addPositionsBatch(input: { portfolioId: string; entries: B
   }
   if (errors.length > 0) return failAll(errors);
 
+  // Starting valuation assumptions (M9.0.1): each is evaluated against the real instrument and Korbly's own valuation BEFORE
+  // anything is written, so an impossible assumption fails the whole batch (all-or-nothing) with the row it belongs to.
+  const stored = new Map<string, { kind: AssumptionKind; value: number | null; overridesReference: boolean }>();
+  if (plans.some((p) => p.entry.assumption)) {
+    const ctx = await getInstrumentContext(today);
+    for (const { entry } of plans) {
+      if (!entry.assumption) continue;
+      const target: AssumptionTarget = entry.assetClass === "BOND" ? { assetClass: "BOND", instrumentId: entry.instrumentId, nominalGhs: entry.nominalGhs } : entry.assetClass === "EQUITY" ? { assetClass: "EQUITY", instrumentId: entry.instrumentId, shares: entry.shares } : { assetClass: "TREASURY_BILL", tenorDays: entry.tenorDays, maturityDate: entry.maturityDate, faceValueGhs: entry.faceValueGhs };
+      const evaluated = evaluateAssumption(ctx, target, entry.assumption);
+      if (!evaluated.ok) errors.push({ key: entry.key, error: evaluated.error });
+      else stored.set(entry.key, { kind: entry.assumption.kind, value: entry.assumption.value, overridesReference: evaluated.overridesReference });
+    }
+    if (errors.length > 0) return failAll(errors);
+  }
+
   try {
     const positionIds = await prisma.$transaction(async (tx) => {
       const ids: string[] = [];
       for (const { entry, terms } of plans) {
         if (entry.assetClass === "BOND") {
-          ids.push((await tx.portfolioPosition.create({ data: { portfolioId: input.portfolioId, assetClass: "BOND", fixedIncomeSecurityId: entry.instrumentId, nominalGhs: entry.nominalGhs }, select: { id: true } })).id);
+          ids.push((await tx.portfolioPosition.create({ data: { portfolioId: input.portfolioId, assetClass: "BOND", fixedIncomeSecurityId: entry.instrumentId, nominalGhs: entry.nominalGhs, ...assumptionData(stored.get(entry.key)) }, select: { id: true } })).id);
         } else if (entry.assetClass === "EQUITY") {
-          ids.push((await tx.portfolioPosition.create({ data: { portfolioId: input.portfolioId, assetClass: "EQUITY", securityId: entry.instrumentId, shares: entry.shares }, select: { id: true } })).id);
+          ids.push((await tx.portfolioPosition.create({ data: { portfolioId: input.portfolioId, assetClass: "EQUITY", securityId: entry.instrumentId, shares: entry.shares, ...assumptionData(stored.get(entry.key)) }, select: { id: true } })).id);
         } else if (terms) {
           let bill = await tx.treasuryBill.findUnique({ where: { instrumentId_maturityDate: { instrumentId: terms.instrumentId, maturityDate: terms.maturity } } });
           if (bill && terms.isin && bill.isin && bill.isin !== terms.isin) throw new BatchRowFailure(entry.key, `This bill is already recorded with ISIN ${bill.isin}.`);
           if (!bill) bill = await tx.treasuryBill.create({ data: { instrumentId: terms.instrumentId, issueDate: terms.issueDate, maturityDate: terms.maturity, isin: terms.isin } });
           else if (terms.isin && !bill.isin) bill = await tx.treasuryBill.update({ where: { id: bill.id }, data: { isin: terms.isin } });
-          ids.push((await tx.portfolioPosition.create({ data: { portfolioId: input.portfolioId, assetClass: "TREASURY_BILL", treasuryBillId: bill.id, nominalGhs: entry.faceValueGhs }, select: { id: true } })).id);
+          ids.push((await tx.portfolioPosition.create({ data: { portfolioId: input.portfolioId, assetClass: "TREASURY_BILL", treasuryBillId: bill.id, nominalGhs: entry.faceValueGhs, ...assumptionData(stored.get(entry.key)) }, select: { id: true } })).id);
         }
       }
       await tx.portfolio.update({ where: { id: input.portfolioId }, data: { updatedAt: new Date() } });
@@ -277,6 +294,9 @@ export async function addPositionsBatch(input: { portfolioId: string; entries: B
   }
 }
 
+/** Nested-create payload for a position's assumption (one transaction with the position itself). */
+const assumptionData = (a: { kind: AssumptionKind; value: number | null; overridesReference: boolean } | undefined) => (a ? { assumption: { create: { kind: a.kind, value: a.value, overridesReference: a.overridesReference } } } : {});
+
 class BatchRowFailure extends Error {
   constructor(
     readonly key: string,
@@ -284,4 +304,64 @@ class BatchRowFailure extends Error {
   ) {
     super(message);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Valuation assumptions on an existing position (M9.0.1). The assumption is the
+// analyst's INPUT only (kind + value); the resulting value is recomputed at read
+// time. Setting it never touches market data or Korbly's valuation. Every write
+// is checked against the real instrument and Korbly's own valuation first.
+// ---------------------------------------------------------------------------
+
+async function loadPositionTarget(positionId: string): Promise<{ ok: true; portfolioId: string; archived: boolean; target: AssumptionTarget } | { ok: false; error: string }> {
+  const position = await getPrisma().portfolioPosition.findUnique({
+    where: { id: positionId },
+    include: { portfolio: { select: { archivedAt: true } }, treasuryBill: { select: { maturityDate: true, instrument: { select: { tenorDays: true } } } } },
+  });
+  if (!position) return { ok: false, error: "Position not found." };
+  const base = { ok: true as const, portfolioId: position.portfolioId, archived: position.portfolio.archivedAt !== null };
+  if (position.assetClass === "BOND" && position.fixedIncomeSecurityId) return { ...base, target: { assetClass: "BOND", instrumentId: position.fixedIncomeSecurityId, nominalGhs: Number(position.nominalGhs) } };
+  if (position.assetClass === "EQUITY" && position.securityId) return { ...base, target: { assetClass: "EQUITY", instrumentId: position.securityId, shares: position.shares as number } };
+  if (position.assetClass === "TREASURY_BILL" && position.treasuryBill) return { ...base, target: { assetClass: "TREASURY_BILL", tenorDays: position.treasuryBill.instrument.tenorDays, maturityDate: position.treasuryBill.maturityDate.toISOString().slice(0, 10), faceValueGhs: Number(position.nominalGhs) } };
+  return { ok: false, error: "This position is malformed." };
+}
+
+/** Shows what an assumption would give, without saving anything — the SAME evaluation the save uses. */
+export async function previewPositionAssumption(input: { positionId: string; kind: AssumptionKind; value: number | null }): Promise<ServiceResult<{ evaluation: Extract<AssumptionEvaluation, { ok: true }> }>> {
+  const loaded = await loadPositionTarget(input.positionId);
+  if (!loaded.ok) return fail(loaded.error);
+  const evaluated = evaluateAssumption(await getInstrumentContext(), loaded.target, { kind: input.kind, value: input.value });
+  if (!evaluated.ok) return fail(evaluated.error);
+  return { ok: true, evaluation: evaluated };
+}
+
+/** Creates or replaces (edit) the position's assumption. One assumption per position; the instrument and its size are untouched. */
+export async function setPositionAssumption(input: { positionId: string; kind: AssumptionKind; value: number | null }): Promise<ServiceResult<{ overridesReference: boolean }>> {
+  const loaded = await loadPositionTarget(input.positionId);
+  if (!loaded.ok) return fail(loaded.error);
+  if (loaded.archived) return fail("This portfolio is archived — restore it before changing positions.");
+  const checked = validateAssumption(loaded.target.assetClass, input.kind, input.value);
+  if (!checked.ok) return fail(checked.error);
+  const evaluated = evaluateAssumption(await getInstrumentContext(), loaded.target, checked.assumption);
+  if (!evaluated.ok) return fail(evaluated.error);
+  const prisma = getPrisma();
+  await prisma.$transaction([
+    prisma.positionAssumption.upsert({
+      where: { positionId: input.positionId },
+      create: { positionId: input.positionId, kind: checked.assumption.kind, value: checked.assumption.value, overridesReference: evaluated.overridesReference },
+      update: { kind: checked.assumption.kind, value: checked.assumption.value, overridesReference: evaluated.overridesReference },
+    }),
+    prisma.portfolio.update({ where: { id: loaded.portfolioId }, data: { updatedAt: new Date() } }),
+  ]);
+  return { ok: true, overridesReference: evaluated.overridesReference };
+}
+
+/** Removes the assumption: the position returns to Korbly's own valuation, or to unvalued if Korbly has none. */
+export async function removePositionAssumption(positionId: string): Promise<ServiceResult> {
+  const loaded = await loadPositionTarget(positionId);
+  if (!loaded.ok) return fail(loaded.error);
+  if (loaded.archived) return fail("This portfolio is archived — restore it before changing positions.");
+  const prisma = getPrisma();
+  await prisma.$transaction([prisma.positionAssumption.deleteMany({ where: { positionId } }), prisma.portfolio.update({ where: { id: loaded.portfolioId }, data: { updatedAt: new Date() } })]);
+  return { ok: true };
 }

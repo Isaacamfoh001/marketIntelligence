@@ -13,7 +13,7 @@
 // ---------------------------------------------------------------------------
 
 import { formatIsoDate } from "../fixed-income";
-import { EXPOSURE_ASSET_CLASS_LABEL, type ExposureAssetClass } from "../portfolio";
+import { ANALYTICAL_STARTING_VALUE_LABEL, ASSUMPTION_DISCLOSURE, EXPOSURE_ASSET_CLASS_LABEL, REFERENCE_VALUE_LABEL, type ExposureAssetClass } from "../portfolio";
 import type { ParticipatingPositionResult, ScenarioResult, ScenarioShockRule, UnavailablePositionResult } from "../scenarios";
 import { countWord, ghsCompact, ghsExact, ghsWhole, plural, signedGhsExact, signedGhsWhole, signedPct, signOf } from "./format";
 import { describeAssumptionPlain, LEVEL_LABEL, shortAssumption, technicalLabel } from "./language";
@@ -77,6 +77,14 @@ export interface HeadlineView {
   scenarioCompact: string | null;
   impactWhole: string | null;
   impactPctText: string | null;
+  /**
+   * What the starting value is called: "Reference Value" while every participating holding is Korbly-supported,
+   * "Analytical Starting Value" once any rests on an analyst assumption. Never "market value".
+   */
+  startingLabel: string;
+  analytical: boolean;
+  /** How the starting value splits by valuation basis; null when there is no starting value. */
+  basis: { supportedGhs: number; supportedPct: number; assumptionGhs: number; assumptionPct: number; assumptionCount: number } | null;
 }
 
 export interface AssumptionView {
@@ -111,7 +119,7 @@ export interface PositionDriver {
   sharePct: number | null;
 }
 
-export type ConfidenceFlagCode = "REPRICING_ERROR" | "INCOMPLETE" | "STALE_DEPENDENCE" | "RECENT_INPUTS";
+export type ConfidenceFlagCode = "REPRICING_ERROR" | "INCOMPLETE" | "ASSUMPTION_DEPENDENCE" | "STALE_DEPENDENCE" | "RECENT_INPUTS";
 export interface ConfidenceFlag {
   code: ConfidenceFlagCode;
   label: string;
@@ -126,6 +134,9 @@ export interface ConfidenceView {
   valuedLine: string | null;
   staleLine: string | null;
   staleBasisPct: number | null;
+  /** "24% of the starting value rests on analyst assumptions"; null when none does. */
+  assumptionLine: string | null;
+  assumptionBasisPct: number | null;
   excludedLine: string | null;
   included: number;
   total: number;
@@ -136,6 +147,8 @@ export interface ConfidenceView {
 export type InvestigationKind = "LARGEST_DRIVER" | "RATE_SENSITIVE" | "STALE_INPUT" | "MISSING_VALUATION" | "REPRICING_ERROR" | "SPECIFIC_ASSUMPTION";
 export interface InvestigationItem {
   kind: InvestigationKind;
+  /** True when the holding's starting value is an analyst assumption — the finding then rests on that assumption. */
+  dependsOnAssumption?: boolean;
   title: string;
   positionId: string;
   positionLabel: string;
@@ -162,6 +175,10 @@ export interface PositionView {
   status: "PARTICIPATING" | "UNAVAILABLE";
   outcome: "SHOCKED" | "UNCHANGED" | null;
   recency: "RECENT" | "STALE" | null;
+  /** What kind of starting value the holding used; null when it did not participate. */
+  basis: "REFERENCE" | "INDICATIVE" | "ANALYST_ASSUMPTION" | null;
+  /** "28.00% yield" for an assumption-based holding; null otherwise. */
+  startingAssumption: string | null;
   /** "Government bond yields rise by 2.0 percentage points" — or why nothing applies. */
   assumptionPlain: string;
   startingGhs: number | null;
@@ -201,6 +218,7 @@ export interface StudioView {
 export const METHODOLOGY: MethodologyStatement[] = [
   { text: "This scenario is hypothetical, not a forecast. It shows the arithmetic effect of assumptions you chose." },
   { text: "Starting values come from each holding's Reference Value on the portfolio page (the most recent reliable observed input)." },
+  { text: "A holding Korbly cannot value may start from an explicit analyst assumption. It is labelled as one everywhere, and the shock is applied on top of that start — so the result depends on both." },
   { text: "Bonds are repriced by full cash-flow repricing at the scenario yield, on the same valuation date." },
   { text: "Equities apply the explicit percentage assumption to the reference price." },
   { text: "A security-specific assumption overrides an issuer assumption, which overrides an asset-class assumption." },
@@ -268,12 +286,13 @@ function buildAssumptions(result: OkResult): AssumptionView[] {
 function buildHeadline(result: OkResult): HeadlineView {
   const p = result.portfolio;
   if (p.positionCount === 0) {
-    return { status: "NO_POSITIONS", startingValueGhs: null, scenarioValueGhs: null, impactGhs: null, impactPct: null, direction: "UNCHANGED", sentence: "This portfolio has no positions yet, so there is nothing to test.", startingCompact: null, scenarioCompact: null, impactWhole: null, impactPctText: null };
+    return { status: "NO_POSITIONS", startingValueGhs: null, scenarioValueGhs: null, impactGhs: null, impactPct: null, direction: "UNCHANGED", sentence: "This portfolio has no positions yet, so there is nothing to test.", startingCompact: null, scenarioCompact: null, impactWhole: null, impactPctText: null, startingLabel: REFERENCE_VALUE_LABEL, analytical: false, basis: null };
   }
   if (p.referenceBasisGhs === null || p.scenarioValueGhs === null || p.impactGhs === null) {
-    return { status: "NO_VALUED_POSITIONS", startingValueGhs: null, scenarioValueGhs: null, impactGhs: null, impactPct: null, direction: "UNCHANGED", sentence: "No holding has a sufficiently reliable reference value, so there is no scenario result. Korbly excludes holdings it cannot value rather than estimating them.", startingCompact: null, scenarioCompact: null, impactWhole: null, impactPctText: null };
+    return { status: "NO_VALUED_POSITIONS", startingValueGhs: null, scenarioValueGhs: null, impactGhs: null, impactPct: null, direction: "UNCHANGED", sentence: "No holding has a sufficiently reliable reference value, so there is no scenario result. Korbly excludes holdings it cannot value rather than estimating them.", startingCompact: null, scenarioCompact: null, impactWhole: null, impactPctText: null, startingLabel: REFERENCE_VALUE_LABEL, analytical: false, basis: null };
   }
   const direction = dirOf(p.impactGhs);
+  const analytical = p.byBasis.assumption.count > 0;
   const pctTxt = p.impactPct === null ? null : `${Math.abs(p.impactPct).toFixed(2)}%`;
   const sentence =
     direction === "UNCHANGED"
@@ -291,6 +310,9 @@ function buildHeadline(result: OkResult): HeadlineView {
     scenarioCompact: ghsCompact(p.scenarioValueGhs),
     impactWhole: signedGhsWhole(p.impactGhs),
     impactPctText: signedPct(p.impactPct),
+    startingLabel: analytical ? ANALYTICAL_STARTING_VALUE_LABEL : REFERENCE_VALUE_LABEL.replace("value", "Value"),
+    analytical,
+    basis: { supportedGhs: p.byBasis.supported.startingValueGhs, supportedPct: p.byBasis.supported.startingPct ?? 0, assumptionGhs: p.byBasis.assumption.startingValueGhs, assumptionPct: p.assumptionBasisPct ?? 0, assumptionCount: p.byBasis.assumption.count },
   };
 }
 
@@ -335,6 +357,9 @@ function buildConfidence(result: OkResult): ConfidenceView {
   if (stalePct !== null && stalePct > 0) {
     flags.push({ code: "STALE_DEPENDENCE", label: "Stale dependence", message: stalePct < 50 ? `Most reference inputs are recent, but ${stalePct.toFixed(1)}% of the scenario uses stale reference observations.` : `${stalePct.toFixed(1)}% of the scenario uses stale reference observations.` });
   }
+  const assumptionPct = p.assumptionBasisPct;
+  const assumptionLine = assumptionPct !== null && assumptionPct > 0 ? `${assumptionPct.toFixed(assumptionPct >= 10 ? 0 : 1)}% of the starting value rests on analyst assumptions` : null;
+  if (assumptionLine) flags.push({ code: "ASSUMPTION_DEPENDENCE", label: "Assumption dependence", message: `${assumptionLine}, not on Korbly-supported valuations. Changing a starting assumption changes this result.` });
   if (flags.length === 0 && p.referenceBasisGhs !== null) flags.push({ code: "RECENT_INPUTS", label: "Recent inputs", message: "All reference inputs behind this result are recent." });
   const total = p.positionCount;
   return {
@@ -344,6 +369,8 @@ function buildConfidence(result: OkResult): ConfidenceView {
     valuedLine: p.referenceBasisGhs === null ? null : `${ghsCompact(p.referenceBasisGhs)} valued`,
     staleLine,
     staleBasisPct: stalePct,
+    assumptionLine,
+    assumptionBasisPct: assumptionPct,
     excludedLine: excluded > 0 ? `${excluded} ${plural(excluded, "position")} excluded — no reliable reference value is available` : null,
     included,
     total,
@@ -402,6 +429,7 @@ function buildMeaning(result: OkResult, headline: HeadlineView, drivers: ReturnT
     const s = confidence.staleBasisPct;
     out.push(`${s >= 99.5 ? "All" : `About ${Math.round(s)}% of`} the scenario basis relies on stale market observations; an assumption does not make those observations current.`);
   }
+  if (confidence.assumptionBasisPct !== null && confidence.assumptionBasisPct > 0) out.push(`${confidence.assumptionLine}. The result depends on both the starting assumption and the scenario assumption: change either and it changes.`);
   if (confidence.excluded > 0) out.push(`${countWord(confidence.excluded)} ${plural(confidence.excluded, "holding is", "holdings are")} excluded because Korbly does not have a sufficiently reliable reference value.`);
   if (confidence.repricingErrors > 0) out.push(`${countWord(confidence.repricingErrors)} valued ${plural(confidence.repricingErrors, "holding", "holdings")} could not be repriced under these assumptions.`);
   return out;
@@ -434,8 +462,9 @@ function buildInvestigations(result: OkResult, headline: HeadlineView, drivers: 
       positionId: pos.positionId,
       positionLabel: pos.label,
       headline: `Scenario impact: ${signedGhsWhole(pos.impactGhs)}${top.sharePct !== null ? ` · ${top.sharePct.toFixed(0)}% of the ${noun}` : ""}`,
-      why: `It contributes more to the scenario ${noun} than any other holding.${staleNote(pos)}`,
+      why: `It contributes more to the scenario ${noun} than any other holding.${pos.startingAssumption ? ` Its starting valuation uses an analyst-supplied ${pos.startingAssumption.summary}.` : ""}${staleNote(pos)}`,
       link: linkFor(pos.positionId, "analysis"),
+      dependsOnAssumption: pos.basis === "ANALYST_ASSUMPTION",
     });
     used.add(pos.positionId);
   }
@@ -575,6 +604,8 @@ function buildPosition(result: OkResult, pos: OkResult["positions"][number], lin
       status: "UNAVAILABLE",
       outcome: null,
       recency: null,
+      basis: null,
+      startingAssumption: null,
       startingGhs: null,
       scenarioGhs: null,
       impactGhs: null,
@@ -594,7 +625,7 @@ function buildPosition(result: OkResult, pos: OkResult["positions"][number], lin
     groups.push({
       title: "Yield and price",
       rows: [
-        { label: "Reference yield", value: pct4(d.referenceYieldPct), note: "The last reliable observed yield." },
+        { label: pos.basis === "ANALYST_ASSUMPTION" ? "Starting yield (analyst assumption)" : "Reference yield", value: pct4(d.referenceYieldPct), note: pos.basis === "ANALYST_ASSUMPTION" ? "The yield you assumed (or the yield implied by the price you assumed) — not an observed yield." : "The last reliable observed yield." },
         { label: "Applied assumption", value: d.appliedShockBps === 0 && !pos.resolution.winner ? "None" : `${signOf(d.appliedShockBps)}${Math.abs(d.appliedShockBps)} bps` },
         { label: "Scenario yield", value: pct4(d.scenarioYieldPct) },
         { label: "Reference dirty price", value: num6(d.referenceDirtyPrice), note: "Dirty price includes accrued interest; per 100 of face value. Simple view: the reference bond price." },
@@ -608,7 +639,7 @@ function buildPosition(result: OkResult, pos: OkResult["positions"][number], lin
     groups.push({
       title: "Value",
       rows: [
-        { label: "Reference value", value: ghsExact(pos.referenceValueGhs), note: STARTING_VALUE_HELP },
+        { label: pos.basis === "ANALYST_ASSUMPTION" ? "Starting value (analyst assumption)" : "Reference value", value: ghsExact(pos.referenceValueGhs), note: STARTING_VALUE_HELP },
         { label: "Scenario value", value: ghsExact(pos.scenarioValueGhs), note: "Exact cash-flow repricing at the scenario yield." },
         { label: "Exact impact", value: signedGhsExact(pos.impactGhs) },
       ],
@@ -630,7 +661,7 @@ function buildPosition(result: OkResult, pos: OkResult["positions"][number], lin
       rows: [
         { label: "Face (maturity) value", value: ghsExact(d.faceValueGhs), note: "What the government pays at maturity." },
         { label: "Days to maturity", value: String(d.daysToMaturity) },
-        { label: "Reference rate", value: pct4(d.referenceRatePct), note: "Interpolated from the latest Bank of Ghana auction curve — an interpolated estimate from auctions of new bills, not a secondary-market quote for this bill, so treat it as indicative." },
+        { label: pos.basis === "ANALYST_ASSUMPTION" ? "Starting rate (analyst assumption)" : "Reference rate", value: pct4(d.referenceRatePct), note: pos.basis === "ANALYST_ASSUMPTION" ? "The rate you assumed (or the rate implied by the price you assumed) — not read from the Bank of Ghana curve." : "Interpolated from the latest Bank of Ghana auction curve — an interpolated estimate from auctions of new bills, not a secondary-market quote for this bill, so treat it as indicative." },
         { label: "Applied assumption", value: d.appliedShockBps === 0 && !pos.resolution.winner ? "None" : `${signOf(d.appliedShockBps)}${Math.abs(d.appliedShockBps)} bps` },
         { label: "Scenario rate", value: pct4(d.scenarioRatePct) },
         { label: "Reference price (per 100 of face)", value: num6(d.referencePricePer100) },
@@ -642,7 +673,7 @@ function buildPosition(result: OkResult, pos: OkResult["positions"][number], lin
     groups.push({
       title: "Value",
       rows: [
-        { label: "Reference value", value: ghsExact(pos.referenceValueGhs), note: STARTING_VALUE_HELP },
+        { label: pos.basis === "ANALYST_ASSUMPTION" ? "Starting value (analyst assumption)" : "Reference value", value: ghsExact(pos.referenceValueGhs), note: STARTING_VALUE_HELP },
         { label: "Scenario value", value: ghsExact(pos.scenarioValueGhs), note: "Exact Treasury-bill repricing at the scenario rate." },
         { label: "Exact impact", value: signedGhsExact(pos.impactGhs) },
       ],
@@ -660,24 +691,39 @@ function buildPosition(result: OkResult, pos: OkResult["positions"][number], lin
       title: "Price and value",
       rows: [
         { label: "Shares", value: intFmt(d.shares) },
-        { label: "Reference price", value: `GHS ${num4(d.referencePriceGhs)}` },
+        { label: pos.basis === "ANALYST_ASSUMPTION" ? "Starting price (analyst assumption)" : "Reference price", value: `GHS ${num4(d.referencePriceGhs)}` },
         { label: "Applied assumption", value: pos.resolution.winner ? `${signOf(d.appliedShockPct)}${Math.abs(d.appliedShockPct)}%` : "None" },
         { label: "Scenario price", value: `GHS ${num4(d.scenarioPriceGhs)}` },
-        { label: "Reference value", value: ghsExact(pos.referenceValueGhs), note: STARTING_VALUE_HELP },
+        { label: pos.basis === "ANALYST_ASSUMPTION" ? "Starting value (analyst assumption)" : "Reference value", value: ghsExact(pos.referenceValueGhs), note: STARTING_VALUE_HELP },
         { label: "Scenario value", value: ghsExact(pos.scenarioValueGhs) },
         { label: "Exact impact", value: signedGhsExact(pos.impactGhs) },
       ],
     });
   }
   groups.push({ title: "Which assumption applied", rows: ruleLines(pos) });
-  groups.push({ title: "Observation and quality", rows: [{ label: "Observation date", value: formatIsoDate(pos.inputDate) }, { label: "Age at valuation date", value: age(pos.inputAgeDays) }, { label: "Recent or stale", value: pos.recency === "RECENT" ? "Recent" : "Stale", note: pos.recency === "STALE" ? STALE_SENTENCE : undefined }, ...pos.warnings.map((w) => ({ label: "Note", value: w }))] });
+  if (pos.startingAssumption && pos.basis === "ANALYST_ASSUMPTION") {
+    const a = result.positions.find((x) => x.positionId === pos.positionId) as Participating;
+    groups.push({
+      title: "Valuation basis",
+      rows: [
+        { label: "Basis", value: "Analyst assumption", note: ASSUMPTION_DISCLOSURE },
+        { label: "Assumption", value: a.startingAssumption!.summary },
+        { label: "Provenance", value: a.startingAssumption!.provenance, note: "No analyst identity is recorded yet." },
+        { label: "Method", value: a.startingAssumption!.method },
+        ...a.startingAssumption!.calculation.map((c, i) => ({ label: `Step ${i + 1}`, value: c })),
+        ...(a.korblyBasis ? [{ label: "Korbly's own value", value: `${ghsExact(a.korblyBasis.valueGhs)} (${a.korblyBasis.basis === "REFERENCE" ? "Reference" : "Indicative"}) — not used; the assumption overrides it for this analysis.` }] : []),
+      ],
+    });
+  } else groups.push({ title: "Observation and quality", rows: [{ label: "Observation date", value: formatIsoDate(pos.inputDate) }, { label: "Age at valuation date", value: age(pos.inputAgeDays) }, { label: "Recent or stale", value: pos.recency === "RECENT" ? "Recent" : "Stale", note: pos.recency === "STALE" ? STALE_SENTENCE : undefined }, ...pos.warnings.map((w) => ({ label: "Note", value: w }))] });
   const prov = provenanceGroup(provenance);
   if (prov) groups.push(prov);
   return {
     ...base,
     status: "PARTICIPATING",
     outcome: pos.outcome,
-    recency: pos.recency,
+    recency: pos.recency === "NOT_APPLICABLE" ? null : pos.recency,
+    basis: pos.basis,
+    startingAssumption: pos.startingAssumption ? pos.startingAssumption.summary : null,
     startingGhs: pos.referenceValueGhs,
     scenarioGhs: pos.scenarioValueGhs,
     impactGhs: pos.impactGhs,

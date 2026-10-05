@@ -293,6 +293,8 @@ export interface Dv01Row {
   /** Share of total bond DV01, 0–100. */
   sharePct: number;
   recency: ValuedPosition["recency"];
+  /** What the holding's starting yield rests on. An ANALYST_ASSUMPTION row's sensitivity is only as good as that assumed yield. */
+  basis: ValuedPosition["basis"];
 }
 
 export interface BillDv01Row {
@@ -307,6 +309,7 @@ export interface BillDv01Row {
   dv01Ghs: number;
   sharePct: number;
   recency: ValuedPosition["recency"];
+  basis: ValuedPosition["basis"];
 }
 
 /** Sensitivity to the SHORT-TERM (Treasury-bill) rate — a separate measure from the bond-yield DV01, never silently added to it. */
@@ -370,6 +373,12 @@ export interface PortfolioExposures {
   rates: RateSensitivity;
   upcoming: UpcomingMaturity[];
   callouts: string[];
+  /**
+   * How much of the value behind every value-based figure above rests on analyst assumptions (M9.0.1). Allocation, issuer
+   * concentration and rate sensitivity use the ANALYTICAL starting value when this is non-zero; maturity (contractual) does not
+   * depend on valuation at all. Panels use it to name the denominator correctly and to disclose assumption dependence.
+   */
+  valueBasis: { assumptionCount: number; assumptionValueGhs: number; assumptionPct: number | null };
 }
 
 /** How many upcoming maturities the summary list carries. */
@@ -413,9 +422,17 @@ export function computeExposures(positions: ExposurePosition[], summary: { refer
     rates,
     upcoming,
     callouts: [],
+    valueBasis: valueBasisOf(valued),
   };
   exposures.callouts = buildCallouts(exposures);
   return exposures;
+}
+
+function valueBasisOf(valued: (ExposurePosition & { valuation: ValuedPosition })[]): PortfolioExposures["valueBasis"] {
+  const assumed = valued.filter((p) => p.valuation.basis === "ANALYST_ASSUMPTION");
+  const cents = (ps: typeof valued) => ps.reduce((s, p) => s + toCents(p.valuation.referenceValueGhs), 0);
+  const total = cents(valued);
+  return { assumptionCount: assumed.length, assumptionValueGhs: fromCents(cents(assumed)), assumptionPct: total > 0 ? (cents(assumed) / total) * 100 : null };
 }
 
 function computeAllocation(positions: ExposurePosition[], valued: (ExposurePosition & { valuation: ValuedPosition })[], denomCents: number | null): AssetAllocation {
@@ -641,6 +658,7 @@ function computeRates(bonds: BondPosition[], valuationDate: Date): RateSensitivi
       modifiedDurationYears: d.modifiedDurationYears,
       dv01Ghs: fromCents(toCents((d.dv01 * p.bond.nominalGhs) / p.bond.terms.faceValue)),
       recency: v.recency,
+      basis: v.basis,
     });
     basisCents += toCents(v.referenceValueGhs);
     durationNumerator += v.referenceValueGhs * d.modifiedDurationYears;
@@ -694,6 +712,7 @@ function computeBillRates(bills: BillPosition[]): BillRateSensitivity {
       modifiedDurationYears: v.detail.modifiedDurationYears,
       dv01Ghs: fromCents(toCents(v.detail.dv01Ghs)),
       recency: v.recency,
+      basis: v.basis,
     });
     basisCents += toCents(v.referenceValueGhs);
     durationNumerator += v.referenceValueGhs * v.detail.modifiedDurationYears;
@@ -750,20 +769,24 @@ const fmtPct = (n: number) => `${n.toFixed(n >= 10 || Number.isInteger(n) ? 0 : 
 
 export function buildCallouts(e: PortfolioExposures): string[] {
   const out: string[] = [];
+  // "valued reference value" while every valued position is Korbly-supported; "valued Analytical Starting Value" once any rests on an assumption.
+  const denom = e.valueBasis.assumptionCount > 0 ? "valued Analytical Starting Value" : "valued reference value";
   const top = e.allocation.rows.length > 0 ? [...e.allocation.rows].sort((a, b) => b.pct - a.pct)[0] : null;
-  if (top) out.push(`${top.label} are the largest asset class: ${fmtPct(top.pct)} of valued reference value.`);
+  if (top) out.push(`${top.label} are the largest asset class: ${fmtPct(top.pct)} of ${denom}.`);
 
   const bills = e.allocation.rows.find((r) => r.assetClass === "TREASURY_BILL");
-  if (bills && top && top.assetClass !== "TREASURY_BILL") out.push(`Treasury bills are ${fmtPct(bills.pct)} of valued reference value.`);
+  if (bills && top && top.assetClass !== "TREASURY_BILL") out.push(`Treasury bills are ${fmtPct(bills.pct)} of ${denom}.`);
 
   const issuer = e.issuers.rows[0];
-  if (issuer) out.push(`${issuer.issuer.name} is the largest valued issuer exposure: ${fmtPct(issuer.pct)} of valued reference value.`);
+  if (issuer) out.push(`${issuer.issuer.name} is the largest valued issuer exposure: ${fmtPct(issuer.pct)} of ${denom}.`);
 
   const longBucket = e.maturity.buckets.find((b) => b.key === "GT_5Y");
   if (longBucket && longBucket.nominalPct !== null && longBucket.nominalPct > 0 && e.maturity.eligibleNominalGhs > 0) out.push(`${fmtPct(longBucket.nominalPct)} of contractual bond nominal matures after five years.`);
 
   const c = e.rates.contributors[0];
   if (c && e.rates.contributors.length > 1) out.push(`${c.label} contributes ${fmtPct(c.sharePct)} of bond DV01.`);
+
+  if (e.valueBasis.assumptionCount > 0 && e.valueBasis.assumptionPct !== null) out.push(`${fmtPct(e.valueBasis.assumptionPct)} of the ${denom.replace("valued ", "")} rests on analyst assumptions.`);
 
   if (e.unvaluedCount > 0) out.push(`${e.unvaluedCount} ${e.unvaluedCount === 1 ? "position is" : "positions are"} excluded from value-based analytics because ${e.unvaluedCount === 1 ? "it" : "they"} cannot currently be valued.`);
   return out;

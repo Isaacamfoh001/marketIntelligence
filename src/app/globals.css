@@ -40,6 +40,10 @@ body {
   --c-eq: #7c3aed;
   --c-gain: #0f766e;
   --c-loss: #be123c;
+  /* Valuation basis (M9.0.1): Reference / Indicative / Analyst assumption. Always paired with a word, a mark and (assumption) a hatch. */
+  --basis-ref: #2563eb;
+  --basis-ind: #38bdf8;
+  --basis-asm: #6366f1;
 }
 .dark {
   --c-bill: #2dd4bf;
@@ -48,6 +52,14 @@ body {
   --c-eq: #a78bfa;
   --c-gain: #5eead4;
   --c-loss: #fb7185;
+  --basis-ref: #60a5fa;
+  --basis-ind: #7dd3fc;
+  --basis-asm: #a5b4fc;
+}
+/* An analyst assumption is hatched so it reads as "assumed" without relying on colour. */
+.basis-hatch {
+  background-image: repeating-linear-gradient(135deg, rgba(255, 255, 255, 0.55) 0 2px, transparent 2px 5px) !important;
+  background-blend-mode: normal;
 }
 
 @keyframes korbly-grow {

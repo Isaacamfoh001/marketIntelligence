@@ -14,7 +14,7 @@
 //   Money      — GHS, exact to the pesewa (integer cents internally).
 // ---------------------------------------------------------------------------
 
-import type { ExposureAssetClass, InputRecency, IssuerRef, UnvaluedCode } from "../portfolio";
+import type { AppliedAssumption, ExposureAssetClass, IssuerRef, KorblyBasisSummary, UnvaluedCode, ValuationBasis, ValuationRecency } from "../portfolio";
 
 export type ShockType = "YIELD_BPS" | "PRICE_PCT";
 
@@ -154,7 +154,16 @@ export interface ParticipatingPositionResult extends ScenarioPositionCommon {
   status: "PARTICIPATING";
   /** SHOCKED = a rule applied; UNCHANGED = no rule reached it, so scenario value = reference value (not "unavailable"). */
   outcome: "SHOCKED" | "UNCHANGED";
-  recency: InputRecency;
+  /**
+   * What kind of STARTING value this position was carried at (M9.0.1). A scenario shock moves a holding from its
+   * starting value; if that start is an analyst assumption the whole result for this position depends on it.
+   */
+  basis: ValuationBasis;
+  /** The starting assumption behind an ANALYST_ASSUMPTION position; null otherwise. */
+  startingAssumption: AppliedAssumption | null;
+  /** When an assumption overrides a Korbly-supported start, what Korbly itself supports. */
+  korblyBasis: KorblyBasisSummary | null;
+  recency: ValuationRecency;
   inputDate: string;
   inputAgeDays: number;
   referenceValueGhs: number;
@@ -198,6 +207,16 @@ export interface StaleBasis {
   impactGhs: number;
 }
 
+/** One valuation basis within the starting value — exact in pesewas; the three bases add to the totals. */
+export interface BasisBasisRow {
+  count: number;
+  startingValueGhs: number;
+  scenarioValueGhs: number;
+  impactGhs: number;
+  /** Share of the starting value (0–100); null when there is no starting value. */
+  startingPct: number | null;
+}
+
 export interface ScenarioPortfolioResult {
   valuationDate: string;
   positionCount: number;
@@ -219,6 +238,18 @@ export interface ScenarioPortfolioResult {
   scenarioValueGhs: number | null;
   impactGhs: number | null;
   impactPct: number | null;
+  /**
+   * The starting value split by VALUATION BASIS (reference / indicative / analyst assumption). The scenario shock is applied
+   * on top of this start, so a scenario result must be read together with how much of the start was assumed.
+   */
+  byBasis: { reference: BasisBasisRow; indicative: BasisBasisRow; assumption: BasisBasisRow; supported: BasisBasisRow };
+  /** Share of the starting value that rests on analyst assumptions (0–100); null when no basis. */
+  assumptionBasisPct: number | null;
+  /**
+   * Stable fingerprint of every starting assumption in force (position, kind, value, override). Two results may be compared
+   * as "only the shocks differ" only if their fingerprints match.
+   */
+  startingBasisFingerprint: string;
   recentBasis: StaleBasis;
   staleBasis: StaleBasis;
   /** Share of the reference basis resting on stale inputs (0–100); null when no basis. */

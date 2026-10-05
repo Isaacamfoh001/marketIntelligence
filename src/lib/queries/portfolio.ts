@@ -10,7 +10,7 @@
 import { getPrisma } from "../prisma";
 import { getFixedIncomeUniverse, type FixedIncomeSecurityRow } from "./fixed-income";
 import { securityShortLabel, toValuationDate } from "../fixed-income";
-import { billLabel, GOVERNMENT_OF_GHANA, selectLatestCompleteCurve, type AuctionRateRow } from "../treasury-bills";
+import { billDaysToMaturity, billLabel, GOVERNMENT_OF_GHANA, selectLatestCompleteCurve, type AuctionCurve, type AuctionRateRow } from "../treasury-bills";
 import {
   checkBillAddable,
   checkBondAddable,
@@ -24,7 +24,15 @@ import {
   computeExposures,
   resolveIssuerRef,
   valueBondPosition,
+  valueBondWithAssumption,
   valueEquityPosition,
+  valueBillWithAssumption,
+  valueEquityWithAssumption,
+  resolveValuation,
+  validateAssumption,
+  assumptionAvailability,
+  type ValuedPosition,
+  type StoredAssumption,
   type Addable,
   type BondValuationInput,
   type BondValuationSource,
@@ -99,6 +107,8 @@ export type HoldableInstrument = BondInstrument | EquityInstrument | BillInstrum
 
 export interface InstrumentContext {
   valuationDate: Date;
+  /** The latest complete BoG auction curve at the valuation date — what every Treasury bill (existing or not yet recorded) is valued from. */
+  curve: AuctionCurve | null;
   bonds: BondInstrument[];
   equities: EquityInstrument[];
   bills: BillInstrument[];
@@ -244,6 +254,7 @@ export async function getInstrumentContext(valuationDate: Date = toValuationDate
 
   return {
     valuationDate,
+    curve,
     bonds,
     equities,
     bills,
@@ -254,6 +265,55 @@ export async function getInstrumentContext(valuationDate: Date = toValuationDate
 }
 
 // ---------------------------------------------------------------------------
+// Evaluating an assumption (M9.0.1) — what would this holding be worth, and on
+// what basis, if the analyst assumed X? Shared by the single-position editor,
+// the batch builder and the server-side write path so a preview can never
+// disagree with what is saved. Nothing is stored here.
+// ---------------------------------------------------------------------------
+
+export type AssumptionTarget =
+  | { assetClass: "BOND"; instrumentId: string; nominalGhs: number }
+  | { assetClass: "EQUITY"; instrumentId: string; shares: number }
+  | { assetClass: "TREASURY_BILL"; tenorDays: number; maturityDate: string; faceValueGhs: number };
+
+export type AssumptionEvaluation =
+  | { ok: true; valuation: ValuedPosition; korbly: PositionValuation; overridesReference: boolean }
+  | { ok: false; error: string };
+
+export function evaluateAssumption(ctx: InstrumentContext, target: AssumptionTarget, draft: { kind: StoredAssumption["kind"]; value: number | null }): AssumptionEvaluation {
+  const checked = validateAssumption(target.assetClass, draft.kind, draft.value);
+  if (!checked.ok) return { ok: false, error: checked.error };
+
+  let korbly: PositionValuation;
+  let assumed: (a: StoredAssumption) => PositionValuation;
+  if (target.assetClass === "BOND") {
+    const bond = ctx.bondById.get(target.instrumentId);
+    if (!bond) return { ok: false, error: "Bond not found." };
+    korbly = valueBondPosition(target.nominalGhs, bond.terms, bond.input, ctx.valuationDate);
+    assumed = (a) => valueBondWithAssumption(target.nominalGhs, bond.terms, a, ctx.valuationDate);
+  } else if (target.assetClass === "EQUITY") {
+    const equity = ctx.equityById.get(target.instrumentId);
+    if (!equity) return { ok: false, error: "Security not found." };
+    korbly = valueEquityPosition(target.shares, equity.input);
+    assumed = (a) => valueEquityWithAssumption(target.shares, a, ctx.valuationDate);
+  } else {
+    const maturity = new Date(`${target.maturityDate}T00:00:00.000Z`);
+    const input = resolveBillValuationInput({ currency: "GHS", tenorDays: target.tenorDays, issueDate: maturity, maturityDate: maturity, curve: ctx.curve }, ctx.valuationDate);
+    korbly = valueBillPosition(target.faceValueGhs, input, ctx.valuationDate);
+    assumed = (a) => valueBillWithAssumption(target.faceValueGhs, billDaysToMaturity(maturity, ctx.valuationDate), a, ctx.valuationDate);
+  }
+
+  if (korbly.status === "UNVALUED") {
+    const availability = assumptionAvailability(target.assetClass, korbly.code);
+    if (!availability.assumable) return { ok: false, error: `An assumption cannot be used here. ${availability.reason}` };
+  }
+  const stored: StoredAssumption = { kind: draft.kind, value: draft.value, overridesReference: korbly.status === "VALUED" };
+  const valuation = assumed(stored);
+  if (valuation.status !== "VALUED") return { ok: false, error: valuation.assumptionProblem ? `That assumption cannot be applied: ${valuation.assumptionProblem.reason}` : valuation.reason };
+  return { ok: true, valuation: { ...valuation, korblyBasis: korbly.status === "VALUED" ? { basis: korbly.basis as "REFERENCE" | "INDICATIVE", valueGhs: korbly.referenceValueGhs, inputDate: korbly.inputDate, recency: korbly.recency } : null }, korbly, overridesReference: stored.overridesReference };
+}
+
+// ---------------------------------------------------------------------------
 // Portfolios
 // ---------------------------------------------------------------------------
 
@@ -261,7 +321,12 @@ export interface PositionRow {
   positionId: string;
   holding: PositionHolding;
   instrument: HoldableInstrument;
+  /** The value the position is CARRIED at in every analysis: Korbly-supported, or the analyst's assumption (see `valuation.basis`). */
   valuation: PositionValuation;
+  /** What Korbly alone supports — untouched by any assumption. */
+  korblyValuation: PositionValuation;
+  /** The analyst assumption stored for this position, if any (whether or not it is currently in force). */
+  assumption: StoredAssumption | null;
 }
 
 export interface PortfolioDetail {
@@ -285,39 +350,54 @@ interface StoredPosition {
   securityId: string | null;
   shares: number | null;
   createdAt: Date;
+  assumption?: { kind: StoredAssumption["kind"]; value: unknown; overridesReference: boolean } | null;
 }
 
+const toStoredAssumption = (a: StoredPosition["assumption"]): StoredAssumption | null => (a ? { kind: a.kind, value: a.value === null || a.value === undefined ? null : Number(a.value), overridesReference: a.overridesReference } : null);
+
 function valuePosition(p: StoredPosition, ctx: InstrumentContext): PositionRow | null {
+  const stored = toStoredAssumption(p.assumption);
+  const day = (iso: string) => new Date(`${iso}T00:00:00.000Z`);
   if (p.assetClass === "BOND" && p.fixedIncomeSecurityId) {
     const bond = ctx.bondById.get(p.fixedIncomeSecurityId);
     if (!bond) return null;
     const nominalGhs = Number(p.nominalGhs);
+    const korbly = valueBondPosition(nominalGhs, bond.terms, bond.input, ctx.valuationDate);
     return {
       positionId: p.id,
       holding: { assetClass: "BOND", positionId: p.id, fixedIncomeSecurityId: bond.id, nominalGhs },
       instrument: bond,
-      valuation: valueBondPosition(nominalGhs, bond.terms, bond.input, ctx.valuationDate),
+      valuation: resolveValuation(korbly, stored, () => valueBondWithAssumption(nominalGhs, bond.terms, stored!, ctx.valuationDate)),
+      korblyValuation: korbly,
+      assumption: stored,
     };
   }
   if (p.assetClass === "TREASURY_BILL" && p.treasuryBillId) {
     const bill = ctx.billById.get(p.treasuryBillId);
     if (!bill) return null;
     const faceValueGhs = Number(p.nominalGhs);
+    const korbly = valueBillPosition(faceValueGhs, bill.input, ctx.valuationDate);
     return {
       positionId: p.id,
       holding: { assetClass: "TREASURY_BILL", positionId: p.id, treasuryBillId: bill.id, faceValueGhs },
       instrument: bill,
-      valuation: valueBillPosition(faceValueGhs, bill.input, ctx.valuationDate),
+      valuation: resolveValuation(korbly, stored, () => valueBillWithAssumption(faceValueGhs, billDaysToMaturity(day(bill.maturityDate), ctx.valuationDate), stored!, ctx.valuationDate)),
+      korblyValuation: korbly,
+      assumption: stored,
     };
   }
   if (p.assetClass === "EQUITY" && p.securityId) {
     const equity = ctx.equityById.get(p.securityId);
     if (!equity) return null;
+    const shares = p.shares as number;
+    const korbly = valueEquityPosition(shares, equity.input);
     return {
       positionId: p.id,
-      holding: { assetClass: "EQUITY", positionId: p.id, securityId: equity.id, shares: p.shares as number },
+      holding: { assetClass: "EQUITY", positionId: p.id, securityId: equity.id, shares },
       instrument: equity,
-      valuation: valueEquityPosition(p.shares as number, equity.input),
+      valuation: resolveValuation(korbly, stored, () => valueEquityWithAssumption(shares, stored!, ctx.valuationDate)),
+      korblyValuation: korbly,
+      assumption: stored,
     };
   }
   return null;
@@ -349,7 +429,7 @@ function toDetail(
 
 const positionSortKey = (p: PositionRow) => `${p.holding.assetClass === "TREASURY_BILL" ? "0|" + (p.instrument as BillInstrument).maturityDate : p.holding.assetClass === "BOND" ? "1" : "2"}|${p.instrument.kind === "BOND" || p.instrument.kind === "TREASURY_BILL" ? p.instrument.label : p.instrument.ticker}`;
 
-const POSITION_SELECT = { id: true, assetClass: true, fixedIncomeSecurityId: true, treasuryBillId: true, nominalGhs: true, securityId: true, shares: true, createdAt: true } as const;
+const POSITION_SELECT = { id: true, assetClass: true, fixedIncomeSecurityId: true, treasuryBillId: true, nominalGhs: true, securityId: true, shares: true, createdAt: true, assumption: { select: { kind: true, value: true, overridesReference: true } } } as const;
 
 /** Active (not archived) or archived portfolios, newest-updated first, each with its valuation summary. */
 export async function getPortfolios(opts: { archived: boolean }, ctx?: InstrumentContext): Promise<PortfolioDetail[]> {
@@ -427,13 +507,17 @@ export interface InputProvenance {
 
 const fmtNum = (v: unknown, dp = 2) => (v === null || v === undefined ? "—" : Number(v).toLocaleString("en-GB", { minimumFractionDigits: dp, maximumFractionDigits: dp }));
 
-/** Source, ingestion run and the raw row facts behind the exact observation a position's value rests on — null when the position is unvalued. */
+/**
+ * Source, ingestion run and the raw row facts behind the exact observation KORBLY's own valuation rests on — null when Korbly has
+ * no supported valuation. It deliberately reads `korblyValuation`: an analyst assumption has no market source, and must never be
+ * given one (or be shown beside an unrelated observation that happens to share the valuation date).
+ */
 export async function getPositionProvenance(row: PositionRow): Promise<InputProvenance | null> {
-  if (row.valuation.status !== "VALUED") return null;
+  if (row.korblyValuation.status !== "VALUED") return null;
   const prisma = getPrisma();
-  if (row.valuation.detail.assetClass === "BOND" && row.instrument.kind === "BOND") {
+  if (row.korblyValuation.detail.assetClass === "BOND" && row.instrument.kind === "BOND") {
     const obs = await prisma.fixedIncomeObservation.findUnique({
-      where: { securityId_observationDate: { securityId: row.instrument.id, observationDate: new Date(`${row.valuation.detail.observationDate}T00:00:00.000Z`) } },
+      where: { securityId_observationDate: { securityId: row.instrument.id, observationDate: new Date(`${row.korblyValuation.detail.observationDate}T00:00:00.000Z`) } },
       include: { source: { select: { name: true } } },
     });
     if (!obs) return null;
@@ -451,8 +535,8 @@ export async function getPositionProvenance(row: PositionRow): Promise<InputProv
       ],
     };
   }
-  if (row.valuation.detail.assetClass === "TREASURY_BILL" && row.instrument.kind === "TREASURY_BILL") {
-    const d = row.valuation.detail;
+  if (row.korblyValuation.detail.assetClass === "TREASURY_BILL" && row.instrument.kind === "TREASURY_BILL") {
+    const d = row.korblyValuation.detail;
     const auctionDate = new Date(`${d.rateObservationDate}T00:00:00.000Z`);
     const rates = await prisma.treasuryRate.findMany({
       where: { observationDate: auctionDate, instrument: { tenorDays: { in: d.nodes.map((n) => n.tenorDays) } } },
@@ -473,9 +557,9 @@ export async function getPositionProvenance(row: PositionRow): Promise<InputProv
       ],
     };
   }
-  if (row.valuation.detail.assetClass === "EQUITY" && row.instrument.kind === "EQUITY") {
+  if (row.korblyValuation.detail.assetClass === "EQUITY" && row.instrument.kind === "EQUITY") {
     const price = await prisma.securityPrice.findUnique({
-      where: { securityId_tradingDate: { securityId: row.instrument.id, tradingDate: new Date(`${row.valuation.detail.priceDate}T00:00:00.000Z`) } },
+      where: { securityId_tradingDate: { securityId: row.instrument.id, tradingDate: new Date(`${row.korblyValuation.detail.priceDate}T00:00:00.000Z`) } },
       include: { source: { select: { name: true } } },
     });
     if (!price) return null;

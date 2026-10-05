@@ -54,9 +54,9 @@ export function PositionsTable({ portfolioId, rows, selectedId }: { portfolioId:
                 </td>
                 <td className={NUM}>{sizeText(r)}</td>
                 <td className={TD}>
-                  {v.status === "VALUED" && v.detail.assetClass === "BOND" && <span>Observed yield {formatPct(v.detail.observedYtmPct)}</span>}
-                  {v.status === "VALUED" && v.detail.assetClass === "EQUITY" && <span>Last traded GHS {formatPrice(v.detail.priceGhs)}</span>}
-                  {v.status === "VALUED" && v.detail.assetClass === "TREASURY_BILL" && <span title={v.detail.methodDescription}>Auction-based rate {formatPct(v.detail.referenceRatePct)}</span>}
+                  {v.status === "VALUED" && v.detail.assetClass === "BOND" && <span>{v.basis === "ANALYST_ASSUMPTION" ? "Assumed" : "Observed"} yield {formatPct(v.detail.observedYtmPct)}</span>}
+                  {v.status === "VALUED" && v.detail.assetClass === "EQUITY" && <span>{v.basis === "ANALYST_ASSUMPTION" ? "Assumed price" : "Last traded"} GHS {formatPrice(v.detail.priceGhs)}</span>}
+                  {v.status === "VALUED" && v.detail.assetClass === "TREASURY_BILL" && <span title={v.detail.methodDescription}>{v.basis === "ANALYST_ASSUMPTION" ? "Assumed rate" : "Auction-based rate"} {formatPct(v.detail.referenceRatePct)}</span>}
                   {v.status === "UNVALUED" && <span className="text-zinc-400 dark:text-zinc-500">No usable input</span>}
                 </td>
                 <td className={TD}>

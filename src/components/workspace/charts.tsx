@@ -122,7 +122,7 @@ export function MaturityColumns({ profile, formatGhs }: { profile: MaturityProfi
 export function ContributionChart({ rows, ariaLabel, other }: { rows: ContributionBar[]; ariaLabel: string; other?: { count: number; impactText: string; impactGhs: number } | null }) {
   const all = [...rows.map((r) => r.impactGhs), other?.impactGhs ?? 0];
   const max = Math.max(...all.map(Math.abs), 0);
-  const line = (key: string, label: string, sub: string, value: number, text: string, share: number | null, href?: string) => {
+  const line = (key: string, label: string, sub: string, value: number, text: string, share: number | null, href?: string, assumed?: string | null) => {
     const w = max === 0 ? 0 : Math.max(1.5, (Math.abs(value) / max) * 50);
     return (
       <li key={key} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 sm:grid-cols-[10rem_minmax(0,1fr)_7.5rem]">
@@ -135,6 +135,7 @@ export function ContributionChart({ rows, ariaLabel, other }: { rows: Contributi
             <p className="truncate text-sm font-medium text-zinc-900 dark:text-zinc-100">{label}</p>
           )}
           <p className="truncate text-[11px] text-zinc-500 dark:text-zinc-400">{sub}</p>
+          {assumed && <p className="truncate text-[11px] font-medium text-indigo-800 dark:text-indigo-300" title="This contribution starts from an analyst assumption, not a Korbly valuation."><span aria-hidden>◇ </span>Assumed start: {assumed}</p>}
         </div>
         <p className="row-start-1 text-right text-sm font-semibold tabular-nums sm:col-start-3 sm:row-start-1" style={{ color: value === 0 ? undefined : value < 0 ? "var(--c-loss)" : "var(--c-gain)" }}>
           {text}
@@ -149,7 +150,7 @@ export function ContributionChart({ rows, ariaLabel, other }: { rows: Contributi
   };
   return (
     <ul className="space-y-3.5" aria-label={ariaLabel}>
-      {rows.map((r) => line(r.id, r.label, r.sublabel, r.impactGhs, r.impactText, r.sharePct, r.positionId ? `?view=holdings&position=${r.positionId}#inspect` : undefined))}
+      {rows.map((r) => line(r.id, r.label, r.sublabel, r.impactGhs, r.impactText, r.sharePct, r.positionId ? `?view=holdings&position=${r.positionId}#inspect` : undefined, r.assumptionSummary))}
       {other && other.count > 0 && line("other", `${other.count} other ${other.count === 1 ? "holding" : "holdings"}`, "Smaller impacts, combined", other.impactGhs, other.impactText, null)}
     </ul>
   );

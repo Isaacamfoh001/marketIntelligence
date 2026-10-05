@@ -7,6 +7,7 @@
 
 import Link from "next/link";
 import type { ScenarioInsight } from "@/lib/decision-insights";
+import { formatGhs } from "@/lib/fixed-income";
 import { HYPOTHETICAL_NOTICE, ESTIMATE_NOTICE, SCENARIO_TEMPLATES, TEMPLATE_DISCLAIMER } from "@/lib/scenario-studio";
 import type { LibraryRow } from "@/lib/queries/scenarios";
 import { createFromTemplateAction } from "@/app/portfolios/[portfolioId]/scenarios/actions";
@@ -88,7 +89,7 @@ export function ScenarioOutcome({ insight, portfolioId, templateId, scenarioId, 
         {insight.status !== "NOT_AVAILABLE" && insight.startingGhs !== null && (
           <dl className="mt-4 grid gap-4 sm:grid-cols-3">
             <div>
-              <dt className="text-[11px] text-zinc-500 dark:text-zinc-400">Starting Reference Value</dt>
+              <dt className="text-[11px] text-zinc-500 dark:text-zinc-400">{insight.basis.analytical ? insight.basis.label : `Starting ${insight.basis.label}`}</dt>
               <dd className="text-xl font-semibold tabular-nums text-zinc-900 dark:text-zinc-100">{insight.startingGhs.toLocaleString("en-GB", { style: "currency", currency: "GHS", maximumFractionDigits: 0 })}</dd>
             </div>
             <div>
@@ -119,6 +120,21 @@ export function ScenarioOutcome({ insight, portfolioId, templateId, scenarioId, 
             <p className="mt-4 text-[11px] text-zinc-500 dark:text-zinc-400">{insight.reconciles ? "Holding impacts add up exactly to the portfolio total." : "Holding impacts could not be reconciled to the portfolio total — see Scenario Studio."}</p>
           </section>
         </div>
+      )}
+
+      {insight.status !== "NOT_AVAILABLE" && insight.basis.line && (
+        <section aria-label="Valuation basis of the starting value" className={`${PANEL} ${insight.basis.analytical ? "border-indigo-200 dark:border-indigo-400/30" : ""}`}>
+          <p className={EYEBROW}>Valuation basis of the starting value</p>
+          <p className="mt-1.5 text-sm font-medium text-zinc-900 dark:text-zinc-100"><span aria-hidden>{insight.basis.analytical ? "◇ " : "● "}</span>{insight.basis.line}</p>
+          {insight.basis.analytical ? (
+            <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">
+              The scenario shock is applied on top of this starting point, so the result depends on both. {insight.basis.assumptionGhs !== null ? `${formatGhs(insight.basis.assumptionGhs)} of the starting value is an analyst assumption, not an observed price.` : ""} Change a starting assumption in Holdings and this result changes.
+            </p>
+          ) : (
+            <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">Every participating holding starts from a Korbly-supported valuation.</p>
+          )}
+          {insight.basis.excludedCount > 0 && <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">{insight.basis.excludedCount} {insight.basis.excludedCount === 1 ? "holding is" : "holdings are"} excluded — no Korbly valuation and no assumption.</p>}
+        </section>
       )}
 
       <section aria-label="Data quality of this result" className={`${PANEL} ${insight.quality.caution ? "border-amber-200 dark:border-amber-900/60" : ""}`}>

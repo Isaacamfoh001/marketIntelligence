@@ -65,3 +65,37 @@ export const EXPOSURE_COPY = {
   upcoming: "Nearest contractual maturities among bonds with reliable maturity terms. Principal due at maturity assumes the issuer pays as contracted; no prediction is made.",
   contractualVsMarket: "Contractual figures (maturity, coupon) depend on a bond's terms and its nominal; market figures (allocation, issuer concentration, DV01, duration) depend on a valuation input. A bond can be unvalued for the second and still included in the first.",
 } as const;
+
+// ---------------------------------------------------------------------------
+// Context-aware terminology for the portfolio's headline value (M9.0.1).
+//
+// "Reference value" is RESERVED for Korbly-supported valuation. The moment any
+// position rests on an analyst assumption the portfolio total is no longer a
+// Reference value — it is the ANALYTICAL STARTING VALUE: the value used for this
+// analysis, a disclosed mixture of Korbly-supported valuations and explicit
+// assumptions. It is never called "Market value". Deterministic: the wording
+// depends only on whether `assumptionCount` is zero.
+// ---------------------------------------------------------------------------
+
+export const ANALYTICAL_STARTING_VALUE_LABEL = "Analytical Starting Value";
+
+export const ANALYTICAL_STARTING_VALUE_DEFINITION =
+  "The starting value used for this analysis: a disclosed mixture of Korbly-supported valuations and explicit analyst assumptions. It is not an observed market value, and it is not a Reference value.";
+
+export interface ValueTerms {
+  /** "Reference Value" or "Analytical Starting Value" — the title-case label for the portfolio total. */
+  label: string;
+  /** Lower-case form for use mid-sentence: "Reference Value" / "Analytical Starting Value" stay capitalised as proper terms. */
+  inline: string;
+  /** "valued Reference Value" / "valued Analytical Starting Value" — the denominator wording used in shares. */
+  shareOf: string;
+  /** True when the total includes analyst assumptions. */
+  analytical: boolean;
+}
+
+/** Which name the portfolio total goes by. Reference wording survives only while every valued position is Korbly-supported. */
+export function valueTerms(summary: { assumptionCount: number }): ValueTerms {
+  const analytical = summary.assumptionCount > 0;
+  const label = analytical ? ANALYTICAL_STARTING_VALUE_LABEL : REFERENCE_VALUE_LABEL.replace("value", "Value");
+  return { label, inline: label, shareOf: `valued ${label}`, analytical };
+}

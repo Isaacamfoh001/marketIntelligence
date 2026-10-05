@@ -6,6 +6,8 @@
 
 import { daysBetween, formatIsoDate } from "../fixed-income";
 import {
+  ASSUMPTION_DISCLOSURE,
+  assumptionAvailability,
   BILL_BASIS_LABEL,
   EXPOSURE_ASSET_CLASS_LABEL,
   EQUITY_RECENT_WINDOW_DAYS,
@@ -42,14 +44,17 @@ function sizeText(p: ExposurePosition): string {
 function qualityOf(p: ExposurePosition, valuationDate: string): HoldingQuality {
   const v = p.valuation;
   if (v.status !== "VALUED") return { recency: null, inputDate: null, ageDays: null, label: "Needs review", note: v.reason };
+  // An assumption has no observation, so it has no recency: data quality and valuation basis stay separate questions.
+  if (v.basis === "ANALYST_ASSUMPTION") return { recency: null, inputDate: null, ageDays: null, label: "Analyst assumption — not observed", note: `${ASSUMPTION_DISCLOSURE}${v.korblyBasis ? ` Korbly's own ${v.korblyBasis.basis === "REFERENCE" ? "Reference" : "indicative"} value is ${ghsWhole(v.korblyBasis.valueGhs)}.` : ""}` };
   const age = v.inputAgeDays;
   const recent = v.recency === "RECENT";
+  const rec: "RECENT" | "STALE" = recent ? "RECENT" : "STALE";
   const d = v.detail;
   if (d.assetClass === "EQUITY") {
     const reportAge = daysBetween(day(d.latestReportDate), day(valuationDate));
     const reportCurrent = reportAge <= EQUITY_RECENT_WINDOW_DAYS;
     return {
-      recency: v.recency,
+      recency: rec,
       inputDate: v.inputDate,
       ageDays: age,
       label: recent ? `Recent trade (${age} ${plural(age, "day")} old)` : `Last traded ${age} days ago`,
@@ -57,9 +62,9 @@ function qualityOf(p: ExposurePosition, valuationDate: string): HoldingQuality {
     };
   }
   if (d.assetClass === "TREASURY_BILL") {
-    return { recency: v.recency, inputDate: v.inputDate, ageDays: age, label: recent ? `Recent auction curve (${age} ${plural(age, "day")} old)` : `Auction curve ${age} days old`, note: `${BILL_BASIS_LABEL}: ${PLAIN_TERMS.billValuation.help}` };
+    return { recency: rec, inputDate: v.inputDate, ageDays: age, label: recent ? `Recent auction curve (${age} ${plural(age, "day")} old)` : `Auction curve ${age} days old`, note: `${BILL_BASIS_LABEL}: ${PLAIN_TERMS.billValuation.help}` };
   }
-  return { recency: v.recency, inputDate: v.inputDate, ageDays: age, label: recent ? `Recent yield observation (${age} ${plural(age, "day")} old)` : `Yield last observed ${age} days ago`, note: null };
+  return { recency: rec, inputDate: v.inputDate, ageDays: age, label: recent ? `Recent yield observation (${age} ${plural(age, "day")} old)` : `Yield last observed ${age} days ago`, note: null };
 }
 
 /** One row per position — the shared basis of every holdings lens. Order: reference value descending, unvalued last, then label (stable). */
@@ -67,11 +72,12 @@ export function buildHoldings(input: WorkspaceInput): HoldingView[] {
   const valDate = day(input.valuationDate);
   const denom = input.summary.referenceValueGhs;
   const rateByPos = new Map<string, HoldingRate>();
-  for (const c of input.exposures.rates.contributors) rateByPos.set(c.positionId, { kind: "BOND_YIELD", dv01Ghs: c.dv01Ghs, per1ppGhs: c.dv01Ghs * 100, modifiedDurationYears: c.modifiedDurationYears, sleeveSharePct: c.sharePct });
-  for (const c of input.exposures.rates.treasuryBills.contributors) rateByPos.set(c.positionId, { kind: "BILL_RATE", dv01Ghs: c.dv01Ghs, per1ppGhs: c.dv01Ghs * 100, modifiedDurationYears: c.modifiedDurationYears, sleeveSharePct: c.sharePct });
+  for (const c of input.exposures.rates.contributors) rateByPos.set(c.positionId, { kind: "BOND_YIELD", basis: c.basis, dv01Ghs: c.dv01Ghs, per1ppGhs: c.dv01Ghs * 100, modifiedDurationYears: c.modifiedDurationYears, sleeveSharePct: c.sharePct });
+  for (const c of input.exposures.rates.treasuryBills.contributors) rateByPos.set(c.positionId, { kind: "BILL_RATE", basis: c.basis, dv01Ghs: c.dv01Ghs, per1ppGhs: c.dv01Ghs * 100, modifiedDurationYears: c.modifiedDurationYears, sleeveSharePct: c.sharePct });
 
   const rows = input.positions.map((p): HoldingView => {
     const v = p.valuation;
+    const korbly = v.status === "VALUED" ? v.korblyBasis : null;
     let maturityDate: string | null = null;
     let daysToMaturity: number | null = null;
     if (p.bond && checkMaturityEligibility(p.bond, valDate).eligible) maturityDate = p.bond.terms.maturityDate.toISOString().slice(0, 10);
@@ -84,8 +90,14 @@ export function buildHoldings(input: WorkspaceInput): HoldingView[] {
       assetClass: p.assetClass,
       assetClassLabel: EXPOSURE_ASSET_CLASS_LABEL[p.assetClass],
       status: v.status,
+      basis: v.status === "VALUED" ? v.basis : "UNVALUED",
       referenceValueGhs: v.status === "VALUED" ? v.referenceValueGhs : null,
       weightPct: v.status === "VALUED" && denom ? (v.referenceValueGhs / denom) * 100 : null,
+      assumptionSummary: v.status === "VALUED" && v.assumption ? v.assumption.summary : null,
+      korblyValueGhs: korbly ? korbly.valueGhs : null,
+      principalGhs: p.bond ? p.bond.nominalGhs : p.bill ? p.bill.faceValueGhs : null,
+      canAssume: v.status === "UNVALUED" && assumptionAvailability(p.assetClass === "EQUITY" ? "EQUITY" : p.assetClass === "TREASURY_BILL" ? "TREASURY_BILL" : "BOND", v.code).assumable,
+      assumptionNote: v.status === "VALUED" ? (v.ignoredAssumption ? `A stored assumption (${v.ignoredAssumption.summary}) is not used: Korbly now has its own supported value, which an assumption never silently replaces.` : null) : (v.assumptionProblem ? `The stored assumption (${v.assumptionProblem.summary}) could not be applied: ${v.assumptionProblem.reason}` : null),
       sizeText: sizeText(p),
       maturityDate,
       daysToMaturity,
@@ -147,20 +159,37 @@ export function buildQuality(input: WorkspaceInput, holdings: HoldingView[]): Qu
     .filter((h) => h.status === "UNVALUED" || h.quality.recency === "STALE")
     .map((h) => ({ positionId: h.positionId, label: h.label, message: h.status === "UNVALUED" ? `Cannot be valued: ${h.unvaluedReason}` : (h.quality.note ?? h.quality.label), href: h.inspectHref }));
   const n = s.positionCount;
-  const summary =
-    n === 0
-      ? "No holdings yet."
-      : s.valuedCount === 0
-        ? `None of the ${n} ${plural(n, "holding")} can be valued yet.`
-        : `${s.recentCount} of ${n} ${plural(n, "holding")} ${s.recentCount === 1 ? "uses" : "use"} recent valuation evidence.${s.staleCount + s.unvaluedCount > 0 ? ` ${s.staleCount + s.unvaluedCount} ${plural(s.staleCount + s.unvaluedCount, "holding")} ${s.staleCount + s.unvaluedCount === 1 ? "needs" : "need"} review.` : ""}`;
+  const supported = s.valuedCount - s.assumptionCount;
+  const open = s.staleCount + s.unvaluedCount;
+  const holdingsWord = (k: number) => plural(k, "holding");
+  let summary: string;
+  if (n === 0) summary = "No holdings yet.";
+  else if (s.valuedCount === 0) summary = `None of the ${n} ${holdingsWord(n)} can be valued yet.`;
+  else if (s.assumptionCount === 0) {
+    summary = `${s.recentCount} of ${n} ${holdingsWord(n)} ${s.recentCount === 1 ? "uses" : "use"} recent valuation evidence.${open > 0 ? ` ${open} ${holdingsWord(open)} ${open === 1 ? "needs" : "need"} review.` : ""}`;
+  } else {
+    // With assumptions the question changes from "how recent is the evidence" to "what kind of value is each holding".
+    const parts = [`${supported} of ${n} ${holdingsWord(n)} ${supported === 1 ? "is" : "are"} supported by Korbly valuations`, `${s.assumptionCount} ${s.assumptionCount === 1 ? "rests" : "rest"} on analyst assumptions`];
+    if (s.unvaluedCount > 0) parts.push(`${s.unvaluedCount} cannot be valued`);
+    summary = `${parts.join("; ")}.${s.staleCount > 0 ? ` ${s.staleCount} of the supported ${plural(s.staleCount, "holding")} ${s.staleCount === 1 ? "uses" : "use"} older evidence.` : ""}`;
+  }
+  const heroParts: string[] = [];
+  if (s.recentCount > 0) heroParts.push(`${s.recentCount} recent`);
+  if (s.staleCount > 0) heroParts.push(`${s.staleCount} older`);
+  if (s.assumptionCount > 0) heroParts.push(`${s.assumptionCount} assumed`);
+  if (s.unvaluedCount > 0) heroParts.push(`${s.unvaluedCount} not valued`);
   return {
     valuedCount: s.valuedCount,
     positionCount: n,
     recentCount: s.recentCount,
     staleCount: s.staleCount,
     unvaluedCount: s.unvaluedCount,
+    assumptionCount: s.assumptionCount,
+    supportedCount: supported,
     recentPct: s.recentPct,
+    assumptionPct: s.assumptionPct,
     summary,
+    heroLine: heroParts.join(" · "),
     needsReview,
     hasBillDisclosure: input.positions.some((p) => p.assetClass === "TREASURY_BILL"),
   };

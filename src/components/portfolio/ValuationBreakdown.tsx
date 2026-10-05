@@ -7,9 +7,10 @@
 // the add/edit form.
 // ---------------------------------------------------------------------------
 
-import { BILL_ASSUMPTION, BILL_BASIS_LABEL, BOND_ASSUMPTION, RECENCY_LABEL, RECENCY_RULE, type PositionValuation } from "@/lib/portfolio";
+import { ASSUMPTION_DISCLOSURE, BILL_ASSUMPTION, BILL_BASIS_LABEL, BOND_ASSUMPTION, RECENCY_LABEL, RECENCY_RULE, type InputRecency, type PositionValuation, type ValuedPosition } from "@/lib/portfolio";
 import { formatGhs, formatIsoDate, formatPct } from "@/lib/fixed-income";
 import { ageText, formatInt, formatPrice, RecencyBadge } from "./ui";
+import { BasisBadge } from "./basis";
 
 function Row({ label, value, sub, strong = false }: { label: string; value: React.ReactNode; sub?: React.ReactNode; strong?: boolean }) {
   return (
@@ -23,26 +24,94 @@ function Row({ label, value, sub, strong = false }: { label: string; value: Reac
   );
 }
 
+/** A value that rests on an analyst assumption: the assumption first, then the arithmetic, never dressed up as an observation. */
+function AssumptionBreakdown({ valuation }: { valuation: ValuedPosition }) {
+  const a = valuation.assumption!;
+  const d = valuation.detail;
+  return (
+    <div>
+      <div className="rounded border border-indigo-200 bg-indigo-50/60 px-2.5 py-2 dark:border-indigo-400/30 dark:bg-indigo-400/10">
+        <p className="flex flex-wrap items-center gap-2 text-xs font-medium text-indigo-950 dark:text-indigo-100">
+          <BasisBadge basis="ANALYST_ASSUMPTION" /> {a.summary}
+        </p>
+        <p className="mt-1 text-xs text-indigo-900 dark:text-indigo-200">{ASSUMPTION_DISCLOSURE}</p>
+      </div>
+      <dl className="mt-2">
+        {d.assetClass === "BOND" && (
+          <>
+            <Row label="Nominal" value={formatGhs(d.nominalGhs)} />
+            <Row label="Starting yield" value={formatPct(d.observedYtmPct)} sub={a.kind === "YIELD_PCT" ? "the yield you assumed" : "implied by the price you assumed"} />
+            <Row label="Valuation date" value={formatIsoDate(d.valuationDate)} />
+            <Row label="Clean price" value={formatPrice(d.referenceCleanPrice)} sub={a.kind === "YIELD_PCT" ? `implied by the assumed yield, per ${d.faceValue} face` : a.kind === "PAR" ? "par — assumed" : "the price you assumed"} />
+            <Row label="Accrued interest" value={formatPrice(d.accruedInterest)} sub={`per ${d.faceValue} face, at the valuation date`} />
+            <Row label="Dirty price" value={formatPrice(d.referenceDirtyPrice)} sub="clean + accrued" />
+          </>
+        )}
+        {d.assetClass === "TREASURY_BILL" && (
+          <>
+            <Row label="Face (maturity) value" value={formatGhs(d.faceValueGhs)} sub="what the government pays at maturity" />
+            <Row label="Days to maturity" value={String(d.daysToMaturity)} sub={`as at ${formatIsoDate(d.valuationDate)}`} />
+            <Row label="Starting rate" value={formatPct(d.referenceRatePct, 4)} sub={a.kind === "RATE_PCT" ? "the rate you assumed" : "implied by the price you assumed"} />
+            <Row label="Price" value={formatPrice(d.referencePricePer100)} sub="per 100 of face" />
+          </>
+        )}
+        {d.assetClass === "EQUITY" && (
+          <>
+            <Row label="Shares" value={formatInt(d.shares)} />
+            <Row label="Assumed price" value={`GHS ${formatPrice(d.priceGhs)}`} sub="per share — not a GSE trade" />
+          </>
+        )}
+        <Row label="Assumption value" value={formatGhs(valuation.referenceValueGhs)} strong />
+      </dl>
+      <details className="mt-2 text-xs text-zinc-600 dark:text-zinc-400">
+        <summary className="cursor-pointer select-none">How this was calculated</summary>
+        <p className="mt-1">{a.method}</p>
+        <ol className="mt-1 list-decimal space-y-0.5 pl-5 tabular-nums">
+          {a.calculation.map((c) => (
+            <li key={c}>{c}</li>
+          ))}
+        </ol>
+        <p className="mt-1 text-[11px] text-zinc-500 dark:text-zinc-400">Provenance: {a.provenance}. No analyst identity is recorded yet.</p>
+      </details>
+      {valuation.korblyBasis && (
+        <p className="mt-2 rounded border border-zinc-200 bg-zinc-50 px-2.5 py-1.5 text-xs text-zinc-700 dark:border-zinc-700 dark:bg-zinc-800/50 dark:text-zinc-300">
+          <span className="font-medium">Korbly’s own {valuation.korblyBasis.basis === "REFERENCE" ? "Reference" : "Indicative"} value is {formatGhs(valuation.korblyBasis.valueGhs)}.</span> It is not used in this analysis because you chose to test a different starting assumption; it is unchanged.
+        </p>
+      )}
+      <p className="mt-2 text-[11px] text-zinc-400 dark:text-zinc-500">An assumption is a disclosed analytical input. It has no observation date, so it is neither “recent” nor “stale”.</p>
+    </div>
+  );
+}
+
 export function ValuationBreakdown({ valuation }: { valuation: PositionValuation }) {
   if (valuation.status !== "VALUED") {
     return (
       <div className="text-sm text-zinc-700 dark:text-zinc-300">
-        <p className="font-medium">Cannot be valued today</p>
+        <p className="flex items-center gap-2 font-medium">Cannot be valued today <BasisBadge basis="UNVALUED" /></p>
         <p className="mt-1 text-zinc-600 dark:text-zinc-400">{valuation.reason}</p>
         <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">It is kept in the portfolio and counted as not valued — it is not treated as zero.</p>
+        {valuation.assumptionProblem && <p role="alert" className="mt-2 rounded border border-red-200 bg-red-50 px-2.5 py-1.5 text-xs text-red-900 dark:border-red-900/50 dark:bg-red-900/20 dark:text-red-200">The stored assumption ({valuation.assumptionProblem.summary}) could not be applied: {valuation.assumptionProblem.reason}</p>}
       </div>
     );
   }
+  if (valuation.basis === "ANALYST_ASSUMPTION" && valuation.assumption) return <AssumptionBreakdown valuation={valuation} />;
+  const recency: InputRecency = valuation.recency === "STALE" ? "STALE" : "RECENT";
 
   const detail = valuation.detail;
+  const ignored = valuation.ignoredAssumption && (
+    <p className="mb-2 rounded border border-zinc-200 bg-zinc-50 px-2.5 py-1.5 text-xs text-zinc-700 dark:border-zinc-700 dark:bg-zinc-800/50 dark:text-zinc-300">
+      A stored analyst assumption ({valuation.ignoredAssumption.summary}) is <span className="font-medium">not used</span>: Korbly now has its own supported value, which an assumption never silently replaces. Remove the assumption, or re-enter it to override deliberately.
+    </p>
+  );
   if (detail.assetClass === "BOND") {
     return (
       <div>
+        {ignored}
         <dl>
           <Row label="Nominal" value={formatGhs(detail.nominalGhs)} />
           <Row label="Observed yield" value={formatPct(detail.observedYtmPct)} sub={detail.yieldFromSourceQuote ? "source-quoted yield (no price published)" : "solved from the traded price at its own date"} />
           <Row label="Observed on" value={formatIsoDate(detail.observationDate)} sub={ageText(detail.ageDays)} />
-          <Row label="Input state" value={<span className="inline-flex items-center gap-1.5">{RECENCY_LABEL[valuation.recency]} <RecencyBadge recency={valuation.recency} /></span>} />
+          <Row label="Input state" value={<span className="inline-flex items-center gap-1.5">{RECENCY_LABEL[recency]} <RecencyBadge recency={recency} /></span>} />
           <Row label="Valuation date" value={formatIsoDate(detail.valuationDate)} />
           <Row label="Observed clean price" value={detail.observedCleanPrice === null ? "—" : formatPrice(detail.observedCleanPrice)} sub={`historical, as traded on ${formatIsoDate(detail.observationDate)}`} />
           <Row label="Reference clean price" value={formatPrice(detail.referenceCleanPrice)} sub={`rolled to ${formatIsoDate(detail.valuationDate)} at the observed yield`} />
@@ -71,12 +140,13 @@ export function ValuationBreakdown({ valuation }: { valuation: PositionValuation
   if (detail.assetClass === "TREASURY_BILL") {
     return (
       <div>
+        {ignored}
         <dl>
           <Row label="Face (maturity) value" value={formatGhs(detail.faceValueGhs)} sub="what the government pays at maturity" />
           <Row label="Days to maturity" value={String(detail.daysToMaturity)} sub={`as at ${formatIsoDate(detail.valuationDate)}`} />
           <Row label="Reference basis" value={BILL_BASIS_LABEL} sub={detail.methodDescription} />
           <Row label="Reference rate" value={formatPct(detail.referenceRatePct, 4)} sub={`auction curve of ${formatIsoDate(detail.rateObservationDate)} · ${ageText(detail.ageDays)}`} />
-          <Row label="Input state" value={<span className="inline-flex items-center gap-1.5">{RECENCY_LABEL[valuation.recency]} <RecencyBadge recency={valuation.recency} /></span>} />
+          <Row label="Input state" value={<span className="inline-flex items-center gap-1.5">{RECENCY_LABEL[recency]} <RecencyBadge recency={recency} /></span>} />
           <Row label="Reference price" value={formatPrice(detail.referencePricePer100)} sub="per 100 of face" />
           <Row label="Discount still to accrue" value={formatGhs(detail.remainingDiscountGhs)} sub="face value − reference value" />
           <Row label="Reference value" value={formatGhs(valuation.referenceValueGhs)} strong />
@@ -102,11 +172,12 @@ export function ValuationBreakdown({ valuation }: { valuation: PositionValuation
 
   return (
     <div>
+      {ignored}
       <dl>
         <Row label="Shares" value={formatInt(detail.shares)} />
         <Row label="Last traded price" value={`GHS ${formatPrice(detail.priceGhs)}`} sub="GSE closing price (VWAP) on the last day shares actually traded" />
         <Row label="Trade date" value={formatIsoDate(detail.priceDate)} sub={ageText(detail.ageDays)} />
-        <Row label="Input state" value={<span className="inline-flex items-center gap-1.5">{RECENCY_LABEL[valuation.recency]} <RecencyBadge recency={valuation.recency} /></span>} />
+        <Row label="Input state" value={<span className="inline-flex items-center gap-1.5">{RECENCY_LABEL[recency]} <RecencyBadge recency={recency} /></span>} />
         <Row label="Shares traded that day" value={formatInt(detail.volume)} sub="volume above zero — an actual trade" />
         <Row label="Reference value" value={formatGhs(valuation.referenceValueGhs)} strong />
       </dl>

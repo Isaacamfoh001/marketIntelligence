@@ -73,8 +73,8 @@ export function KeyInsights({ insights, investigations }: { insights: Insight[];
             )}
             <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
               <Evidence items={i.evidence} />
-              <span className="text-[10px] text-zinc-400 dark:text-zinc-500" title={i.materialityBasis}>
-                Ranked by: {i.materialityBasis.split(" (")[0].toLowerCase()}
+              <span className="text-[10px] text-zinc-400 dark:text-zinc-500" title={i.shareBasis}>
+                Share of: {i.shareBasis.replace(/^Share of /, "").split(" (")[0].toLowerCase()}
               </span>
             </div>
           </li>

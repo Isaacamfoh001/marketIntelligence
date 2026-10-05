@@ -23,6 +23,54 @@ export type PortfolioAssetClass = "BOND" | "EQUITY" | "TREASURY_BILL";
  */
 export type InputRecency = "RECENT" | "STALE";
 
+/**
+ * What KIND of value a position is being carried at (M9.0.1). Distinct from
+ * data quality (how recent the evidence is): a recent analyst assumption is still
+ * an assumption, and a stale observed yield is still a Reference value.
+ *
+ *   REFERENCE           Korbly-supported value built from accepted observed evidence (bond yield, GSE trade).
+ *   INDICATIVE          Korbly model-derived value where the method is defensible but there is no instrument-level quote
+ *                       (a Treasury bill valued from the interpolated BoG auction curve).
+ *   ANALYST_ASSUMPTION  value that rests on an explicit analyst-supplied assumption — never an observation.
+ *   (UNVALUED           no value; that is `status: "UNVALUED"`, not a basis.)
+ *
+ * Hierarchy, strongest first: REFERENCE > INDICATIVE > ANALYST_ASSUMPTION > unvalued.
+ */
+export type ValuationBasis = "REFERENCE" | "INDICATIVE" | "ANALYST_ASSUMPTION";
+export const VALUATION_BASIS_ORDER: ValuationBasis[] = ["REFERENCE", "INDICATIVE", "ANALYST_ASSUMPTION"];
+
+/** Recency of the evidence behind a value. An analyst assumption has no observation, so it is NOT_APPLICABLE — never "recent". */
+export type ValuationRecency = InputRecency | "NOT_APPLICABLE";
+
+/**
+ * What the analyst may assume, by asset class. Each maps onto an EXISTING engine:
+ *   BOND          YIELD_PCT (→ M7 priceFromYield) | PRICE_PER_100 (clean price → M7 computeYtm) | PAR (explicit clean price = face)
+ *   TREASURY_BILL RATE_PCT (→ M8.5 bill formula) | PRICE_PER_100
+ *   EQUITY        SHARE_PRICE_GHS
+ * Percent values are entered and stored as percent (28 = 28%).
+ */
+export type AssumptionKind = "YIELD_PCT" | "RATE_PCT" | "PRICE_PER_100" | "PAR" | "SHARE_PRICE_GHS";
+
+/** An assumption as stored for a position. */
+export interface StoredAssumption {
+  kind: AssumptionKind;
+  /** null only for PAR. */
+  value: number | null;
+  overridesReference: boolean;
+}
+
+/** An assumption that was applied to a value, with everything needed to trace it. */
+export interface AppliedAssumption extends StoredAssumption {
+  /** There is no analyst identity yet; provenance is stated, not invented. */
+  provenance: "Analyst assumption";
+  /** What was assumed, in the analyst's terms: "28.00% yield". */
+  summary: string;
+  /** How the starting value follows from it, in one sentence. */
+  method: string;
+  /** The calculation, step by step, for the expert. */
+  calculation: string[];
+}
+
 /** Bond: M7's weekly tolerance (observationFreshness("WEEKLY")) — kept in sync by a test. */
 export const BOND_RECENT_WINDOW_DAYS = 10;
 /** Treasury bill: BoG auctions weekly, so the same weekly tolerance as bonds (observationFreshness("WEEKLY")) — kept in sync by a test. */
@@ -57,6 +105,14 @@ export type UnvaluedCode =
   | "NO_PRICE"
   | "CALCULATION_FAILED";
 
+/**
+ * Why a position has no Reference value, and whether an analyst assumption could
+ * responsibly stand in. Contractual problems stay unvalued — Korbly never
+ * manufactures missing instrument terms:
+ *   NOT ASSUMABLE  NOT_GHS, MATURED, FLOATING_RATE, NOT_OUTSTANDING, TERMS_UNSUPPORTED, TERMS_CONFLICT, INACTIVE
+ *   ASSUMABLE      NO_OBSERVATION, NO_REFERENCE_RATE, NO_TRADE, UNDER_REVIEW, OBSERVATION_EXCLUDED, NO_PRICE, CALCULATION_FAILED
+ * (the assumable ones lack MARKET EVIDENCE, not contractual terms).
+ */
 export interface Unvalued {
   available: false;
   code: UnvaluedCode;

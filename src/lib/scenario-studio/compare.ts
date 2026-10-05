@@ -148,7 +148,11 @@ export function buildComparison(inputs: CompareInput[]): Comparison {
   const dates = new Set(inputs.map((i) => i.result.valuationDate));
   const bases = new Set(inputs.map((i) => i.result.portfolio.m81ValuedReferenceValueGhs));
   const participating = new Set(inputs.map((i) => i.result.portfolio.referenceBasisGhs));
-  const commonBasis = dates.size === 1 && bases.size === 1 && participating.size === 1;
+  // Starting ASSUMPTIONS are part of the basis (M9.0.1): two results with the same total but different assumed yields did not start
+  // from the same place, so they must not be presented as "only the shocks differ".
+  const assumptionSets = new Set(inputs.map((i) => i.result.portfolio.startingBasisFingerprint));
+  const sameAssumptions = assumptionSets.size === 1;
+  const commonBasis = dates.size === 1 && bases.size === 1 && participating.size === 1 && sameAssumptions;
 
   const ranked = [...cols].sort((a, b) => (a.impactGhs ?? 0) - (b.impactGhs ?? 0) || a.name.localeCompare(b.name));
   const columns: CompareColumn[] = cols.map((c) => ({ ...c, rank: ranked.findIndex((r) => r.id === c.id) + 1 }));
@@ -184,7 +188,15 @@ export function buildComparison(inputs: CompareInput[]): Comparison {
     commonBasis,
     valuationDate: commonBasis && first ? first.valuationDate : null,
     startingValueGhs: commonBasis && first ? first.portfolio.referenceBasisGhs : null,
-    basisNote: commonBasis ? COMPARED_SAME_INPUTS : `These views do not share an identical starting basis (${plural(dates.size, "valuation date")}: ${[...dates].join(", ")}). Differences may not come only from the assumptions — treat this comparison with caution.`,
+    basisNote: commonBasis
+      ? first && first.portfolio.byBasis.assumption.count > 0
+        ? `${COMPARED_SAME_INPUTS} Every view uses the same ${first.portfolio.byBasis.assumption.count} starting valuation ${plural(first.portfolio.byBasis.assumption.count, "assumption")}, so only the scenario assumptions differ.`
+        : COMPARED_SAME_INPUTS
+      : !sameAssumptions && dates.size === 1 && bases.size === 1 && participating.size === 1
+        ? "These views start from different valuation assumptions, so differences do not come only from the scenario assumptions. Compare them only after aligning the starting assumptions."
+        : !sameAssumptions
+          ? `These views do not share an identical starting basis (${plural(dates.size, "valuation date")}: ${[...dates].join(", ")}) and their starting valuation assumptions differ. Differences may not come only from the scenario assumptions — treat this comparison with caution.`
+          : `These views do not share an identical starting basis (${plural(dates.size, "valuation date")}: ${[...dates].join(", ")}). Differences may not come only from the assumptions — treat this comparison with caution.`,
     columns,
     assumptionRows: buildAssumptionRows(inputs),
     summary,

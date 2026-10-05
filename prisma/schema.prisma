@@ -1043,6 +1043,9 @@ model PortfolioPosition {
   fixedIncomeSecurity FixedIncomeSecurity? @relation(fields: [fixedIncomeSecurityId], references: [id], onDelete: Restrict)
   security            Security?            @relation(fields: [securityId], references: [id], onDelete: Restrict)
 
+  /// The analyst's explicit valuation assumption for this holding, when one was entered (M9.0.1).
+  assumption PositionAssumption?
+
   @@unique([portfolioId, fixedIncomeSecurityId])
   @@unique([portfolioId, securityId])
   @@unique([portfolioId, treasuryBillId])
@@ -1050,6 +1053,52 @@ model PortfolioPosition {
   @@index([portfolioId])
   @@index([fixedIncomeSecurityId])
   @@index([securityId])
+}
+
+// ---------------------------------------------------------------------------
+// Valuation assumptions (M9.0.1). When Korbly has no reliable Reference Value for
+// a holding, the analyst may supply an EXPLICIT STARTING valuation assumption so
+// the holding can take part in portfolio and scenario analysis. It is an
+// assumption, never an observation: it is stored beside the position, never in
+// market-data tables, and never overwrites a Reference Value.
+//
+// What is stored is the analyst's INPUT only (kind + value). The resulting value,
+// price, yield and every derived figure are recomputed at read time by the pure
+// engines (like every other valuation) — so an assumed yield keeps rolling with
+// the valuation date and nothing derived can drift out of sync.
+//
+// kind / value, by asset class (the CHECK "PositionAssumption_shape_check" enforces the value shape per kind; the service enforces
+// that the kind suits the position's asset class — a CHECK cannot look across tables):
+//   BOND          YIELD_PCT (annual yield, %) | PRICE_PER_100 (clean price per 100 face) | PAR (explicit clean price = face; value null)
+//   TREASURY_BILL RATE_PCT (simple Act/365 rate, %) | PRICE_PER_100 (price per 100 of face)
+//   EQUITY        SHARE_PRICE_GHS (GHS per share)
+// `overridesReference` is fixed at entry: true only when Korbly DID have a supported
+// value and the analyst chose to test a different start. An assumption entered to fill a
+// gap (false) yields to a Reference Value that appears later — a weaker basis never
+// silently replaces a stronger one.
+// There is no analyst identity (no authentication yet): provenance is "Analyst assumption".
+// ---------------------------------------------------------------------------
+
+enum PositionAssumptionKind {
+  YIELD_PCT
+  RATE_PCT
+  PRICE_PER_100
+  PAR
+  SHARE_PRICE_GHS
+}
+
+model PositionAssumption {
+  id                 String                 @id @default(cuid())
+  positionId         String                 @unique
+  kind               PositionAssumptionKind
+  /// Percent for YIELD_PCT / RATE_PCT (28 = 28%), price per 100 face for PRICE_PER_100, GHS per share for SHARE_PRICE_GHS; null for PAR.
+  value              Decimal?               @db.Decimal(20, 8)
+  overridesReference Boolean                @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  position PortfolioPosition @relation(fields: [positionId], references: [id], onDelete: Cascade)
 }
 
 // ---------------------------------------------------------------------------

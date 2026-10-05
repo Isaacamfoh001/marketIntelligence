@@ -9,8 +9,8 @@
 // ---------------------------------------------------------------------------
 
 import { redirect } from "next/navigation";
-import { addPositionsBatch, createPortfolio, removePosition, setPortfolioArchived, updatePosition } from "@/lib/portfolio-service";
-import { parseEnteredNumber, type BatchEntryInput, type BatchRowError } from "@/lib/portfolio";
+import { addPositionsBatch, createPortfolio, removePosition, removePositionAssumption, setPortfolioArchived, setPositionAssumption, updatePosition } from "@/lib/portfolio-service";
+import { parseEnteredNumber, type AssumptionKind, type BatchAssumptionInput, type BatchEntryInput, type BatchRowError } from "@/lib/portfolio";
 
 export interface FormState {
   error?: string;
@@ -61,6 +61,31 @@ export async function removePositionAction(portfolioId: string, positionId: stri
   redirect(`/portfolios/${portfolioId}?removed=1`);
 }
 
+// ---------------------------------------------------------------------------
+// Valuation assumptions (M9.0.1). Thin: parse, call the service, redirect. The
+// service re-validates against the real instrument and Korbly's own valuation,
+// and the result is always recomputed at read time — nothing derived is stored.
+// ---------------------------------------------------------------------------
+
+const ASSUMPTION_KINDS: readonly AssumptionKind[] = ["YIELD_PCT", "RATE_PCT", "PRICE_PER_100", "PAR", "SHARE_PRICE_GHS"];
+const isKind = (v: string): v is AssumptionKind => (ASSUMPTION_KINDS as readonly string[]).includes(v);
+
+export async function saveAssumptionAction(portfolioId: string, positionId: string, _prev: FormState, formData: FormData): Promise<FormState> {
+  const kind = text(formData, "kind");
+  if (!isKind(kind)) return { error: "Choose what you want to assume." };
+  const value = kind === "PAR" ? null : parseEnteredNumber(text(formData, "value"));
+  if (kind !== "PAR" && value === null) return { error: "Enter the assumption as a number." };
+  const result = await setPositionAssumption({ positionId, kind, value });
+  if (!result.ok) return { error: result.error };
+  redirect(`/portfolios/${portfolioId}?view=holdings&position=${positionId}&assumed=1#inspect`);
+}
+
+export async function removeAssumptionAction(portfolioId: string, positionId: string): Promise<void> {
+  const result = await removePositionAssumption(positionId);
+  if (!result.ok) throw new Error(result.error);
+  redirect(`/portfolios/${portfolioId}?view=holdings&position=${positionId}&unassumed=1#inspect`);
+}
+
 export interface BatchFormState {
   error?: string;
   rowErrors?: BatchRowError[];
@@ -76,14 +101,20 @@ function parseBatchEntries(raw: string): BatchEntryInput[] | null {
   }
   if (!Array.isArray(data)) return null;
   const str = (v: unknown) => (typeof v === "string" ? v : "");
+  /** An optional per-row assumption: absent stays absent (nothing is ever assumed silently); a malformed one is kept so the service reports it. */
+  const assumption = (v: unknown): BatchAssumptionInput | undefined => {
+    if (typeof v !== "object" || v === null) return undefined;
+    const a = v as Record<string, unknown>;
+    return isKind(str(a.kind)) ? { kind: str(a.kind) as AssumptionKind, value: str(a.value) } : { kind: "YIELD_PCT", value: "" };
+  };
   const out: BatchEntryInput[] = [];
   for (const row of data) {
     if (typeof row !== "object" || row === null) return null;
     const r = row as Record<string, unknown>;
     const key = str(r.key);
-    if (r.assetClass === "BOND") out.push({ key, assetClass: "BOND", instrumentId: str(r.instrumentId), nominalGhs: str(r.nominalGhs) });
-    else if (r.assetClass === "EQUITY") out.push({ key, assetClass: "EQUITY", instrumentId: str(r.instrumentId), shares: str(r.shares) });
-    else if (r.assetClass === "TREASURY_BILL") out.push({ key, assetClass: "TREASURY_BILL", tenorDays: Number(r.tenorDays), maturityDate: str(r.maturityDate), faceValueGhs: str(r.faceValueGhs), isin: str(r.isin) });
+    if (r.assetClass === "BOND") out.push({ key, assetClass: "BOND", instrumentId: str(r.instrumentId), nominalGhs: str(r.nominalGhs), assumption: assumption(r.assumption) });
+    else if (r.assetClass === "EQUITY") out.push({ key, assetClass: "EQUITY", instrumentId: str(r.instrumentId), shares: str(r.shares), assumption: assumption(r.assumption) });
+    else if (r.assetClass === "TREASURY_BILL") out.push({ key, assetClass: "TREASURY_BILL", tenorDays: Number(r.tenorDays), maturityDate: str(r.maturityDate), faceValueGhs: str(r.faceValueGhs), isin: str(r.isin), assumption: assumption(r.assumption) });
     else return null;
   }
   return out;

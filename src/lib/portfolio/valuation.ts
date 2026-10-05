@@ -27,7 +27,7 @@ import { BILL_CONVENTION_LABEL, BILL_FORMULA, billDv01PerUnitFace, billModifiedD
 import type { BillValuationInput } from "./bill-input";
 import type { BondValuationInput } from "./bond-input";
 import type { EquityValuationInput } from "./equity-input";
-import type { InputRecency, PortfolioAssetClass, Unvalued } from "./types";
+import type { AppliedAssumption, PortfolioAssetClass, Unvalued, ValuationBasis, ValuationRecency } from "./types";
 
 export const round2 = (n: number): number => Math.round((n + Number.EPSILON) * 100) / 100;
 
@@ -47,6 +47,12 @@ export interface BondValuationDetail {
   accruedInterest: number;
   referenceDirtyPrice: number;
   pendingReview: BondValuationInput["pendingReview"];
+  /**
+   * True when `observedYtmPct` is an ANALYST-ASSUMED starting yield (or the yield implied by an assumed price), not an
+   * observed one. `observationDate` is then the valuation date, `ageDays` 0 and `observedCleanPrice` null — there is no
+   * observation; consumers must branch on this (or on the position's `basis`) before describing the input as observed.
+   */
+  yieldIsAssumed?: boolean;
 }
 
 export interface EquityValuationDetail {
@@ -59,6 +65,8 @@ export interface EquityValuationDetail {
   valueTradedGhs: number | null;
   latestReportDate: string;
   skippedNoTradeRows: number;
+  /** True when `priceGhs` is an ANALYST-ASSUMED price, not a GSE trade (then priceDate = valuation date, volume 0 is a placeholder, not an observation). */
+  priceIsAssumed?: boolean;
 }
 
 /**
@@ -77,7 +85,8 @@ export interface BillValuationDetail {
   /** Date of the BoG auction curve behind the rate. */
   rateObservationDate: string;
   ageDays: number;
-  method: InterpolationMethod;
+  /** "ANALYST_ASSUMPTION" when the rate is assumed rather than read off the BoG curve (then `nodes` is empty and the dates are the valuation date). */
+  method: InterpolationMethod | "ANALYST_ASSUMPTION";
   methodDescription: string;
   nodes: CurveNode[];
   /** Reference price per 100 of face. */
@@ -91,21 +100,44 @@ export interface BillValuationDetail {
   formula: string;
 }
 
+export interface KorblyBasisSummary {
+  basis: Exclude<ValuationBasis, "ANALYST_ASSUMPTION">;
+  /** Korbly's own supported value, untouched by the analyst's assumption. */
+  valueGhs: number;
+  inputDate: string;
+  recency: ValuationRecency;
+}
+
 export interface ValuedPosition {
   status: "VALUED";
   assetClass: PortfolioAssetClass;
-  recency: InputRecency;
-  /** GHS, rounded to 0.01. */
+  /** What kind of value this is (M9.0.1). Independent of `recency`. */
+  basis: ValuationBasis;
+  /** Evidence recency; NOT_APPLICABLE for an analyst assumption (it has no observation). */
+  recency: ValuationRecency;
+  /**
+   * GHS, rounded to 0.01 — the value this position contributes to the analysis. It is a REFERENCE value only when
+   * `basis` is REFERENCE (INDICATIVE for a bill); for ANALYST_ASSUMPTION it is an assumption value. The field keeps its
+   * M8.1 name so the exposure and scenario engines are untouched; wording for people goes through `valueTerms()`.
+   */
   referenceValueGhs: number;
-  /** The date of the observed input behind the value (bond: yield observed; equity: trade date). */
+  /** The date of the observed input behind the value (bond: yield observed; equity: trade date). The valuation date for an assumption. */
   inputDate: string;
   inputAgeDays: number;
   detail: BondValuationDetail | EquityValuationDetail | BillValuationDetail;
+  /** The assumption this value rests on; null for Korbly-supported values. */
+  assumption: AppliedAssumption | null;
+  /** When an assumption overrides a Korbly-supported value, what Korbly itself supports — shown beside it, never overwritten. */
+  korblyBasis: KorblyBasisSummary | null;
+  /** A stored assumption NOT used because Korbly now has a supported value that it must not silently replace. */
+  ignoredAssumption: AppliedAssumption | null;
 }
 
 export interface UnvaluedPosition extends Unvalued {
   status: "UNVALUED";
   assetClass: PortfolioAssetClass;
+  /** A stored assumption that could not be applied (and why) — surfaced so it is never silently dropped. */
+  assumptionProblem?: { summary: string; reason: string };
 }
 
 export type PositionValuation = ValuedPosition | UnvaluedPosition;
@@ -126,6 +158,10 @@ export function valueBondPosition(nominalGhs: number, terms: BondTerms, input: B
   return {
     status: "VALUED",
     assetClass: "BOND",
+    basis: "REFERENCE",
+    assumption: null,
+    korblyBasis: null,
+    ignoredAssumption: null,
     recency: input.recency,
     referenceValueGhs: round2((nominalGhs * dirty) / terms.faceValue),
     inputDate: input.observationDate,
@@ -161,6 +197,10 @@ export function valueBillPosition(faceValueGhs: number, input: BillValuationInpu
   return {
     status: "VALUED",
     assetClass: "TREASURY_BILL",
+    basis: "INDICATIVE",
+    assumption: null,
+    korblyBasis: null,
+    ignoredAssumption: null,
     recency: input.recency,
     referenceValueGhs: value,
     inputDate: input.observationDate,
@@ -191,6 +231,10 @@ export function valueEquityPosition(shares: number, input: EquityValuationInput 
   return {
     status: "VALUED",
     assetClass: "EQUITY",
+    basis: "REFERENCE",
+    assumption: null,
+    korblyBasis: null,
+    ignoredAssumption: null,
     recency: input.recency,
     referenceValueGhs: round2(shares * input.priceGhs),
     inputDate: input.priceDate,
@@ -210,44 +254,81 @@ export function valueEquityPosition(shares: number, input: EquityValuationInput 
 }
 
 // ---------------------------------------------------------------------------
-// Portfolio aggregation — coverage over the VALUED portion only.
+// Portfolio aggregation — over the VALUED portion only. Unvalued positions are
+// excluded and counted separately, never treated as zero.
+//
+// VALUATION BASIS (M9.0.1). `referenceValueGhs` is the total of every valued
+// position — the figure all exposure and scenario denominators use. It is a
+// Reference value only while no position rests on an analyst assumption;
+// otherwise it is the ANALYTICAL STARTING VALUE, a disclosed mixture of
+// Korbly-supported values and explicit assumptions. `basis` splits it exactly
+// (reference + indicative + assumption === total, to the pesewa).
 // ---------------------------------------------------------------------------
+
+export interface BasisSlice {
+  count: number;
+  valueGhs: number;
+  /** Share of the total valued amount (0–100); null when nothing is valued. */
+  pct: number | null;
+}
+
+export interface ValuationBasisBreakdown {
+  reference: BasisSlice;
+  indicative: BasisSlice;
+  assumption: BasisSlice;
+  /** Reference + indicative: what Korbly itself supports. */
+  supported: BasisSlice;
+}
 
 export interface PortfolioValuationSummary {
   valuationDate: string;
   positionCount: number;
   valuedCount: number;
   unvaluedCount: number;
-  /** Sum of the valued positions' reference values; null (never 0) when nothing could be valued. */
+  /** Sum of the valued positions' values (reference, indicative AND assumption); null (never 0) when nothing could be valued. See ValuedPosition.referenceValueGhs. */
   referenceValueGhs: number | null;
+  /** Value resting on recent / stale OBSERVED evidence. Assumption-based value is in neither. */
   recentValueGhs: number;
   staleValueGhs: number;
   recentCount: number;
   staleCount: number;
   /**
-   * Share of the VALUED reference value resting on recent / stale inputs
-   * (0–100). The denominator is the valued portion — NOT the whole portfolio —
-   * whenever `isComplete` is false. Null when nothing is valued.
+   * Share of the valued total resting on recent / stale observed evidence (0–100). With `assumptionPct` they add to 100.
+   * The denominator is the valued portion — NOT the whole portfolio — whenever `isComplete` is false. Null when nothing is valued.
    */
   recentPct: number | null;
   stalePct: number | null;
   /** True only when the portfolio has positions and every one is valued. */
   isComplete: boolean;
-  /** Earliest and latest observation dates among the valued positions' inputs — positions are NOT all observed on the same date. */
+  /** Earliest and latest OBSERVATION dates among the valued, non-assumed positions' inputs — positions are NOT all observed on the same date. */
   inputDateRange: { from: string; to: string } | null;
   inputAgeRangeDays: { min: number; max: number } | null;
+  basis: ValuationBasisBreakdown;
+  /** Number of positions carried at an analyst assumption. */
+  assumptionCount: number;
+  /** Share of the valued total that rests on analyst assumptions (0–100); null when nothing is valued. */
+  assumptionPct: number | null;
 }
 
 export function summarizePortfolio(positions: PositionValuation[], valuationDate: Date): PortfolioValuationSummary {
   const valued = positions.filter((p): p is ValuedPosition => p.status === "VALUED");
   const recent = valued.filter((p) => p.recency === "RECENT");
   const stale = valued.filter((p) => p.recency === "STALE");
-  const sum = (ps: ValuedPosition[]) => round2(ps.reduce((s, p) => s + p.referenceValueGhs, 0));
-  const total = valued.length > 0 ? sum(valued) : null;
+  // Sum in integer pesewas so the basis slices reconcile with the total exactly.
+  const cents = (ps: ValuedPosition[]) => ps.reduce((s, p) => s + Math.round(p.referenceValueGhs * 100), 0);
+  const sum = (ps: ValuedPosition[]) => cents(ps) / 100;
+  const totalCents = cents(valued);
+  const total = valued.length > 0 ? totalCents / 100 : null;
   const recentValue = sum(recent);
   const staleValue = sum(stale);
-  const dates = valued.map((p) => p.inputDate).sort();
-  const ages = valued.map((p) => p.inputAgeDays);
+  const observed = valued.filter((p) => p.basis !== "ANALYST_ASSUMPTION");
+  const dates = observed.map((p) => p.inputDate).sort();
+  const ages = observed.map((p) => p.inputAgeDays);
+  const pctOfTotal = (c: number): number | null => (totalCents > 0 ? (c / totalCents) * 100 : null);
+  const slice = (ps: ValuedPosition[]): BasisSlice => ({ count: ps.length, valueGhs: sum(ps), pct: pctOfTotal(cents(ps)) });
+  const byBasis = (b: ValuationBasis) => valued.filter((p) => p.basis === b);
+  const supportedPositions = valued.filter((p) => p.basis !== "ANALYST_ASSUMPTION");
+  const assumed = byBasis("ANALYST_ASSUMPTION");
 
   return {
     valuationDate: isoDay(valuationDate),
@@ -259,10 +340,13 @@ export function summarizePortfolio(positions: PositionValuation[], valuationDate
     staleValueGhs: staleValue,
     recentCount: recent.length,
     staleCount: stale.length,
-    recentPct: total !== null && total > 0 ? (recentValue / total) * 100 : null,
-    stalePct: total !== null && total > 0 ? (staleValue / total) * 100 : null,
+    recentPct: pctOfTotal(cents(recent)),
+    stalePct: pctOfTotal(cents(stale)),
     isComplete: positions.length > 0 && valued.length === positions.length,
     inputDateRange: dates.length > 0 ? { from: dates[0], to: dates[dates.length - 1] } : null,
     inputAgeRangeDays: ages.length > 0 ? { min: Math.min(...ages), max: Math.max(...ages) } : null,
+    basis: { reference: slice(byBasis("REFERENCE")), indicative: slice(byBasis("INDICATIVE")), assumption: slice(assumed), supported: slice(supportedPositions) },
+    assumptionCount: assumed.length,
+    assumptionPct: pctOfTotal(cents(assumed)),
   };
 }

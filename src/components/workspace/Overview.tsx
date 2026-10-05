@@ -18,6 +18,7 @@ import { Card, CLASS_VAR, FOCUS, SectionHeading } from "./shared";
 const pct = (n: number) => `${n.toFixed(n >= 10 ? 0 : 1)}%`;
 
 export function Overview({ portfolioId, archived, exposures, holdings, maturity, insights, previews }: { portfolioId: string; archived: boolean; exposures: PortfolioExposures; holdings: HoldingView[]; maturity: MaturityProfile; insights: DecisionInsights; previews: TemplatePreview[] }) {
+  const vLabel = exposures.valueBasis.assumptionCount > 0 ? "Analytical Starting Value" : "Reference Value";
   const rows = exposures.allocation.rows;
   const issuers = exposures.issuers.rows.slice(0, 5);
   const rateRows = holdings
@@ -84,7 +85,7 @@ export function Overview({ portfolioId, archived, exposures, holdings, maturity,
       {/* 3 — WHAT COULD MOVE IT */}
       {previews.length > 0 && (
         <section aria-labelledby="stress">
-          <SectionHeading id="stress" hint="Hypothetical assumptions applied to today's Reference Values. A scenario is not a forecast — open one to see exactly what it assumes.">What could move it</SectionHeading>
+          <SectionHeading id="stress" hint={`Hypothetical assumptions applied to today's ${vLabel === "Reference Value" ? "Reference Values" : "starting values"}. A scenario is not a forecast — open one to see exactly what it assumes.`}>What could move it</SectionHeading>
           <ul className="grid gap-3 md:grid-cols-3">
             {previews.map((p) => (
               <li key={p.id}>
@@ -114,8 +115,8 @@ export function Overview({ portfolioId, archived, exposures, holdings, maturity,
         <section aria-labelledby="largest">
           <SectionHeading id="largest">Largest holdings</SectionHeading>
           <RankedBars
-            ariaLabel="Largest holdings by Reference Value"
-            rows={top.map((h) => ({ key: h.positionId, label: h.label, sub: h.assetClassLabel, magnitude: h.referenceValueGhs ?? 0, valueText: formatGhs(h.referenceValueGhs!), detailText: `${pct(h.weightPct ?? 0)} of valued Reference Value`, color: CLASS_VAR[h.assetClass], href: h.inspectHref }))}
+            ariaLabel={`Largest holdings by ${vLabel}`}
+            rows={top.map((h) => ({ key: h.positionId, label: h.label, sub: h.assetClassLabel, magnitude: h.referenceValueGhs ?? 0, valueText: formatGhs(h.referenceValueGhs!), detailText: `${pct(h.weightPct ?? 0)} of valued ${vLabel}`, color: CLASS_VAR[h.assetClass], href: h.inspectHref }))}
           />
           <p className="mt-3 text-sm"><Link href={link("holdings")} className={`rounded font-medium text-blue-700 hover:underline dark:text-blue-400 ${FOCUS}`}>See all {holdings.length} holdings →</Link></p>
         </section>

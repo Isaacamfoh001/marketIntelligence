@@ -35,6 +35,7 @@ import { EXPOSURE_ASSET_CLASS_ORDER, round2, type ValuedPosition, type BondValua
 import { explainScenario } from "./explain";
 import { resolveShock, validateRules } from "./shocks";
 import type {
+  BasisBasisRow,
   BillScenarioDetail,
   BondScenarioDetail,
   EquityScenarioDetail,
@@ -225,6 +226,9 @@ export function runScenario(input: ScenarioInput): ScenarioResult {
       resolution: i.resolution,
       status: "PARTICIPATING",
       outcome: i.resolution.winner ? "SHOCKED" : "UNCHANGED",
+      basis: v.basis,
+      startingAssumption: v.assumption,
+      korblyBasis: v.korblyBasis,
       recency: v.recency,
       inputDate: v.inputDate,
       inputAgeDays: v.inputAgeDays,
@@ -271,6 +275,18 @@ export function runScenario(input: ScenarioInput): ScenarioResult {
   const stale = staleOf(part.filter((p) => p.recency === "STALE"));
   const recent = staleOf(part.filter((p) => p.recency === "RECENT"));
 
+  const basisRow = (rows: ParticipatingPositionResult[]): BasisBasisRow => {
+    const r = sumC(rows, (p) => p.referenceValueGhs);
+    const sc = sumC(rows, (p) => p.scenarioValueGhs);
+    return { count: rows.length, startingValueGhs: fromCents(r), scenarioValueGhs: fromCents(sc), impactGhs: fromCents(sc - r), startingPct: pctOf(r, refC) };
+  };
+  const byBasis = { reference: basisRow(part.filter((p) => p.basis === "REFERENCE")), indicative: basisRow(part.filter((p) => p.basis === "INDICATIVE")), assumption: basisRow(part.filter((p) => p.basis === "ANALYST_ASSUMPTION")), supported: basisRow(part.filter((p) => p.basis !== "ANALYST_ASSUMPTION")) };
+  const startingBasisFingerprint = part
+    .filter((p) => p.startingAssumption)
+    .map((p) => `${p.positionId}|${p.startingAssumption!.kind}|${p.startingAssumption!.value ?? "par"}|${p.startingAssumption!.overridesReference ? "override" : "fill"}`)
+    .sort()
+    .join(";");
+
   const byLabel = (a: ParticipatingPositionResult, b: ParticipatingPositionResult) => a.label.localeCompare(b.label) || a.positionId.localeCompare(b.positionId);
   const largestNegative = part.filter((p) => p.impactGhs < 0).sort((a, b) => a.impactGhs - b.impactGhs || byLabel(a, b)).slice(0, LARGEST_IMPACTS_LIMIT);
   const largestPositive = part.filter((p) => p.impactGhs > 0).sort((a, b) => b.impactGhs - a.impactGhs || byLabel(a, b)).slice(0, LARGEST_IMPACTS_LIMIT);
@@ -292,6 +308,9 @@ export function runScenario(input: ScenarioInput): ScenarioResult {
     scenarioValueGhs: hasBasis ? fromCents(scenC) : null,
     impactGhs: hasBasis ? fromCents(impactC) : null,
     impactPct: hasBasis ? pctOf(impactC, refC) : null,
+    byBasis,
+    assumptionBasisPct: hasBasis ? pctOf(toCents(byBasis.assumption.startingValueGhs), refC) : null,
+    startingBasisFingerprint,
     recentBasis: recent,
     staleBasis: stale,
     staleBasisPct: hasBasis ? pctOf(toCents(stale.referenceValueGhs), refC) : null,

@@ -5,7 +5,8 @@ import { getScenarioLibrary } from "@/lib/queries/scenarios";
 import { buildWorkspace, getStressOutcome, getTemplatePreviews } from "@/lib/queries/workspace";
 import { archivePortfolioAction, restorePortfolioAction } from "../actions";
 import { AssetAllocationPanel, Callouts, CouponPanel, IssuerPanel, MaturityLadderPanel, RateSensitivityPanel, UpcomingMaturitiesPanel } from "@/components/portfolio/ExposurePanels";
-import { EXPOSURE_COPY } from "@/lib/portfolio";
+import { EXPOSURE_COPY, valueTerms } from "@/lib/portfolio";
+import type { InsightContext } from "@/lib/decision-insights";
 import { GroupHeading } from "@/components/portfolio/exposure-ui";
 import { MethodologyDisclosure } from "@/components/portfolio/MethodologyDisclosure";
 import { PositionDrilldown } from "@/components/portfolio/PositionDrilldown";
@@ -13,7 +14,7 @@ import { UnvaluedSection } from "@/components/portfolio/PositionsTable";
 import { EquitySourceNotice } from "@/components/EquitySourceNotice";
 import { Hero } from "@/components/workspace/Hero";
 import { HoldingsView, parseLens } from "@/components/workspace/Holdings";
-import { InsightsSection, InvestigationList } from "@/components/workspace/Insights";
+import { InsightsSection, InvestigationList, PrimaryConclusionCard } from "@/components/workspace/Insights";
 import { Overview } from "@/components/workspace/Overview";
 import { QualityPanel } from "@/components/workspace/Quality";
 import { Disclosure, FOCUS, SectionHeading } from "@/components/workspace/shared";
@@ -32,7 +33,7 @@ export const dynamic = "force-dynamic";
 // data the chosen perspective needs is loaded.
 // ---------------------------------------------------------------------------
 
-type Query = { view?: string; lens?: string; position?: string; stress?: string; scenario?: string; duplicate?: string; saved?: string; removed?: string; added?: string };
+type Query = { view?: string; lens?: string; position?: string; stress?: string; scenario?: string; duplicate?: string; saved?: string; removed?: string; added?: string; assumed?: string; unassumed?: string };
 
 const BTN = `rounded-lg px-3.5 py-2 text-sm font-medium ${FOCUS}`;
 const PRIMARY = `${BTN} bg-zinc-900 text-white hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300`;
@@ -48,7 +49,10 @@ export default async function PortfolioPage({ params, searchParams }: { params: 
   const view = parseView(query.view, !!query.position);
   const archived = portfolio.archivedAt !== null;
   const exposures = getPortfolioExposures(portfolio);
-  const ws = buildWorkspace(portfolio, exposures);
+  // The perspective IS the question: it decides which dimension leads the insights and the headline conclusion.
+  const contextOf: Record<typeof view, InsightContext> = { overview: "OVERVIEW", holdings: "OVERVIEW", exposure: "EXPOSURE", scenarios: "SCENARIO", insights: "QUALITY" };
+  const ws = buildWorkspace(portfolio, exposures, contextOf[view]);
+  const terms = valueTerms(portfolio.summary);
   const empty = portfolio.positions.length === 0;
   const hasBonds = portfolio.positions.some((p) => p.holding.assetClass === "BOND");
   const hasBills = portfolio.positions.some((p) => p.holding.assetClass === "TREASURY_BILL");
@@ -101,15 +105,16 @@ export default async function PortfolioPage({ params, searchParams }: { params: 
       ) : view === "holdings" ? (
         <section aria-labelledby="holdings-h" className="space-y-4">
           <SectionHeading id="holdings-h" hint="Select a holding to see its valuation, evidence and source.">Holdings</SectionHeading>
-          {selected && <PositionDrilldown portfolioId={portfolio.id} row={selected} provenance={provenance} valuationDateIso={portfolio.valuationDate} notice={query.duplicate ? "duplicate" : query.saved ? "saved" : undefined} />}
-          <HoldingsView portfolioId={portfolio.id} holdings={ws.holdings} lens={parseLens(query.lens)} selectedId={selected?.positionId} />
+          {selected && <PositionDrilldown portfolioId={portfolio.id} row={selected} provenance={provenance} valuationDateIso={portfolio.valuationDate} notice={query.duplicate ? "duplicate" : query.saved ? "saved" : query.assumed ? "assumed" : query.unassumed ? "unassumed" : undefined} archived={archived} />}
+          <HoldingsView portfolioId={portfolio.id} holdings={ws.holdings} lens={parseLens(query.lens)} selectedId={selected?.positionId} valueLabel={terms.label} />
           <UnvaluedSection portfolioId={portfolio.id} rows={portfolio.positions} />
         </section>
       ) : view === "exposure" ? (
         <div className="space-y-6">
+          <PrimaryConclusionCard conclusion={ws.insights.primary} heading="What the exposures say" />
           <Callouts callouts={exposures.callouts} />
           <section aria-label="Exposure" className="space-y-3">
-            <GroupHeading note="Market analytics — built from Reference Values">Exposure</GroupHeading>
+            <GroupHeading note={terms.analytical ? "Built from the Analytical Starting Value — Korbly-supported valuations plus the analyst assumptions disclosed below" : "Market analytics — built from Reference Values"}>Exposure</GroupHeading>
             <div className="grid gap-3 lg:grid-cols-2">
               <AssetAllocationPanel e={exposures} />
               <IssuerPanel e={exposures} />
@@ -154,11 +159,12 @@ export default async function PortfolioPage({ params, searchParams }: { params: 
             <SectionHeading id="insights-inv" hint="Investigation prompts with the measured reason — not recommendations.">Worth investigating</SectionHeading>
             <InvestigationList items={ws.insights.investigations} />
           </div>
-          <QualityPanel quality={ws.quality} holdings={ws.holdings} />
+          <QualityPanel quality={ws.quality} holdings={ws.holdings} summary={portfolio.summary} />
           <Disclosure summary="How insights are chosen and ranked">
             <ul className="list-disc space-y-1 pl-5 text-xs text-zinc-600 dark:text-zinc-400">
-              <li>Every insight is scored as a share of something real — of valued Reference Value, of rate sensitivity, or of contractual principal — and the basis is shown on the card.</li>
-              <li>Holdings that cannot be valued always come first, because a total that silently omits a holding is the first thing to know.</li>
+              <li>Each kind of insight is ranked only against others of its own kind, by the share that fits it: composition and concentration by share of value, rate sensitivity by share of measured sensitivity, maturity by share of contractual principal, data quality by share of value on older evidence, valuation basis by share of value resting on assumptions. These shares are never compared with each other, and there is no combined score.</li>
+              <li>Which kinds lead depends on what you are looking at: what is excluded first, then how much rests on assumptions, then the question of the page — composition on the Overview, rate sensitivity on Exposure, valuation basis here.</li>
+              <li>Worth-investigating prompts follow their own priority, not the insight ranking: a holding with no value comes first, then a scenario driver that starts from an assumption, a material assumption, older evidence, the largest rate-sensitive holding, near-term maturities, and a majority concentration.</li>
               <li>At most four insights and three investigation prompts are shown; ties are broken in a fixed order.</li>
               <li>Insights describe the portfolio. They are not recommendations, forecasts or ratings, and Korbly does not say any level is &ldquo;too high&rdquo;.</li>
             </ul>

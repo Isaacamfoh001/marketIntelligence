@@ -11,9 +11,35 @@
 //   investigation  what an analyst may want to look at — never BUY/SELL/HOLD
 // ---------------------------------------------------------------------------
 
-import type { ExposureAssetClass } from "../portfolio";
+import type { ExposureAssetClass, ValuationBasis } from "../portfolio";
 
-export type InsightKind = "UNVALUED_EXPOSURE" | "DOMINANT_ASSET_CLASS" | "LARGEST_ISSUER" | "LARGEST_HOLDING" | "RATE_DRIVER" | "NEAR_MATURITY" | "STALE_EVIDENCE";
+// ---------------------------------------------------------------------------
+// METHOD (M9.0.1). Composition, concentration, rate sensitivity, maturity,
+// scenario contribution, data quality and valuation basis answer DIFFERENT
+// questions, so they are never put on one artificial scale. Each finding is
+// ranked only against others IN ITS OWN DIMENSION, by that dimension's natural
+// denominator (`share` + `shareBasis`). Which dimensions lead is then a fixed,
+// readable product policy per CONTEXT (what is the user looking at?) — there is
+// no universal importance score. See `selectFindings` in portfolio-insights.ts.
+// ---------------------------------------------------------------------------
+
+export type InsightDimension = "UNVALUED" | "VALUATION_BASIS" | "COMPOSITION" | "CONCENTRATION" | "RATE_SENSITIVITY" | "MATURITY" | "DATA_QUALITY" | "SCENARIO";
+
+/** The question the user is asking: the perspective they are on. Decides which dimension leads. */
+export type InsightContext = "OVERVIEW" | "EXPOSURE" | "SCENARIO" | "QUALITY";
+
+export type InsightKind =
+  | "UNVALUED_EXPOSURE"
+  | "ASSUMPTION_DEPENDENCE"
+  | "DOMINANT_ASSET_CLASS"
+  | "LARGEST_ISSUER"
+  | "LARGEST_HOLDING"
+  | "RATE_DRIVER"
+  | "NEAR_MATURITY"
+  | "STALE_EVIDENCE";
+
+/** A share is "material" for an investigation prompt at or above this share of ITS OWN denominator (a stated product rule, not a tuned threshold). */
+export const MATERIAL_SHARE_PCT = 10;
 
 /** Where a figure came from, so a conclusion can be traced to a number, a position and a page. */
 export interface EvidenceItem {
@@ -24,7 +50,12 @@ export interface EvidenceItem {
 
 export interface Investigation {
   id: string;
-  kind: InsightKind | "SCENARIO_DRIVER" | "SCENARIO_RATE" | "SCENARIO_STALE" | "SCENARIO_EXCLUDED";
+  kind: InsightKind | "SCENARIO_DRIVER" | "SCENARIO_RATE" | "SCENARIO_STALE" | "SCENARIO_EXCLUDED" | "SCENARIO_ASSUMPTION";
+  /**
+   * Investigation priority class (1 = look first). Distinct from informational insight ranking: an unvalued holding has no
+   * value denominator but is still the first thing to look at. See INVESTIGATION_PRIORITY.
+   */
+  priority: number;
   /** "Review GoG Jul-34" */
   title: string;
   /** Plain prompt. Always an invitation to look, never an instruction to trade. */
@@ -39,10 +70,12 @@ export interface Investigation {
 export interface Insight {
   id: string;
   kind: InsightKind;
-  /** Materiality on a 0–100 scale — always a share of something real (portfolio value, rate sensitivity, maturity ladder). Used only to rank. */
-  materiality: number;
-  /** What is measured, so the ranking rule is visible: e.g. "Share of valued Reference Value". */
-  materialityBasis: string;
+  /** The analytical dimension this insight belongs to. It is ranked only against other findings of the same dimension. */
+  dimension: InsightDimension;
+  /** Share (0–100) of this dimension's NATURAL denominator, named in `shareBasis`. Never compared across dimensions. Null when the dimension has no value denominator (unvalued holdings). */
+  share: number | null;
+  /** What the share is a share OF, so the ranking rule is visible: e.g. "Share of Analytical Starting Value". */
+  shareBasis: string;
   title: string;
   fact: string;
   interpretation: string | null;
@@ -53,6 +86,9 @@ export interface Insight {
 
 export interface PrimaryConclusion {
   kind: "PORTFOLIO" | "NOT_VALUED";
+  /** The perspective this conclusion answers. */
+  context: InsightContext;
+  dimension: InsightDimension | null;
   fact: string;
   interpretation: string | null;
   /** The insight ids the conclusion was drawn from. */
@@ -61,6 +97,7 @@ export interface PrimaryConclusion {
 }
 
 export interface DecisionInsights {
+  context: InsightContext;
   primary: PrimaryConclusion | null;
   /** Ranked, at most {@link MAX_INSIGHTS}. */
   insights: Insight[];
@@ -81,6 +118,8 @@ export type RateKind = "BOND_YIELD" | "BILL_RATE";
 
 export interface HoldingRate {
   kind: RateKind;
+  /** What the starting yield/rate behind this sensitivity rests on. */
+  basis: ValuationBasis;
   /** GHS per +1bp, positive magnitude (M8.2). */
   dv01Ghs: number;
   /** First-order GHS change for a 1 percentage-point rise = DV01 × 100. An estimate, not a scenario result. */
@@ -107,9 +146,22 @@ export interface HoldingView {
   assetClass: ExposureAssetClass;
   assetClassLabel: string;
   status: "VALUED" | "UNVALUED";
+  /** What kind of value this holding is carried at; UNVALUED when it has none. Independent of data quality. */
+  basis: ValuationBasis | "UNVALUED";
+  /** The value the holding contributes (Reference, Indicative or assumption value). Named for M8.1 compatibility — see ValuedPosition.referenceValueGhs. */
   referenceValueGhs: number | null;
-  /** Share of valued Reference Value (0–100); null when unvalued. */
+  /** Share of the valued total — Reference Value, or Analytical Starting Value when assumptions participate (0–100); null when unvalued. */
   weightPct: number | null;
+  /** "28.00% yield" when the holding is carried at an analyst assumption; null otherwise. */
+  assumptionSummary: string | null;
+  /** When an assumption overrides Korbly's own value: what Korbly supports. */
+  korblyValueGhs: number | null;
+  /** Contractual size in GHS where it exists (bond nominal, bill face) — the amount an unvalued holding still represents. */
+  principalGhs: number | null;
+  /** True when the holding is unvalued only for lack of market evidence, so an explicit analyst assumption could responsibly stand in. */
+  canAssume: boolean;
+  /** A stored assumption that is not in force (Korbly now has a supported value), or could not be applied. */
+  assumptionNote: string | null;
   /** "GHS 1,000,000 face" / "GHS 1,500,000 nominal" / "100,000 shares". */
   sizeText: string;
   maturityDate: string | null;
@@ -145,10 +197,18 @@ export interface QualityView {
   recentCount: number;
   staleCount: number;
   unvaluedCount: number;
-  /** Share of valued Reference Value on recent evidence (0–100); null when nothing is valued. */
+  /** Holdings carried at an analyst assumption — neither recent nor older evidence. */
+  assumptionCount: number;
+  /** Korbly-supported holdings (reference + indicative). */
+  supportedCount: number;
+  /** Share of the valued total on recent evidence (0–100); null when nothing is valued. */
   recentPct: number | null;
-  /** "5 of 6 holdings use recent valuation evidence." */
+  /** Share of the valued total that rests on analyst assumptions (0–100); null when nothing is valued. */
+  assumptionPct: number | null;
+  /** "5 of 6 holdings use recent valuation evidence." — spelled out for the Data-quality panel. */
   summary: string;
+  /** Compact, count-first status for the hero, e.g. "7 recent · 1 older · 2 assumed · 1 not valued". Zero counts are omitted. */
+  heroLine: string;
   /** Holdings that need a look, most material first. */
   needsReview: { positionId: string; label: string; message: string; href: string }[];
   /** True when any holding is a Treasury bill (indicative valuation disclosure applies). */

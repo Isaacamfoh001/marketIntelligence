@@ -4,11 +4,13 @@
 // so they work in server and client components alike.
 // ---------------------------------------------------------------------------
 
-import { RECENCY_LABEL, UNVALUED_LABEL, type InputRecency, type PortfolioAssetClass, type UnvaluedCode } from "@/lib/portfolio";
+import { RECENCY_LABEL, UNVALUED_LABEL, type PortfolioAssetClass, type UnvaluedCode, type ValuationRecency } from "@/lib/portfolio";
 
 const PILL = "inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium leading-none whitespace-nowrap";
 
-export function RecencyBadge({ recency }: { recency: InputRecency }) {
+export function RecencyBadge({ recency }: { recency: ValuationRecency }) {
+  // An analyst assumption has no observation, so it has no recency — it is neither "recent" nor "stale".
+  if (recency === "NOT_APPLICABLE") return <span className={`${PILL} bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300`} title="An analyst assumption is not an observation, so it has no recency.">Not observed</span>;
   return recency === "RECENT" ? (
     <span className={`${PILL} bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400`} title={RECENCY_LABEL.RECENT}>
       Recent
