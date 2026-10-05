@@ -11,7 +11,7 @@
 
 import { getPrisma } from "./prisma";
 import { classifyLifecycle, toValuationDate } from "./fixed-income";
-import { checkBillAddable, checkBondAddable, checkEquityAddable, validatePositionDraft, type PortfolioAssetClass } from "./portfolio";
+import { batchIdentity, checkBillAddable, checkBondAddable, checkEquityAddable, validateBatchEntries, validatePositionDraft, type BatchEntryInput, type BatchRowError, type ParsedBatchEntry, type PortfolioAssetClass } from "./portfolio";
 import { checkBillIssued, parseIsoDate, validateBillTerms } from "./treasury-bills";
 
 export type ServiceResult<T = unknown> = ({ ok: true } & T) | { ok: false; error: string; /** Set when the instrument is already held — the caller should send the analyst to edit it. */ existingPositionId?: string };
@@ -172,4 +172,116 @@ export async function removePosition(positionId: string): Promise<ServiceResult>
   if (position.portfolio.archivedAt) return fail("This portfolio is archived — restore it before changing positions.");
   await prisma.$transaction([prisma.portfolioPosition.delete({ where: { id: positionId } }), prisma.portfolio.update({ where: { id: position.portfolioId }, data: { updatedAt: new Date() } })]);
   return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// Batch add (M9.0) — several instruments, ALL-OR-NOTHING. Every row is checked
+// against the real instrument rows first (the same rules as addPosition /
+// addTreasuryBillPosition); if any row fails, nothing is written and every
+// failure is returned by row key. The writes then happen in ONE transaction.
+// ---------------------------------------------------------------------------
+
+export type BatchResult = { ok: true; positionIds: string[]; positionCount: number } | { ok: false; error: string; rowErrors: BatchRowError[] };
+
+export async function addPositionsBatch(input: { portfolioId: string; entries: BatchEntryInput[] }): Promise<BatchResult> {
+  const prisma = getPrisma();
+  const failAll = (rowErrors: BatchRowError[], error = "Nothing was added. Fix the highlighted rows and try again."): BatchResult => ({ ok: false, error, rowErrors });
+
+  const portfolio = await prisma.portfolio.findUnique({ where: { id: input.portfolioId }, select: { id: true, archivedAt: true } });
+  if (!portfolio) return failAll([], "Portfolio not found.");
+  if (portfolio.archivedAt) return failAll([], "This portfolio is archived — restore it before changing positions.");
+
+  const checked = validateBatchEntries(input.entries);
+  if (!checked.ok) return failAll(checked.errors);
+
+  const today = toValuationDate(new Date());
+  const errors: BatchRowError[] = [];
+  const existing = await prisma.portfolioPosition.findMany({ where: { portfolioId: input.portfolioId }, select: { fixedIncomeSecurityId: true, securityId: true, treasuryBill: { select: { instrument: { select: { tenorDays: true } }, maturityDate: true } } } });
+  const held = new Set<string>();
+  for (const p of existing) {
+    if (p.fixedIncomeSecurityId) held.add(`BOND:${p.fixedIncomeSecurityId}`);
+    if (p.securityId) held.add(`EQUITY:${p.securityId}`);
+    if (p.treasuryBill) held.add(`BILL:${p.treasuryBill.instrument.tenorDays}:${p.treasuryBill.maturityDate.toISOString().slice(0, 10)}`);
+  }
+
+  const bondIds = checked.entries.flatMap((e) => (e.assetClass === "BOND" ? [e.instrumentId] : []));
+  const equityIds = checked.entries.flatMap((e) => (e.assetClass === "EQUITY" ? [e.instrumentId] : []));
+  const [bonds, equities, instruments] = await Promise.all([
+    prisma.fixedIncomeSecurity.findMany({ where: { id: { in: bondIds } } }),
+    prisma.security.findMany({ where: { id: { in: equityIds } } }),
+    prisma.treasuryInstrument.findMany({ where: { instrumentType: "BILL", active: true }, select: { id: true, tenorDays: true } }),
+  ]);
+  const bondById = new Map(bonds.map((b) => [b.id, b]));
+  const equityById = new Map(equities.map((s) => [s.id, s]));
+  const instrumentByTenor = new Map(instruments.map((i) => [i.tenorDays, i.id]));
+
+  type Plan = { entry: ParsedBatchEntry; terms?: { issueDate: Date; maturity: Date; tenorDays: number; isin: string | null; instrumentId: string } };
+  const plans: Plan[] = [];
+  for (const e of checked.entries) {
+    if (held.has(batchIdentity(e))) {
+      errors.push({ key: e.key, error: "Already in this portfolio — edit the existing position instead." });
+      continue;
+    }
+    if (e.assetClass === "BOND") {
+      const bond = bondById.get(e.instrumentId);
+      if (!bond) { errors.push({ key: e.key, error: "Bond not found." }); continue; }
+      const addable = checkBondAddable({ currency: bond.currency, lifecycle: classifyLifecycle(bond.maturityDate, today), couponType: bond.couponType });
+      if (!addable.addable) { errors.push({ key: e.key, error: addable.reason }); continue; }
+      plans.push({ entry: e });
+    } else if (e.assetClass === "EQUITY") {
+      const sec = equityById.get(e.instrumentId);
+      if (!sec) { errors.push({ key: e.key, error: "Security not found." }); continue; }
+      const addable = checkEquityAddable({ currency: sec.currency, active: sec.active });
+      if (!addable.addable) { errors.push({ key: e.key, error: addable.reason }); continue; }
+      plans.push({ entry: e });
+    } else {
+      const maturity = parseIsoDate(e.maturityDate);
+      if (!maturity) { errors.push({ key: e.key, error: "Enter the maturity date as a valid date." }); continue; }
+      const terms = validateBillTerms({ tenorDays: e.tenorDays, maturityDate: maturity, currency: "GHS", isin: e.isin });
+      if (!terms.ok) { errors.push({ key: e.key, error: terms.error }); continue; }
+      const issued = checkBillIssued(terms.terms, today);
+      if (!issued.ok) { errors.push({ key: e.key, error: issued.error }); continue; }
+      const addable = checkBillAddable({ currency: "GHS", maturityDate: maturity }, today);
+      if (!addable.addable) { errors.push({ key: e.key, error: addable.reason }); continue; }
+      const instrumentId = instrumentByTenor.get(e.tenorDays);
+      if (!instrumentId) { errors.push({ key: e.key, error: `No ${e.tenorDays}-day Treasury bill instrument is configured.` }); continue; }
+      plans.push({ entry: e, terms: { issueDate: terms.terms.issueDate, maturity, tenorDays: e.tenorDays, isin: e.isin, instrumentId } });
+    }
+  }
+  if (errors.length > 0) return failAll(errors);
+
+  try {
+    const positionIds = await prisma.$transaction(async (tx) => {
+      const ids: string[] = [];
+      for (const { entry, terms } of plans) {
+        if (entry.assetClass === "BOND") {
+          ids.push((await tx.portfolioPosition.create({ data: { portfolioId: input.portfolioId, assetClass: "BOND", fixedIncomeSecurityId: entry.instrumentId, nominalGhs: entry.nominalGhs }, select: { id: true } })).id);
+        } else if (entry.assetClass === "EQUITY") {
+          ids.push((await tx.portfolioPosition.create({ data: { portfolioId: input.portfolioId, assetClass: "EQUITY", securityId: entry.instrumentId, shares: entry.shares }, select: { id: true } })).id);
+        } else if (terms) {
+          let bill = await tx.treasuryBill.findUnique({ where: { instrumentId_maturityDate: { instrumentId: terms.instrumentId, maturityDate: terms.maturity } } });
+          if (bill && terms.isin && bill.isin && bill.isin !== terms.isin) throw new BatchRowFailure(entry.key, `This bill is already recorded with ISIN ${bill.isin}.`);
+          if (!bill) bill = await tx.treasuryBill.create({ data: { instrumentId: terms.instrumentId, issueDate: terms.issueDate, maturityDate: terms.maturity, isin: terms.isin } });
+          else if (terms.isin && !bill.isin) bill = await tx.treasuryBill.update({ where: { id: bill.id }, data: { isin: terms.isin } });
+          ids.push((await tx.portfolioPosition.create({ data: { portfolioId: input.portfolioId, assetClass: "TREASURY_BILL", treasuryBillId: bill.id, nominalGhs: entry.faceValueGhs }, select: { id: true } })).id);
+        }
+      }
+      await tx.portfolio.update({ where: { id: input.portfolioId }, data: { updatedAt: new Date() } });
+      return ids;
+    });
+    return { ok: true, positionIds, positionCount: positionIds.length };
+  } catch (e) {
+    if (e instanceof BatchRowFailure) return failAll([{ key: e.key, error: e.message }]);
+    if (isUniqueViolation(e)) return failAll([], "One of these instruments was added by someone else at the same time. Nothing was added — reload and try again.");
+    throw e;
+  }
+}
+
+class BatchRowFailure extends Error {
+  constructor(
+    readonly key: string,
+    message: string,
+  ) {
+    super(message);
+  }
 }

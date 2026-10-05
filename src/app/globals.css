@@ -31,3 +31,52 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* Portfolio workspace (M9.0): asset-class colours — always paired with a text label, never the only signal. */
+:root {
+  --c-bill: #0d9488;
+  --c-gov: #2563eb;
+  --c-corp: #0ea5e9;
+  --c-eq: #7c3aed;
+  --c-gain: #0f766e;
+  --c-loss: #be123c;
+}
+.dark {
+  --c-bill: #2dd4bf;
+  --c-gov: #60a5fa;
+  --c-corp: #38bdf8;
+  --c-eq: #a78bfa;
+  --c-gain: #5eead4;
+  --c-loss: #fb7185;
+}
+
+@keyframes korbly-grow {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+@keyframes korbly-rise {
+  from {
+    transform: scaleY(0);
+  }
+  to {
+    transform: scaleY(1);
+  }
+}
+.korbly-grow {
+  transform-origin: left center;
+  animation: korbly-grow 600ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+.korbly-rise {
+  transform-origin: center bottom;
+  animation: korbly-rise 600ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .korbly-grow,
+  .korbly-rise {
+    animation: none;
+  }
+}

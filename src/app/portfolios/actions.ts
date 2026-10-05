@@ -9,8 +9,8 @@
 // ---------------------------------------------------------------------------
 
 import { redirect } from "next/navigation";
-import { addPosition, addTreasuryBillPosition, createPortfolio, removePosition, setPortfolioArchived, updatePosition } from "@/lib/portfolio-service";
-import { parseEnteredNumber } from "@/lib/portfolio";
+import { addPositionsBatch, createPortfolio, removePosition, setPortfolioArchived, updatePosition } from "@/lib/portfolio-service";
+import { parseEnteredNumber, type BatchEntryInput, type BatchRowError } from "@/lib/portfolio";
 
 export interface FormState {
   error?: string;
@@ -47,32 +47,6 @@ function readSize(assetClass: "BOND" | "EQUITY" | "TREASURY_BILL", formData: For
   return amount ? { nominalGhs: n } : { shares: n };
 }
 
-/** Adds a Treasury bill holding from the analyst's description of it (tenor, maturity date, face amount). */
-export async function addTreasuryBillAction(portfolioId: string, _prev: FormState, formData: FormData): Promise<FormState> {
-  const tenorDays = Number(text(formData, "tenorDays"));
-  const faceValueGhs = parseEnteredNumber(text(formData, "faceValueGhs"));
-  if (faceValueGhs === null) return { error: "Enter the face amount in GHS as a number." };
-  const result = await addTreasuryBillPosition({ portfolioId, tenorDays, maturityDate: text(formData, "maturityDate"), faceValueGhs, isin: text(formData, "isin") });
-  if (result.ok) redirect(`/portfolios/${portfolioId}?position=${result.positionId}#inspect`);
-  if (result.existingPositionId) redirect(`/portfolios/${portfolioId}?position=${result.existingPositionId}&duplicate=1#inspect`);
-  return { error: result.error };
-}
-
-export async function addPositionAction(portfolioId: string, _prev: FormState, formData: FormData): Promise<FormState> {
-  const assetClass = text(formData, "assetClass");
-  if (assetClass !== "BOND" && assetClass !== "EQUITY") return { error: "Choose an instrument first." };
-  const instrumentId = text(formData, "instrumentId");
-  if (!instrumentId) return { error: "Choose an instrument first." };
-  const size = readSize(assetClass, formData);
-  if (size.error) return { error: size.error };
-
-  const result = await addPosition({ portfolioId, assetClass, instrumentId, nominalGhs: size.nominalGhs, shares: size.shares });
-  if (result.ok) redirect(`/portfolios/${portfolioId}?position=${result.positionId}#inspect`);
-  // Already held: take the analyst to the existing position rather than creating a second lot.
-  if (result.existingPositionId) redirect(`/portfolios/${portfolioId}?position=${result.existingPositionId}&duplicate=1#inspect`);
-  return { error: result.error };
-}
-
 export async function updatePositionAction(portfolioId: string, positionId: string, assetClass: "BOND" | "EQUITY" | "TREASURY_BILL", _prev: FormState, formData: FormData): Promise<FormState> {
   const size = readSize(assetClass, formData);
   if (size.error) return { error: size.error };
@@ -85,4 +59,41 @@ export async function removePositionAction(portfolioId: string, positionId: stri
   const result = await removePosition(positionId);
   if (!result.ok) throw new Error(result.error);
   redirect(`/portfolios/${portfolioId}?removed=1`);
+}
+
+export interface BatchFormState {
+  error?: string;
+  rowErrors?: BatchRowError[];
+}
+
+/** Defensive parse of the basket the client posts as JSON — every field is re-validated by the service. */
+function parseBatchEntries(raw: string): BatchEntryInput[] | null {
+  let data: unknown;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(data)) return null;
+  const str = (v: unknown) => (typeof v === "string" ? v : "");
+  const out: BatchEntryInput[] = [];
+  for (const row of data) {
+    if (typeof row !== "object" || row === null) return null;
+    const r = row as Record<string, unknown>;
+    const key = str(r.key);
+    if (r.assetClass === "BOND") out.push({ key, assetClass: "BOND", instrumentId: str(r.instrumentId), nominalGhs: str(r.nominalGhs) });
+    else if (r.assetClass === "EQUITY") out.push({ key, assetClass: "EQUITY", instrumentId: str(r.instrumentId), shares: str(r.shares) });
+    else if (r.assetClass === "TREASURY_BILL") out.push({ key, assetClass: "TREASURY_BILL", tenorDays: Number(r.tenorDays), maturityDate: str(r.maturityDate), faceValueGhs: str(r.faceValueGhs), isin: str(r.isin) });
+    else return null;
+  }
+  return out;
+}
+
+/** Adds the whole basket in one transaction, or nothing (see addPositionsBatch). */
+export async function addPositionsBatchAction(portfolioId: string, _prev: BatchFormState, formData: FormData): Promise<BatchFormState> {
+  const entries = parseBatchEntries(text(formData, "entries"));
+  if (!entries) return { error: "The selection could not be read. Reload the page and try again." };
+  const result = await addPositionsBatch({ portfolioId, entries });
+  if (result.ok) redirect(`/portfolios/${portfolioId}?added=${result.positionCount}`);
+  return { error: result.error, rowErrors: result.rowErrors };
 }

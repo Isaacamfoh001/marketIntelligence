@@ -1,116 +1,120 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getInstrumentContext, getPortfolio, getPortfolioExposures, getPositionProvenance } from "@/lib/queries/portfolio";
-import { formatIsoDate } from "@/lib/fixed-income";
+import { getScenarioLibrary } from "@/lib/queries/scenarios";
+import { buildWorkspace, getStressOutcome, getTemplatePreviews } from "@/lib/queries/workspace";
 import { archivePortfolioAction, restorePortfolioAction } from "../actions";
-import { CoverageSummary } from "@/components/portfolio/CoverageSummary";
 import { AssetAllocationPanel, Callouts, CouponPanel, IssuerPanel, MaturityLadderPanel, RateSensitivityPanel, UpcomingMaturitiesPanel } from "@/components/portfolio/ExposurePanels";
 import { EXPOSURE_COPY } from "@/lib/portfolio";
 import { GroupHeading } from "@/components/portfolio/exposure-ui";
 import { MethodologyDisclosure } from "@/components/portfolio/MethodologyDisclosure";
 import { PositionDrilldown } from "@/components/portfolio/PositionDrilldown";
-import { PositionsTable, UnvaluedSection } from "@/components/portfolio/PositionsTable";
+import { UnvaluedSection } from "@/components/portfolio/PositionsTable";
 import { EquitySourceNotice } from "@/components/EquitySourceNotice";
+import { Hero } from "@/components/workspace/Hero";
+import { HoldingsView, parseLens } from "@/components/workspace/Holdings";
+import { InsightsSection, InvestigationList } from "@/components/workspace/Insights";
+import { Overview } from "@/components/workspace/Overview";
+import { QualityPanel } from "@/components/workspace/Quality";
+import { Disclosure, FOCUS, SectionHeading } from "@/components/workspace/shared";
+import { ScenarioOutcome, StressPicker } from "@/components/workspace/Stress";
+import { parseView, WorkspaceTabs } from "@/components/workspace/Tabs";
 
 export const dynamic = "force-dynamic";
 
 // ---------------------------------------------------------------------------
-// Portfolio detail (M8.1). Reading order: what is it worth and how well can we
-// say so → the positions → what could not be valued and why → how it works.
+// Portfolio command centre (M9.0). One portfolio, five perspectives, each
+// answering a different question:
+//   Overview   what does it look like?     Holdings   what exactly do we own?
+//   Exposure   where is risk / maturity?   Scenarios  what happens if…?
+//   Insights   what deserves attention?
+// The perspective is in the URL (?view=…) so a link shows what you saw. Only the
+// data the chosen perspective needs is loaded.
 // ---------------------------------------------------------------------------
 
-export default async function PortfolioPage({ params, searchParams }: { params: Promise<{ portfolioId: string }>; searchParams: Promise<{ position?: string; duplicate?: string; saved?: string; removed?: string }> }) {
+type Query = { view?: string; lens?: string; position?: string; stress?: string; scenario?: string; duplicate?: string; saved?: string; removed?: string; added?: string };
+
+const BTN = `rounded-lg px-3.5 py-2 text-sm font-medium ${FOCUS}`;
+const PRIMARY = `${BTN} bg-zinc-900 text-white hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300`;
+const SECONDARY = `${BTN} border border-zinc-300 text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800`;
+
+export default async function PortfolioPage({ params, searchParams }: { params: Promise<{ portfolioId: string }>; searchParams: Promise<Query> }) {
   const { portfolioId } = await params;
   const query = await searchParams;
   const ctx = await getInstrumentContext();
   const portfolio = await getPortfolio(portfolioId, ctx);
   if (!portfolio) notFound();
 
-  const selected = query.position ? portfolio.positions.find((p) => p.positionId === query.position) : undefined;
-  const provenance = selected ? await getPositionProvenance(selected) : null;
+  const view = parseView(query.view, !!query.position);
   const archived = portfolio.archivedAt !== null;
   const exposures = getPortfolioExposures(portfolio);
+  const ws = buildWorkspace(portfolio, exposures);
+  const empty = portfolio.positions.length === 0;
   const hasBonds = portfolio.positions.some((p) => p.holding.assetClass === "BOND");
   const hasBills = portfolio.positions.some((p) => p.holding.assetClass === "TREASURY_BILL");
+  const hasEquity = portfolio.positions.some((p) => p.holding.assetClass === "EQUITY");
+
+  const selected = view === "holdings" && query.position ? portfolio.positions.find((p) => p.positionId === query.position) : undefined;
+  const provenance = selected ? await getPositionProvenance(selected) : null;
+  const previews = view === "overview" && !empty ? getTemplatePreviews(portfolio) : [];
+  const library = view === "scenarios" && !empty ? await getScenarioLibrary(portfolio, ctx) : null;
+  const outcome = view === "scenarios" && (query.stress || query.scenario) ? await getStressOutcome(portfolio, ctx, { templateId: query.stress, scenarioId: query.scenario }) : null;
+
+  const actions = archived ? (
+    <form action={restorePortfolioAction.bind(null, portfolio.id)}>
+      <button type="submit" className={SECONDARY}>Restore portfolio</button>
+    </form>
+  ) : (
+    <>
+      <Link href={`/portfolios/${portfolio.id}/add`} className={PRIMARY}>Add instruments</Link>
+      {!empty && (
+        <Link href={`/portfolios/${portfolio.id}?view=scenarios`} className={SECONDARY}>Stress this portfolio</Link>
+      )}
+    </>
+  );
 
   return (
-    <div className="mx-auto max-w-6xl space-y-5">
-      <header className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <nav aria-label="Breadcrumb" className="text-xs text-zinc-500 dark:text-zinc-400">
-            <Link href="/portfolios" className="hover:underline">
-              Portfolios
-            </Link>
-          </nav>
-          <h1 className="mt-0.5 flex flex-wrap items-center gap-2 text-lg font-semibold text-zinc-900 dark:text-zinc-100">
-            {portfolio.name}
-            {archived && <span className="rounded-full border border-zinc-300 px-2 py-0.5 text-[10px] font-medium text-zinc-600 dark:border-zinc-600 dark:text-zinc-300">Archived</span>}
-          </h1>
-          {portfolio.description && <p className="mt-0.5 max-w-2xl text-sm text-zinc-500 dark:text-zinc-400">{portfolio.description}</p>}
-        </div>
-        <div className="flex items-center gap-2">
+    <div className="mx-auto max-w-6xl space-y-6">
+      <Hero name={portfolio.name} description={portfolio.description} summary={portfolio.summary} allocation={exposures.allocation} quality={ws.quality} holdings={ws.holdings} valuationDate={portfolio.valuationDate} archived={archived} actions={empty ? null : actions} />
+
+      {!empty && <WorkspaceTabs portfolioId={portfolio.id} current={view} />}
+
+      {archived && <p className="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs text-zinc-600 dark:border-zinc-700 dark:bg-zinc-800/50 dark:text-zinc-300">This portfolio is archived and read-only. Restore it to change positions.</p>}
+      {query.removed && <p role="status" className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-900 dark:border-emerald-900/50 dark:bg-emerald-900/20 dark:text-emerald-200">Position removed.</p>}
+      {query.added && <p role="status" className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-900 dark:border-emerald-900/50 dark:bg-emerald-900/20 dark:text-emerald-200">Added {query.added} {query.added === "1" ? "position" : "positions"} to the portfolio.</p>}
+      {hasEquity && <EquitySourceNotice mode="problem-only" />}
+
+      {empty ? (
+        <section aria-label="Empty portfolio" className="rounded-2xl border border-dashed border-zinc-300 px-6 py-16 text-center dark:border-zinc-700">
+          <h2 className="text-lg font-semibold tracking-tight text-zinc-900 dark:text-zinc-100">Build a portfolio to see what it is made of</h2>
+          <p className="mx-auto mt-2 max-w-md text-sm text-zinc-500 dark:text-zinc-400">Pick Treasury bills, Government of Ghana bonds, corporate bonds and equities. Korbly then shows allocation, concentration, maturity, rate sensitivity and how the portfolio responds to scenarios.</p>
           {archived ? (
-            <>
-            <Link href={`/portfolios/${portfolio.id}/scenarios`} className="rounded border border-zinc-300 px-3 py-1.5 text-sm text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">
-              Scenario Studio
-            </Link>
-            <form action={restorePortfolioAction.bind(null, portfolio.id)}>
-              <button type="submit" className="rounded border border-zinc-300 px-3 py-1.5 text-sm text-zinc-700 hover:bg-zinc-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">
-                Restore portfolio
-              </button>
+            <form action={restorePortfolioAction.bind(null, portfolio.id)} className="mt-6">
+              <button type="submit" className={SECONDARY}>Restore portfolio</button>
             </form>
-            </>
           ) : (
-            <>
-              <Link href={`/portfolios/${portfolio.id}/scenarios`} className="rounded border border-zinc-300 px-3 py-1.5 text-sm text-zinc-700 hover:bg-zinc-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">
-                Scenario Studio
-              </Link>
-              <Link href={`/portfolios/${portfolio.id}/add`} className="rounded bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300">
-                Add position
-              </Link>
-              <details className="relative">
-                <summary className="cursor-pointer list-none rounded border border-zinc-300 px-3 py-1.5 text-sm text-zinc-700 hover:bg-zinc-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">Archive…</summary>
-                <form action={archivePortfolioAction.bind(null, portfolio.id)} className="absolute right-0 z-10 mt-1 w-64 rounded border border-zinc-200 bg-white p-3 shadow-sm dark:border-zinc-700 dark:bg-zinc-900">
-                  <p className="text-xs text-zinc-600 dark:text-zinc-400">Archiving hides this portfolio from the active list. Its positions are kept and it can be restored.</p>
-                  <button type="submit" className="mt-2 rounded border border-zinc-300 px-3 py-1 text-xs font-medium text-zinc-800 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800">
-                    Confirm archive
-                  </button>
-                </form>
-              </details>
-            </>
+            <Link href={`/portfolios/${portfolio.id}/add`} className={`${PRIMARY} mt-6 inline-block`}>Add instruments</Link>
           )}
-        </div>
-      </header>
-
-      {archived && <p className="rounded border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs text-zinc-600 dark:border-zinc-700 dark:bg-zinc-800/50 dark:text-zinc-300">This portfolio is archived and read-only. Restore it to change positions.</p>}
-      {query.removed && <p role="status" className="rounded border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-900 dark:border-emerald-900/50 dark:bg-emerald-900/20 dark:text-emerald-200">Position removed.</p>}
-
-      {portfolio.positions.some((p) => p.holding.assetClass === "EQUITY") && <EquitySourceNotice mode="problem-only" />}
-      <CoverageSummary summary={portfolio.summary} />
-
-      {portfolio.positions.length > 0 && (
-        <>
+        </section>
+      ) : view === "overview" ? (
+        <Overview portfolioId={portfolio.id} archived={archived} exposures={exposures} holdings={ws.holdings} maturity={ws.maturity} insights={ws.insights} previews={previews} />
+      ) : view === "holdings" ? (
+        <section aria-labelledby="holdings-h" className="space-y-4">
+          <SectionHeading id="holdings-h" hint="Select a holding to see its valuation, evidence and source.">Holdings</SectionHeading>
+          {selected && <PositionDrilldown portfolioId={portfolio.id} row={selected} provenance={provenance} valuationDateIso={portfolio.valuationDate} notice={query.duplicate ? "duplicate" : query.saved ? "saved" : undefined} />}
+          <HoldingsView portfolioId={portfolio.id} holdings={ws.holdings} lens={parseLens(query.lens)} selectedId={selected?.positionId} />
+          <UnvaluedSection portfolioId={portfolio.id} rows={portfolio.positions} />
+        </section>
+      ) : view === "exposure" ? (
+        <div className="space-y-6">
           <Callouts callouts={exposures.callouts} />
-
           <section aria-label="Exposure" className="space-y-3">
-            <GroupHeading note="Market analytics — built from reference values">Exposure</GroupHeading>
+            <GroupHeading note="Market analytics — built from Reference Values">Exposure</GroupHeading>
             <div className="grid gap-3 lg:grid-cols-2">
               <AssetAllocationPanel e={exposures} />
               <IssuerPanel e={exposures} />
             </div>
           </section>
-
-          {!archived && (
-            <aside aria-label="Scenario Studio" className="flex flex-wrap items-center justify-between gap-2 rounded border border-zinc-200 bg-zinc-50 px-4 py-3 dark:border-zinc-800 dark:bg-zinc-900/60">
-              <p className="text-sm text-zinc-700 dark:text-zinc-300">
-                <span className="font-medium text-zinc-900 dark:text-zinc-100">What if…?</span> Test an assumption about Treasury-bill rates, bond yields or equity prices against these exposures.
-              </p>
-              <Link href={`/portfolios/${portfolio.id}/scenarios`} className="text-sm font-medium text-blue-700 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500 dark:text-blue-400">
-                Open Scenario Studio <span aria-hidden="true">→</span>
-              </Link>
-            </aside>
-          )}
-
           {(hasBonds || hasBills) && (
             <>
               <section aria-label="Fixed-income profile" className="space-y-3">
@@ -118,46 +122,61 @@ export default async function PortfolioPage({ params, searchParams }: { params: 
                 <RateSensitivityPanel e={exposures} portfolioId={portfolio.id} />
                 <MaturityLadderPanel e={exposures} portfolioId={portfolio.id} />
               </section>
-
               <section aria-label="Contractual cash flows" className="space-y-3">
                 <GroupHeading note="Contractual — from bond and bill terms, not market data">Contractual cash flows</GroupHeading>
                 <div className="grid gap-3 lg:grid-cols-2">
-                  {hasBonds ? <CouponPanel e={exposures} portfolioId={portfolio.id} /> : <p className="rounded border border-zinc-200 bg-white p-4 text-sm text-zinc-600 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-400">Treasury bills pay no coupon: each pays its face value once, at maturity.</p>}
+                  {hasBonds ? <CouponPanel e={exposures} portfolioId={portfolio.id} /> : <p className="rounded-xl border border-zinc-200 bg-white p-4 text-sm text-zinc-600 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-400">Treasury bills pay no coupon: each pays its face value once, at maturity.</p>}
                   <UpcomingMaturitiesPanel e={exposures} portfolioId={portfolio.id} />
                 </div>
                 <p className="text-[11px] text-zinc-500 dark:text-zinc-400">{EXPOSURE_COPY.contractualVsMarket}</p>
               </section>
             </>
           )}
-        </>
+          <MethodologyDisclosure />
+        </div>
+      ) : view === "scenarios" ? (
+        <section aria-labelledby="scenarios-h" className="space-y-6">
+          <SectionHeading id="scenarios-h" hint="Choose a hypothetical starting point or one of your saved scenarios. The assumptions are always shown with the result.">Scenarios</SectionHeading>
+          <StressPicker portfolioId={portfolio.id} activeTemplate={query.stress} activeScenario={query.scenario} library={library?.active ?? []} archived={archived} />
+          {outcome ? (
+            <ScenarioOutcome insight={outcome.insight} portfolioId={portfolio.id} templateId={outcome.templateId} scenarioId={outcome.scenarioId} archived={archived} />
+          ) : query.stress || query.scenario ? (
+            <p role="alert" className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-900 dark:border-red-900/50 dark:bg-red-900/20 dark:text-red-200">That scenario could not be run against this portfolio.</p>
+          ) : null}
+        </section>
+      ) : (
+        <section aria-labelledby="insights-h" className="space-y-8">
+          <div>
+            <SectionHeading id="insights-h" hint="Deterministic: the same portfolio always produces the same insights, in the same order.">Insights</SectionHeading>
+            <InsightsSection insights={ws.insights} />
+          </div>
+          <div>
+            <SectionHeading id="insights-inv" hint="Investigation prompts with the measured reason — not recommendations.">Worth investigating</SectionHeading>
+            <InvestigationList items={ws.insights.investigations} />
+          </div>
+          <QualityPanel quality={ws.quality} holdings={ws.holdings} />
+          <Disclosure summary="How insights are chosen and ranked">
+            <ul className="list-disc space-y-1 pl-5 text-xs text-zinc-600 dark:text-zinc-400">
+              <li>Every insight is scored as a share of something real — of valued Reference Value, of rate sensitivity, or of contractual principal — and the basis is shown on the card.</li>
+              <li>Holdings that cannot be valued always come first, because a total that silently omits a holding is the first thing to know.</li>
+              <li>At most four insights and three investigation prompts are shown; ties are broken in a fixed order.</li>
+              <li>Insights describe the portfolio. They are not recommendations, forecasts or ratings, and Korbly does not say any level is &ldquo;too high&rdquo;.</li>
+            </ul>
+          </Disclosure>
+        </section>
       )}
 
-      {selected && <PositionDrilldown portfolioId={portfolio.id} row={selected} provenance={provenance} valuationDateIso={portfolio.valuationDate} notice={query.duplicate ? "duplicate" : query.saved ? "saved" : undefined} />}
-
-      <section aria-labelledby="positions">
-        <div className="mb-2 flex flex-wrap items-end justify-between gap-2">
-          <h2 id="positions" className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-            Positions
-          </h2>
-          <p className="text-[11px] text-zinc-400 dark:text-zinc-500">Valued {formatIsoDate(portfolio.valuationDate)} · select a position to see its calculation</p>
-        </div>
-        {portfolio.positions.length === 0 ? (
-          <p className="rounded border border-dashed border-zinc-300 px-4 py-8 text-center text-sm text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">
-            No positions yet.{" "}
-            {!archived && (
-              <Link href={`/portfolios/${portfolio.id}/add`} className="text-blue-700 hover:underline dark:text-blue-400">
-                Add the first position
-              </Link>
-            )}
-          </p>
-        ) : (
-          <PositionsTable portfolioId={portfolio.id} rows={portfolio.positions} selectedId={selected?.positionId} />
-        )}
-      </section>
-
-      <UnvaluedSection portfolioId={portfolio.id} rows={portfolio.positions} />
-
-      <MethodologyDisclosure />
+      {!archived && !empty && (
+        <footer className="border-t border-zinc-200 pt-4 dark:border-zinc-800">
+          <Disclosure summary="Manage portfolio">
+            <form action={archivePortfolioAction.bind(null, portfolio.id)} className="max-w-md rounded-lg border border-zinc-200 p-3 dark:border-zinc-700">
+              <p className="text-xs text-zinc-600 dark:text-zinc-400">Archiving hides this portfolio from the active list. Its positions are kept and it can be restored.</p>
+              <button type="submit" className={`mt-2 rounded border border-zinc-300 px-3 py-1 text-xs font-medium text-zinc-800 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800 ${FOCUS}`}>Confirm archive</button>
+            </form>
+            <p className="mt-3 text-xs"><Link href={`/portfolios/${portfolio.id}/scenarios`} className={`rounded text-blue-700 hover:underline dark:text-blue-400 ${FOCUS}`}>Open Scenario Studio</Link></p>
+          </Disclosure>
+        </footer>
+      )}
     </div>
   );
 }

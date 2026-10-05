@@ -5,7 +5,8 @@
 // definition; nothing links it back to the template.
 // ---------------------------------------------------------------------------
 
-import type { ExposureAssetClass } from "../portfolio";
+import { EXPOSURE_ASSET_CLASS_LABEL, type ExposureAssetClass } from "../portfolio";
+import { shockTypeForAssetClass, type ScenarioShockRule } from "../scenarios";
 
 export const TEMPLATE_DISCLAIMER = "Hypothetical starting point — edit these assumptions.";
 
@@ -48,3 +49,14 @@ export const SCENARIO_TEMPLATES: ScenarioTemplate[] = [
 ];
 
 export const getTemplate = (id: string): ScenarioTemplate | undefined => SCENARIO_TEMPLATES.find((t) => t.id === id);
+
+/** A template as in-memory rules, for showing its effect WITHOUT saving anything. Same assumptions `createScenarioFromTemplate` would persist. */
+export function templateToRules(template: ScenarioTemplate): ScenarioShockRule[] {
+  return template.assumptions.map((a) => ({
+    id: `template:${template.id}:${a.assetClass}`,
+    selector: { kind: "ASSET_CLASS", assetClass: a.assetClass },
+    shockType: shockTypeForAssetClass(a.assetClass),
+    value: a.value,
+    targetLabel: EXPOSURE_ASSET_CLASS_LABEL[a.assetClass],
+  }));
+}
