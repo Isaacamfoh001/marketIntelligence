@@ -6,3 +6,4 @@ export * from "./bond-input";
 export * from "./equity-input";
 export * from "./valuation";
 export * from "./copy";
+export * from "./exposures";

@@ -16,11 +16,15 @@ import {
   resolveBondValuationInput,
   resolveEquityValuationInput,
   summarizePortfolio,
+  computeExposures,
+  resolveIssuerRef,
   valueBondPosition,
   valueEquityPosition,
   type Addable,
   type BondValuationInput,
   type BondValuationSource,
+  type ExposurePosition,
+  type PortfolioExposures,
   type EquityPriceRow,
   type EquityValuationInput,
   type PortfolioValuationSummary,
@@ -42,7 +46,14 @@ export interface BondInstrument {
   instrumentCode: string;
   label: string;
   issuerName: string;
+  /** The linked Company, when the Securities Master has one (issuer identity for exposure aggregation). */
+  companyId: string | null;
   instrumentType: "GOVERNMENT_BOND" | "CORPORATE_BOND";
+  currency: string;
+  status: "ACTIVE" | "MATURED" | "CALLED" | "DEFAULTED";
+  /** M7 REVIEW-severity source-vs-master conflicts, split by the contractual term they affect. */
+  maturityConflict: boolean;
+  couponConflict: boolean;
   couponRatePct: number | null;
   couponType: "FIXED" | "FLOATING" | "ZERO_COUPON";
   maturityDate: string;
@@ -57,6 +68,7 @@ export interface EquityInstrument {
   id: string;
   ticker: string;
   companyName: string;
+  companyId: string;
   input: EquityValuationInput | Unvalued;
   addable: Addable;
 }
@@ -129,10 +141,13 @@ async function loadEquityPrices(securityIds: string[], valuationDate: Date): Pro
 
 export async function getInstrumentContext(valuationDate: Date = toValuationDate(new Date())): Promise<InstrumentContext> {
   const prisma = getPrisma();
-  const [universe, securities] = await Promise.all([
+  const [universe, securities, bondCompanies] = await Promise.all([
     getFixedIncomeUniverse(valuationDate),
     prisma.security.findMany({ include: { company: { select: { name: true } } }, orderBy: { ticker: "asc" } }),
+    // companyId is not on M7's security row; read it here rather than widening M7's query.
+    prisma.fixedIncomeSecurity.findMany({ select: { id: true, companyId: true } }),
   ]);
+  const companyIdByBond = new Map(bondCompanies.map((b) => [b.id, b.companyId]));
   const prices = await loadEquityPrices(
     securities.map((s) => s.id),
     valuationDate,
@@ -144,7 +159,12 @@ export async function getInstrumentContext(valuationDate: Date = toValuationDate
     instrumentCode: row.instrumentCode,
     label: securityShortLabel(row.issuerName, row.couponRatePct, row.maturityDate),
     issuerName: row.issuerName,
+    companyId: companyIdByBond.get(row.id) ?? null,
     instrumentType: row.instrumentType,
+    currency: row.currency,
+    status: row.status,
+    maturityConflict: row.termsIssues.some((i) => i.severity === "REVIEW" && i.code === "MATURITY_CONFLICT"),
+    couponConflict: row.termsIssues.some((i) => i.severity === "REVIEW" && i.code === "COUPON_CONFLICT"),
     couponRatePct: row.couponRatePct,
     couponType: row.couponType,
     maturityDate: row.maturityDate,
@@ -159,6 +179,7 @@ export async function getInstrumentContext(valuationDate: Date = toValuationDate
     id: s.id,
     ticker: s.ticker,
     companyName: s.company.name,
+    companyId: s.companyId,
     input: resolveEquityValuationInput({ currency: s.currency, active: s.active, prices: prices.get(s.id) ?? [] }, valuationDate),
     addable: checkEquityAddable({ currency: s.currency, active: s.active }),
   }));
@@ -273,6 +294,40 @@ export async function getPortfolio(id: string, ctx?: InstrumentContext): Promise
   const row = await getPrisma().portfolio.findUnique({ where: { id }, include: { positions: { select: POSITION_SELECT } } });
   if (!row) return null;
   return toDetail(row, ctx ?? (await getInstrumentContext()));
+}
+
+// ---------------------------------------------------------------------------
+// Exposure analytics (M8.2) — field mapping only; the maths is in src/lib/portfolio/exposures.ts
+// ---------------------------------------------------------------------------
+
+/** Adapts valued position rows to the exposure domain's plain inputs. */
+export function toExposurePositions(rows: PositionRow[]): ExposurePosition[] {
+  return rows.map((r): ExposurePosition => {
+    if (r.instrument.kind === "BOND" && r.holding.assetClass === "BOND") {
+      const b = r.instrument;
+      return {
+        positionId: r.positionId,
+        label: b.label,
+        assetClass: b.instrumentType,
+        issuer: resolveIssuerRef({ companyId: b.companyId, issuerName: b.issuerName }),
+        valuation: r.valuation,
+        bond: { nominalGhs: r.holding.nominalGhs, currency: b.currency, status: b.status, terms: b.terms, maturityConflict: b.maturityConflict, couponConflict: b.couponConflict },
+      };
+    }
+    const e = r.instrument as EquityInstrument;
+    return {
+      positionId: r.positionId,
+      label: e.ticker,
+      assetClass: "EQUITY",
+      issuer: resolveIssuerRef({ companyId: e.companyId, issuerName: e.companyName }),
+      valuation: r.valuation,
+      bond: null,
+    };
+  });
+}
+
+export function getPortfolioExposures(portfolio: PortfolioDetail): PortfolioExposures {
+  return computeExposures(toExposurePositions(portfolio.positions), portfolio.summary, new Date(`${portfolio.valuationDate}T00:00:00.000Z`));
 }
 
 // ---------------------------------------------------------------------------

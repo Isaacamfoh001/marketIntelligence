@@ -9,7 +9,7 @@ import "dotenv/config";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { getPrisma } from "../prisma";
 import { addPosition, createPortfolio, removePosition, setPortfolioArchived, updatePosition } from "../portfolio-service";
-import { getInstrumentContext, getPortfolio, getPortfolios } from "../queries/portfolio";
+import { getInstrumentContext, getPortfolio, getPortfolioExposures, getPortfolios, toExposurePositions } from "../queries/portfolio";
 
 const db = getPrisma();
 const TAG = "ZZPF";
@@ -285,5 +285,49 @@ describe("valuation through the query layer", () => {
   it("an empty portfolio has no reference value", async () => {
     const detail = await getPortfolio(await newPortfolio());
     expect(detail!.summary).toMatchObject({ referenceValueGhs: null, positionCount: 0, isComplete: false });
+  });
+});
+
+describe("exposure analytics through the query layer (M8.2)", () => {
+  it("resolves one issuer for a company's bond and equity, and keeps an unvalued bond in contractual analytics", async () => {
+    const linkedBond = await makeBond("LNK", { companyId, maturityDate: d("2031-06-30") });
+    const pid = await newPortfolio();
+    await addPosition({ portfolioId: pid, assetClass: "BOND", instrumentId: linkedBond, nominalGhs: 1_000_000 });
+    await addPosition({ portfolioId: pid, assetClass: "EQUITY", instrumentId: equityId, shares: 1000 });
+
+    const detail = (await getPortfolio(pid))!;
+    const inputs = toExposurePositions(detail.positions);
+    expect(new Set(inputs.map((p) => p.issuer.key)).size).toBe(1);
+    expect(inputs[0].issuer.key).toBe(`company:${companyId}`);
+
+    const e = getPortfolioExposures(detail);
+    // Neither position has market data: value-based analytics are empty (never zero-filled)…
+    expect(e.valuedCount).toBe(0);
+    expect(e.allocation.rows).toEqual([]);
+    expect(e.issuers.rows).toEqual([]);
+    expect(e.issuers.unvaluedOnly).toEqual([{ issuer: expect.objectContaining({ key: `company:${companyId}` }), unvaluedCount: 2 }]);
+    expect(e.rates.bondDv01Ghs).toBeNull();
+    // …while the bond's trusted terms still feed the contractual analytics.
+    expect(e.maturity.eligibleNominalGhs).toBe(1_000_000);
+    expect(e.coupon.annualCouponGhs).toBe(200_000);
+    expect(e.upcoming[0]).toMatchObject({ nominalGhs: 1_000_000, referenceValueGhs: null });
+  });
+
+  it("a valued real portfolio satisfies the allocation/issuer invariants against the M8.1 summary", async () => {
+    const ctx = await getInstrumentContext();
+    const bonds = ctx.bonds.filter((b) => b.input.available && b.addable.addable && !b.instrumentCode.startsWith(TAG)).slice(0, 3);
+    const eq = ctx.equities.find((x) => x.input.available && x.addable.addable);
+    expect(bonds.length).toBeGreaterThan(0);
+    const pid = await newPortfolio();
+    for (const b of bonds) await addPosition({ portfolioId: pid, assetClass: "BOND", instrumentId: b.id, nominalGhs: 1_000_000 });
+    if (eq) await addPosition({ portfolioId: pid, assetClass: "EQUITY", instrumentId: eq.id, shares: 10_000 });
+
+    const detail = (await getPortfolio(pid))!;
+    const e = getPortfolioExposures(detail);
+    const total = Math.round((detail.summary.referenceValueGhs as number) * 100);
+    expect(e.allocation.rows.reduce((a, r) => a + Math.round(r.referenceValueGhs * 100), 0)).toBe(total);
+    expect(e.issuers.rows.reduce((a, r) => a + Math.round(r.referenceValueGhs * 100), 0)).toBe(total);
+    expect(e.rates.bondDv01Ghs).toBeGreaterThan(0);
+    expect(Math.round((e.rates.governmentDv01Ghs + e.rates.corporateDv01Ghs) * 100)).toBe(Math.round((e.rates.bondDv01Ghs as number) * 100));
   });
 });

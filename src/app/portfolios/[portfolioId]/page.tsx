@@ -1,9 +1,12 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getInstrumentContext, getPortfolio, getPositionProvenance } from "@/lib/queries/portfolio";
+import { getInstrumentContext, getPortfolio, getPortfolioExposures, getPositionProvenance } from "@/lib/queries/portfolio";
 import { formatIsoDate } from "@/lib/fixed-income";
 import { archivePortfolioAction, restorePortfolioAction } from "../actions";
 import { CoverageSummary } from "@/components/portfolio/CoverageSummary";
+import { AssetAllocationPanel, Callouts, CouponPanel, IssuerPanel, MaturityLadderPanel, RateSensitivityPanel, UpcomingMaturitiesPanel } from "@/components/portfolio/ExposurePanels";
+import { EXPOSURE_COPY } from "@/lib/portfolio";
+import { GroupHeading } from "@/components/portfolio/exposure-ui";
 import { MethodologyDisclosure } from "@/components/portfolio/MethodologyDisclosure";
 import { PositionDrilldown } from "@/components/portfolio/PositionDrilldown";
 import { PositionsTable, UnvaluedSection } from "@/components/portfolio/PositionsTable";
@@ -25,6 +28,8 @@ export default async function PortfolioPage({ params, searchParams }: { params: 
   const selected = query.position ? portfolio.positions.find((p) => p.positionId === query.position) : undefined;
   const provenance = selected ? await getPositionProvenance(selected) : null;
   const archived = portfolio.archivedAt !== null;
+  const exposures = getPortfolioExposures(portfolio);
+  const hasBonds = portfolio.positions.some((p) => p.holding.assetClass === "BOND");
 
   return (
     <div className="mx-auto max-w-6xl space-y-5">
@@ -71,6 +76,39 @@ export default async function PortfolioPage({ params, searchParams }: { params: 
       {query.removed && <p role="status" className="rounded border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-900 dark:border-emerald-900/50 dark:bg-emerald-900/20 dark:text-emerald-200">Position removed.</p>}
 
       <CoverageSummary summary={portfolio.summary} />
+
+      {portfolio.positions.length > 0 && (
+        <>
+          <Callouts callouts={exposures.callouts} />
+
+          <section aria-label="Exposure" className="space-y-3">
+            <GroupHeading note="Market analytics — built from reference values">Exposure</GroupHeading>
+            <div className="grid gap-3 lg:grid-cols-2">
+              <AssetAllocationPanel e={exposures} />
+              <IssuerPanel e={exposures} />
+            </div>
+          </section>
+
+          {hasBonds && (
+            <>
+              <section aria-label="Fixed-income profile" className="space-y-3">
+                <GroupHeading note="Rate sensitivity is market-based; the ladder is contractual">Fixed-income profile</GroupHeading>
+                <RateSensitivityPanel e={exposures} portfolioId={portfolio.id} />
+                <MaturityLadderPanel e={exposures} portfolioId={portfolio.id} />
+              </section>
+
+              <section aria-label="Contractual cash flows" className="space-y-3">
+                <GroupHeading note="Contractual — from bond terms, not market data">Contractual cash flows</GroupHeading>
+                <div className="grid gap-3 lg:grid-cols-2">
+                  <CouponPanel e={exposures} portfolioId={portfolio.id} />
+                  <UpcomingMaturitiesPanel e={exposures} portfolioId={portfolio.id} />
+                </div>
+                <p className="text-[11px] text-zinc-500 dark:text-zinc-400">{EXPOSURE_COPY.contractualVsMarket}</p>
+              </section>
+            </>
+          )}
+        </>
+      )}
 
       {selected && <PositionDrilldown portfolioId={portfolio.id} row={selected} provenance={provenance} valuationDateIso={portfolio.valuationDate} notice={query.duplicate ? "duplicate" : query.saved ? "saved" : undefined} />}
 
