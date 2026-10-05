@@ -22,6 +22,8 @@ import {
   type StoredShockRow,
 } from "./scenarios";
 import type { ServiceResult } from "./portfolio-service";
+import { getTemplate, TEMPLATE_DISCLAIMER } from "./scenario-studio/templates";
+import type { ExposureAssetClass } from "./portfolio";
 
 const NAME_MAX = 120;
 const DESCRIPTION_MAX = 1000;
@@ -143,4 +145,83 @@ export async function removeShock(shockId: string): Promise<ServiceResult> {
   if (!e.ok) return e;
   await prisma.scenarioShock.delete({ where: { id: shockId } });
   return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// Scenario Studio writes (M8.4). Same validation as addShock — bounds,
+// compatibility, target existence — but with "set" semantics: an analyst who
+// says "government yields +200 bps" means THE government assumption is +200,
+// whether or not one existed. Still assumptions only; nothing calculated is
+// ever stored.
+// ---------------------------------------------------------------------------
+
+type ShockWhere = Pick<StoredShockRow, "targetKind" | "assetClass" | "companyId" | "issuerNameKey" | "fixedIncomeSecurityId" | "securityId">;
+
+/** Sets the assumption for a target: updates it if one exists, creates it otherwise. */
+export async function upsertShock(input: { scenarioId: string; target: ShockTarget; value: number }): Promise<ServiceResult<{ shockId: string }>> {
+  const e = await editableScenario(input.scenarioId);
+  if (!e.ok) return e;
+  const type = typeOf(input.target);
+  const selector = asSelector(input.target);
+  const compat = checkCompatibility(selector, type);
+  if (!compat.ok) return fail(compat.message);
+  const v = validateShockValue(type, input.value);
+  if (!v.ok) return fail(v.message);
+  const missing = await checkTargetExists(input.target, type);
+  if (missing) return fail(missing);
+  const prisma = getPrisma();
+  const where: ShockWhere = selectorToColumns(selector);
+  const existing = await prisma.scenarioShock.findFirst({ where: { scenarioId: input.scenarioId, shockType: type, ...where } });
+  if (existing) {
+    await prisma.scenarioShock.update({ where: { id: existing.id }, data: { value: input.value } });
+    return { ok: true, shockId: existing.id };
+  }
+  try {
+    const created = await prisma.scenarioShock.create({ data: { scenarioId: input.scenarioId, shockType: type, value: input.value, ...where } });
+    return { ok: true, shockId: created.id };
+  } catch (err) {
+    if (isUniqueViolation(err)) return fail("This scenario already has an assumption for that target \u2014 try again.");
+    throw err;
+  }
+}
+
+/** Sets (value) or clears (null) the three asset-class assumptions at once, atomically. Values are bps for bonds and percent for equities. */
+export async function setAssetClassAssumptions(input: { scenarioId: string; entries: { assetClass: ExposureAssetClass; value: number | null }[] }): Promise<ServiceResult> {
+  const e = await editableScenario(input.scenarioId);
+  if (!e.ok) return e;
+  for (const entry of input.entries) {
+    if (entry.value === null) continue;
+    const v = validateShockValue(shockTypeForAssetClass(entry.assetClass), entry.value);
+    if (!v.ok) return fail(v.message);
+  }
+  await getPrisma().$transaction(async (tx) => {
+    for (const { assetClass, value } of input.entries) {
+      const type = shockTypeForAssetClass(assetClass);
+      const where: ShockWhere = selectorToColumns({ kind: "ASSET_CLASS", assetClass });
+      const existing = await tx.scenarioShock.findFirst({ where: { scenarioId: input.scenarioId, shockType: type, ...where } });
+      if (value === null) {
+        if (existing) await tx.scenarioShock.delete({ where: { id: existing.id } });
+      } else if (existing) {
+        await tx.scenarioShock.update({ where: { id: existing.id }, data: { value } });
+      } else {
+        await tx.scenarioShock.create({ data: { scenarioId: input.scenarioId, shockType: type, value, ...where } });
+      }
+    }
+  });
+  return { ok: true };
+}
+
+/** Creates a scenario pre-filled from a hypothetical starting template. The result is an ordinary, independent, editable scenario. */
+export async function createScenarioFromTemplate(input: { portfolioId: string; templateId: string }): Promise<ServiceResult<{ id: string }>> {
+  const template = getTemplate(input.templateId);
+  if (!template) return fail("That starting point does not exist.");
+  for (const a of template.assumptions) {
+    const v = validateShockValue(shockTypeForAssetClass(a.assetClass), a.value);
+    if (!v.ok) return fail(v.message);
+  }
+  const created = await createScenario({ portfolioId: input.portfolioId, name: template.name, description: `${template.blurb} ${TEMPLATE_DISCLAIMER}` });
+  if (!created.ok) return created;
+  const set = await setAssetClassAssumptions({ scenarioId: created.id, entries: template.assumptions.map((a) => ({ assetClass: a.assetClass, value: a.value })) });
+  if (!set.ok) return set;
+  return { ok: true, id: created.id };
 }

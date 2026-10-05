@@ -9,7 +9,8 @@
 import { getPrisma } from "../prisma";
 import { EXPOSURE_ASSET_CLASS_LABEL, resolveIssuerRef, type ExposureAssetClass } from "../portfolio";
 import { rowToRule, runScenario, shockTypeForAssetClass, type ScenarioPosition, type ScenarioResult, type ScenarioShockRule, type ShockType, type StoredShockRow } from "../scenarios";
-import { toExposurePositions, type InstrumentContext, type PortfolioDetail, type PositionRow } from "./portfolio";
+import { getPositionProvenance, toExposurePositions, type InstrumentContext, type PortfolioDetail, type PositionRow } from "./portfolio";
+import { buildComparison, buildStudioView, summariseAssumptions, type Comparison, type PositionLinks, type Provenance, type StudioView } from "../scenario-studio";
 
 export interface ScenarioSummaryRow {
   id: string;
@@ -105,12 +106,15 @@ export interface TargetOption {
   /** Encoded as "KIND|key|SHOCKTYPE" and parsed by the server action. */
   value: string;
   label: string;
+  /** The bare name of the target ("Kasapreko Company PLC", "GoG Jul-34") for plain-English sentences. */
+  targetName: string;
   group: "Asset class" | "Issuer" | "Security";
+  kind: "ASSET_CLASS" | "ISSUER" | "SECURITY";
   shockType: ShockType;
 }
 
 export function buildTargetOptions(portfolio: PortfolioDetail): TargetOption[] {
-  const opts: TargetOption[] = (["GOVERNMENT_BOND", "CORPORATE_BOND", "EQUITY"] as ExposureAssetClass[]).map((c) => ({ value: `ASSET_CLASS|${c}|${shockTypeForAssetClass(c)}`, label: EXPOSURE_ASSET_CLASS_LABEL[c], group: "Asset class", shockType: shockTypeForAssetClass(c) }));
+  const opts: TargetOption[] = (["GOVERNMENT_BOND", "CORPORATE_BOND", "EQUITY"] as ExposureAssetClass[]).map((c) => ({ value: `ASSET_CLASS|${c}|${shockTypeForAssetClass(c)}`, label: EXPOSURE_ASSET_CLASS_LABEL[c], targetName: EXPOSURE_ASSET_CLASS_LABEL[c], group: "Asset class", kind: "ASSET_CLASS", shockType: shockTypeForAssetClass(c) }));
   const exposure = toExposurePositions(portfolio.positions);
   const issuerSeen = new Set<string>();
   const issuers: TargetOption[] = [];
@@ -121,9 +125,9 @@ export function buildTargetOptions(portfolio: PortfolioDetail): TargetOption[] {
     const issuerId = `${e.issuer.key}|${type}`;
     if (!issuerSeen.has(issuerId)) {
       issuerSeen.add(issuerId);
-      issuers.push({ value: `ISSUER|${e.issuer.key}|${type}`, label: `${e.issuer.name} — ${type === "YIELD_BPS" ? "bonds" : "equity"}`, group: "Issuer", shockType: type });
+      issuers.push({ value: `ISSUER|${e.issuer.key}|${type}`, label: `${e.issuer.name} — ${type === "YIELD_BPS" ? "bonds" : "equity"}`, targetName: e.issuer.name, group: "Issuer", kind: "ISSUER", shockType: type });
     }
-    securities.push({ value: `SECURITY|${e.assetClass === "EQUITY" ? "EQUITY" : "BOND"}:${row.instrument.id}|${type}`, label: e.label, group: "Security", shockType: type });
+    securities.push({ value: `SECURITY|${e.assetClass === "EQUITY" ? "EQUITY" : "BOND"}:${row.instrument.id}|${type}`, label: e.label, targetName: e.label, group: "Security", kind: "SECURITY", shockType: type });
   });
   const by = (a: TargetOption, b: TargetOption) => a.label.localeCompare(b.label);
   return [...opts, ...issuers.sort(by), ...securities.sort(by)];
@@ -144,4 +148,110 @@ export function parseTargetOption(raw: string): import("../scenario-service").Sh
     if ((instrument === "BOND" || instrument === "EQUITY") && id) return { kind, instrument, instrumentId: id };
   }
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// Scenario Studio (M8.4) — gathers what the pure view-model needs: the engine
+// result (always computed here, from current data), the routes that really
+// exist for each position, and the provenance of the observation behind it.
+// ---------------------------------------------------------------------------
+
+/** Destinations for each position, built only from routes that exist. */
+export async function getPositionLinks(portfolio: PortfolioDetail): Promise<Record<string, PositionLinks>> {
+  const companyIds = [...new Set(portfolio.positions.flatMap((p) => (p.instrument.kind === "EQUITY" ? [p.instrument.companyId] : [])))];
+  const companies = companyIds.length > 0 ? await getPrisma().company.findMany({ where: { id: { in: companyIds } }, select: { id: true, ticker: true } }) : [];
+  const tickerOf = new Map(companies.map((c) => [c.id, c.ticker]));
+  const out: Record<string, PositionLinks> = {};
+  for (const row of portfolio.positions) {
+    const inspect = { href: `/portfolios/${portfolio.id}?position=${row.positionId}#inspect`, label: "Inspect holding" };
+    if (row.instrument.kind === "BOND") {
+      const code = encodeURIComponent(row.instrument.instrumentCode);
+      out[row.positionId] = { analysis: { href: `/fixed-income/${code}`, label: "Open fixed-income analysis" }, evidence: { href: `/fixed-income/${code}#evidence`, label: "Review underlying market evidence" }, inspect };
+    } else {
+      const ticker = tickerOf.get(row.instrument.companyId);
+      out[row.positionId] = { analysis: ticker ? { href: `/companies/${encodeURIComponent(ticker)}`, label: "Open company page" } : null, evidence: inspect, inspect };
+    }
+  }
+  return out;
+}
+
+/** Source / ingestion-run provenance for every valued position (null when unvalued or not found). */
+export async function getProvenances(portfolio: PortfolioDetail): Promise<Record<string, Provenance | null>> {
+  const entries = await Promise.all(portfolio.positions.map(async (row) => [row.positionId, await getPositionProvenance(row)] as const));
+  return Object.fromEntries(entries);
+}
+
+export interface ScenarioStudioData {
+  result: ScenarioResult;
+  view: StudioView | null;
+}
+
+/** Runs one scenario and builds its view. `view` is null only when the saved assumptions fail validation. */
+export async function getScenarioStudio(portfolio: PortfolioDetail, scenario: ScenarioDefinition): Promise<ScenarioStudioData> {
+  const result = runScenarioForPortfolio(portfolio, scenario);
+  if (!result.ok) return { result, view: null };
+  const [links, provenance] = await Promise.all([getPositionLinks(portfolio), getProvenances(portfolio)]);
+  return { result, view: buildStudioView({ result, links, provenance }) };
+}
+
+export interface LibraryRow {
+  id: string;
+  name: string;
+  description: string | null;
+  updatedAt: string;
+  assumptionSummary: string;
+  assumptionCount: number;
+  /** Null when the saved assumptions cannot be run or nothing is valued. */
+  impactText: string | null;
+  impactPctText: string | null;
+  impactGhs: number | null;
+  primaryDriver: string | null;
+  quality: { label: string; tone: "ok" | "caution" } | null;
+  invalid: boolean;
+}
+
+/** Saved scenarios with their CURRENT calculated effect — recomputed now, not a stored historical run. */
+export async function getScenarioLibrary(portfolio: PortfolioDetail, ctx: InstrumentContext): Promise<{ active: LibraryRow[]; archived: { id: string; name: string }[] }> {
+  const [activeRows, archivedRows] = await Promise.all([getScenarios(portfolio.id, { archived: false }), getScenarios(portfolio.id, { archived: true })]);
+  const active: LibraryRow[] = [];
+  for (const row of activeRows) {
+    const def = await getScenario(row.id, ctx);
+    if (!def) continue;
+    const result = runScenarioForPortfolio(portfolio, def);
+    const base = { id: row.id, name: row.name, description: row.description, updatedAt: row.updatedAt, assumptionSummary: summariseAssumptions(def.shocks.map((s) => s.rule)), assumptionCount: def.shocks.length };
+    if (!result.ok) {
+      active.push({ ...base, impactText: null, impactPctText: null, impactGhs: null, primaryDriver: null, quality: null, invalid: true });
+      continue;
+    }
+    const view = buildStudioView({ result, links: {}, provenance: {} });
+    const flag = view.confidence.flags[0];
+    active.push({
+      ...base,
+      impactText: view.headline.impactWhole,
+      impactPctText: view.headline.impactPctText,
+      impactGhs: view.headline.impactGhs,
+      primaryDriver: view.mainClass ? view.mainClass.label : null,
+      quality: view.headline.status === "RESULT" && flag ? { label: flag.code === "RECENT_INPUTS" ? "Recent inputs" : flag.code === "STALE_DEPENDENCE" ? `${view.confidence.staleBasisPct!.toFixed(0)}% stale basis` : flag.label, tone: flag.code === "RECENT_INPUTS" ? "ok" : "caution" } : null,
+      invalid: false,
+    });
+  }
+  return { active, archived: archivedRows.map((r) => ({ id: r.id, name: r.name })) };
+}
+
+/** Runs several scenarios against ONE already-loaded portfolio snapshot — the same valuation date and reference valuations — and compares them. */
+export async function getScenarioComparison(portfolio: PortfolioDetail, ctx: InstrumentContext, ids: string[]): Promise<{ comparison: Comparison | null; invalid: string[]; missing: string[] }> {
+  const inputs: { id: string; name: string; result: Extract<ScenarioResult, { ok: true }> }[] = [];
+  const invalid: string[] = [];
+  const missing: string[] = [];
+  for (const id of ids) {
+    const def = await getScenario(id, ctx);
+    if (!def || def.portfolioId !== portfolio.id) {
+      missing.push(id);
+      continue;
+    }
+    const result = runScenarioForPortfolio(portfolio, def);
+    if (!result.ok) invalid.push(def.name);
+    else inputs.push({ id: def.id, name: def.name, result });
+  }
+  return { comparison: inputs.length >= 2 ? buildComparison(inputs) : null, invalid, missing };
 }

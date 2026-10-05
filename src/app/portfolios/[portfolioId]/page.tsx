@@ -50,7 +50,7 @@ export default async function PortfolioPage({ params, searchParams }: { params: 
           {archived ? (
             <>
             <Link href={`/portfolios/${portfolio.id}/scenarios`} className="rounded border border-zinc-300 px-3 py-1.5 text-sm text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">
-              Scenarios
+              Scenario Studio
             </Link>
             <form action={restorePortfolioAction.bind(null, portfolio.id)}>
               <button type="submit" className="rounded border border-zinc-300 px-3 py-1.5 text-sm text-zinc-700 hover:bg-zinc-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">
@@ -61,7 +61,7 @@ export default async function PortfolioPage({ params, searchParams }: { params: 
           ) : (
             <>
               <Link href={`/portfolios/${portfolio.id}/scenarios`} className="rounded border border-zinc-300 px-3 py-1.5 text-sm text-zinc-700 hover:bg-zinc-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">
-                Scenarios
+                Scenario Studio
               </Link>
               <Link href={`/portfolios/${portfolio.id}/add`} className="rounded bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300">
                 Add position
@@ -96,6 +96,17 @@ export default async function PortfolioPage({ params, searchParams }: { params: 
               <IssuerPanel e={exposures} />
             </div>
           </section>
+
+          {!archived && (
+            <aside aria-label="Scenario Studio" className="flex flex-wrap items-center justify-between gap-2 rounded border border-zinc-200 bg-zinc-50 px-4 py-3 dark:border-zinc-800 dark:bg-zinc-900/60">
+              <p className="text-sm text-zinc-700 dark:text-zinc-300">
+                <span className="font-medium text-zinc-900 dark:text-zinc-100">What if…?</span> Test an assumption about yields or equity prices against these exposures.
+              </p>
+              <Link href={`/portfolios/${portfolio.id}/scenarios`} className="text-sm font-medium text-blue-700 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500 dark:text-blue-400">
+                Open Scenario Studio <span aria-hidden="true">→</span>
+              </Link>
+            </aside>
+          )}
 
           {hasBonds && (
             <>
