@@ -7,8 +7,9 @@
 import { getPrisma } from "../prisma";
 import { securityShortLabel } from "../fixed-income";
 import { getInstrumentContext, getPortfolios } from "./portfolio";
+import { currentFigureIfRevised } from "./thesis-evidence";
 import { billContext, bondContext, equityContext, heldRows, SUBJECT_HREF, type ContextFact, type HeldRow } from "../thesis/context";
-import type { ThesisConfidence, ThesisContent, ThesisHorizon, ThesisStatus, ThesisSubjectKind, ThesisSubjectRef } from "../thesis";
+import { catalystTiming, compareEvidence, computeResearch, evidenceDay, readSnapshot, sortTimeline, TIMELINE_LABEL, windowLabel, type CatalystStatus, type CatalystTiming, type CatalystWindow, type EvidenceRefKind, type EvidenceRelevance, type EvidenceSnapshot, type EvidenceSourceType, type EvidenceStance, type InvalidationFlag, type ResearchState, type ThesisConfidence, type ThesisContent, type ThesisHorizon, type ThesisStatus, type ThesisSubjectKind, type ThesisSubjectRef, type TimelineEntry } from "../thesis";
 
 export interface ThesisSubject {
   kind: ThesisSubjectKind;
@@ -36,17 +37,59 @@ export interface ThesisSummary {
   createdAt: string;
   updatedAt: string;
   statusChangedAt: string;
+  research: ResearchSummary;
+}
+
+/** What the research layer says about a thesis in a list or on a security page — facts and reasons, never a score. */
+export interface ResearchSummary {
+  counts: ResearchState["counts"];
+  newSinceReview: number;
+  lastReviewedAt: string | null;
+  reviewSuggested: boolean;
+  reasons: ResearchState["reasons"];
+  nextCatalyst: { description: string; label: string; timing: CatalystTiming | null } | null;
 }
 
 export interface ThesisDetail extends ThesisSummary, ThesisContent {
   statusNote: string | null;
 }
 
+const LIGHT = {
+  conditions: { where: { kind: "INVALIDATION" as const }, select: { id: true, kind: true, flag: true, flagChangedAt: true, retiredAt: true } },
+  catalysts: { select: { id: true, description: true, status: true, statusChangedAt: true, windowKind: true, windowStart: true, windowEnd: true } },
+  evidence: { where: { archivedAt: null }, select: { id: true, stance: true, relevance: true, observedAt: true, createdAt: true } },
+  reviews: { select: { reviewedAt: true } },
+} as const;
+
 const INCLUDE = {
   security: { include: { company: { select: { name: true } } } },
   fixedIncomeSecurity: true,
   treasuryInstrument: true,
+  ...LIGHT,
 } as const;
+
+const windowOf = (c: { windowKind: string; windowStart: Date | null; windowEnd: Date | null }): CatalystWindow => (c.windowKind === "NONE" || !c.windowStart || !c.windowEnd ? { kind: "NONE", start: null, end: null } : { kind: c.windowKind as "DATE" | "MONTH" | "QUARTER", start: day(c.windowStart), end: day(c.windowEnd) });
+
+type ResearchRow = { status: ThesisStatus; createdAt: Date; conditions: { id: string; kind: string; flag: InvalidationFlag; flagChangedAt: Date | null; retiredAt: Date | null }[]; catalysts: { id: string; description: string; status: CatalystStatus; statusChangedAt: Date; windowKind: string; windowStart: Date | null; windowEnd: Date | null }[]; evidence: { id: string; stance: EvidenceStance; relevance: EvidenceRelevance; observedAt: Date | null; createdAt: Date }[]; reviews: { reviewedAt: Date }[] };
+
+export function researchStateOf(row: ResearchRow, now: Date = new Date()): ResearchState {
+  return computeResearch({
+    status: row.status,
+    createdAt: iso(row.createdAt),
+    evidence: row.evidence.map((e) => ({ id: e.id, stance: e.stance, relevance: e.relevance, observedAt: e.observedAt ? day(e.observedAt) : null, createdAt: iso(e.createdAt) })),
+    conditions: row.conditions.map((c) => ({ id: c.id, kind: c.kind as "MUST_BE_TRUE" | "INVALIDATION", flag: c.flag, flagChangedAt: c.flagChangedAt ? iso(c.flagChangedAt) : null, retired: c.retiredAt !== null })),
+    catalysts: row.catalysts.map((c) => ({ id: c.id, status: c.status, statusChangedAt: iso(c.statusChangedAt), window: windowOf(c) })),
+    reviewedAt: row.reviews.map((r) => iso(r.reviewedAt)),
+    now,
+  });
+}
+
+function researchSummaryOf(row: ResearchRow, now: Date = new Date()): ResearchSummary {
+  const s = researchStateOf(row, now);
+  const next = row.catalysts.find((c) => c.id === s.nextCatalystId);
+  const w = next ? windowOf(next) : null;
+  return { counts: s.counts, newSinceReview: s.since.total, lastReviewedAt: s.lastReviewedAt, reviewSuggested: s.reviewSuggested, reasons: s.reasons, nextCatalyst: next && w ? { description: next.description, label: windowLabel(w), timing: catalystTiming(next.status, w, now) } : null };
+}
 
 type Row = NonNullable<Awaited<ReturnType<typeof findOne>>>;
 const findOne = (id: string) => getPrisma().thesis.findUnique({ where: { id }, include: INCLUDE });
@@ -70,7 +113,7 @@ export function subjectOf(row: { security: { id: string; ticker: string; company
 
 function summaryOf(row: Row): ThesisSummary {
   const subject = subjectOf(row);
-  return { id: row.id, title: row.title, belief: row.belief, status: row.status, confidence: row.confidence, horizon: row.horizon, subject, subjectKind: subject.kind, subjectLabel: subject.label, subjectCode: subject.code, createdAt: iso(row.createdAt), updatedAt: iso(row.updatedAt), statusChangedAt: iso(row.statusChangedAt) };
+  return { id: row.id, title: row.title, belief: row.belief, status: row.status, confidence: row.confidence, horizon: row.horizon, subject, subjectKind: subject.kind, subjectLabel: subject.label, subjectCode: subject.code, createdAt: iso(row.createdAt), updatedAt: iso(row.updatedAt), statusChangedAt: iso(row.statusChangedAt), research: researchSummaryOf(row) };
 }
 
 export async function listTheses(): Promise<ThesisSummary[]> {
@@ -81,8 +124,114 @@ export async function listTheses(): Promise<ThesisSummary[]> {
 export async function getThesis(id: string): Promise<ThesisDetail | null> {
   const row = await findOne(id);
   if (!row) return null;
-  return { ...summaryOf(row), rationale: row.rationale, mustBeTrue: row.mustBeTrue, risks: row.risks, invalidation: row.invalidation, catalysts: row.catalysts, watching: row.watching, statusNote: row.statusNote };
+  // The analyst's two condition lists, as the live (non-retired) rows in the order they were written.
+  const conds = await getPrisma().thesisCondition.findMany({ where: { thesisId: id, retiredAt: null }, orderBy: { position: "asc" }, select: { kind: true, text: true } });
+  return { ...summaryOf(row), rationale: row.rationale, mustBeTrue: conds.filter((c) => c.kind === "MUST_BE_TRUE").map((c) => c.text), risks: row.risks, invalidation: conds.filter((c) => c.kind === "INVALIDATION").map((c) => c.text), watching: row.watching, statusNote: row.statusNote };
 }
+
+// --- Research: evidence, catalysts, conditions, reviews, timeline (M9.2) -----------------------------
+
+export interface ConditionView {
+  id: string;
+  kind: "MUST_BE_TRUE" | "INVALIDATION";
+  text: string;
+  flag: InvalidationFlag;
+  flagNote: string | null;
+  flagChangedAt: string | null;
+  retired: boolean;
+  evidenceCount: number;
+}
+export interface CatalystView {
+  id: string;
+  description: string;
+  window: CatalystWindow;
+  windowLabel: string;
+  status: CatalystStatus;
+  occurredOn: string | null;
+  outcomeNote: string | null;
+  statusChangedAt: string;
+  timing: CatalystTiming | null;
+  evidenceCount: number;
+}
+export interface EvidenceView {
+  id: string;
+  stance: EvidenceStance;
+  relevance: EvidenceRelevance;
+  sourceType: EvidenceSourceType;
+  title: string;
+  detail: string | null;
+  note: string | null;
+  observedAt: string | null;
+  sourceName: string | null;
+  sourceUrl: string | null;
+  refKind: EvidenceRefKind | null;
+  snapshot: EvidenceSnapshot | null;
+  /** The source's CURRENT headline figure, present only when it differs from the frozen snapshot. */
+  revisedTo: string | null;
+  target: { kind: "CONDITION" | "CATALYST"; id: string; label: string; retired: boolean } | null;
+  createdAt: string;
+  /** Added after the thesis's last review (or since creation when never reviewed). */
+  isNew: boolean;
+  isMostImportantNew: boolean;
+}
+export interface ThesisResearch {
+  state: ResearchState;
+  evidence: EvidenceView[];
+  archivedEvidenceCount: number;
+  conditions: ConditionView[];
+  catalysts: CatalystView[];
+  reviews: { id: string; reviewedAt: string; note: string | null; statusAtReview: ThesisStatus }[];
+  timeline: TimelineEntry[];
+}
+
+export async function getThesisResearch(thesisId: string, now: Date = new Date()): Promise<ThesisResearch | null> {
+  const prisma = getPrisma();
+  const t = await prisma.thesis.findUnique({
+    where: { id: thesisId },
+    include: {
+      conditions: { orderBy: [{ kind: "asc" }, { position: "asc" }], include: { _count: { select: { evidence: { where: { archivedAt: null } } } } } },
+      catalysts: { orderBy: [{ position: "asc" }, { createdAt: "asc" }], include: { _count: { select: { evidence: { where: { archivedAt: null } } } } } },
+      evidence: { orderBy: { createdAt: "desc" }, include: { condition: { select: { id: true, text: true, retiredAt: true } }, catalyst: { select: { id: true, description: true } } } },
+      reviews: { orderBy: { reviewedAt: "desc" } },
+    },
+  });
+  if (!t) return null;
+  const active = t.evidence.filter((e) => !e.archivedAt);
+  const state = researchStateOf({ ...t, evidence: active }, now);
+
+  const linked = active.flatMap((e) => {
+    const snap = readSnapshot(e.snapshot);
+    return e.refKind && e.refId && snap ? [{ id: e.id, refKind: e.refKind as EvidenceRefKind, refId: e.refId, fingerprint: snap.fingerprint }] : [];
+  });
+  const revised = await currentFigureIfRevised(linked);
+
+  const evidence: EvidenceView[] = active.map((e) => ({
+    id: e.id, stance: e.stance, relevance: e.relevance, sourceType: e.sourceType, title: e.title, detail: e.detail, note: e.note,
+    observedAt: e.observedAt ? day(e.observedAt) : null, sourceName: e.sourceName, sourceUrl: e.sourceUrl, refKind: e.refKind as EvidenceRefKind | null,
+    snapshot: readSnapshot(e.snapshot), revisedTo: revised.get(e.id) ?? null,
+    target: e.condition ? { kind: "CONDITION", id: e.condition.id, label: e.condition.text, retired: e.condition.retiredAt !== null } : e.catalyst ? { kind: "CATALYST", id: e.catalyst.id, label: e.catalyst.description, retired: false } : null,
+    createdAt: iso(e.createdAt), isNew: iso(e.createdAt) > state.baseline, isMostImportantNew: e.id === state.since.mostImportantId,
+  }));
+  evidence.sort((a, b) => compareEvidence({ id: a.id, stance: a.stance, relevance: a.relevance, observedAt: a.observedAt, createdAt: a.createdAt }, { id: b.id, stance: b.stance, relevance: b.relevance, observedAt: b.observedAt, createdAt: b.createdAt }));
+
+  const conditions: ConditionView[] = t.conditions.map((c) => ({ id: c.id, kind: c.kind, text: c.text, flag: c.flag, flagNote: c.flagNote, flagChangedAt: c.flagChangedAt ? iso(c.flagChangedAt) : null, retired: c.retiredAt !== null, evidenceCount: c._count.evidence }));
+  const catalysts: CatalystView[] = t.catalysts.map((c) => {
+    const w = windowOf(c);
+    return { id: c.id, description: c.description, window: w, windowLabel: windowLabel(w), status: c.status, occurredOn: c.occurredOn ? day(c.occurredOn) : null, outcomeNote: c.outcomeNote, statusChangedAt: iso(c.statusChangedAt), timing: catalystTiming(c.status, w, now), evidenceCount: c._count.evidence };
+  });
+
+  const timeline = sortTimeline([
+    { kind: "THESIS_CREATED", date: day(t.createdAt), recordedAt: iso(t.createdAt), title: "Thesis created" },
+    ...evidence.map((e): TimelineEntry => ({ kind: e.stance === "SUPPORTS" ? "SUPPORTING_EVIDENCE" : e.stance === "CHALLENGES" ? "CHALLENGING_EVIDENCE" : "CONTEXT_EVIDENCE", date: e.observedAt ?? e.createdAt.slice(0, 10), recordedAt: e.createdAt, title: e.title, href: `#evidence-${e.id}` })),
+    ...catalysts.filter((c) => c.status === "OCCURRED").map((c): TimelineEntry => ({ kind: "CATALYST_OCCURRED", date: c.occurredOn ?? c.statusChangedAt.slice(0, 10), recordedAt: c.statusChangedAt, title: c.description, detail: c.outcomeNote ?? undefined, href: `#catalyst-${c.id}` })),
+    ...conditions.filter((c) => c.kind === "INVALIDATION" && c.flag !== "NOT_OBSERVED" && c.flagChangedAt && !c.retired).map((c): TimelineEntry => ({ kind: "INVALIDATION_FLAGGED", date: c.flagChangedAt!.slice(0, 10), recordedAt: c.flagChangedAt!, title: c.text, detail: `${c.flag === "TRIGGERED" ? "Marked triggered" : "Marked potentially triggered"}${c.flagNote ? ` — ${c.flagNote}` : ""}`, href: `#condition-${c.id}` })),
+    ...t.reviews.map((r): TimelineEntry => ({ kind: "THESIS_REVIEWED", date: day(r.reviewedAt), recordedAt: iso(r.reviewedAt), title: "Thesis reviewed", detail: r.note ?? undefined })),
+  ]);
+
+  return { state, evidence, archivedEvidenceCount: t.evidence.length - active.length, conditions, catalysts, reviews: t.reviews.map((r) => ({ id: r.id, reviewedAt: iso(r.reviewedAt), note: r.note, statusAtReview: r.statusAtReview })), timeline };
+}
+
+export { evidenceDay, TIMELINE_LABEL };
 
 // --- Subject picker ---------------------------------------------------------------------------------
 
@@ -167,19 +316,21 @@ export interface ThesisPresence {
   live: number;
   total: number;
   /** The most recently updated live thesis (to show a one-line summary), else null. */
-  lead: { id: string; title: string; status: ThesisStatus; confidence: ThesisConfidence | null; horizon: ThesisHorizon | null; belief: string } | null;
+  lead: { id: string; title: string; status: ThesisStatus; confidence: ThesisConfidence | null; horizon: ThesisHorizon | null; belief: string; research: ResearchSummary } | null;
+  /** True when ANY live thesis on the subject has a review suggestion. */
+  reviewSuggested: boolean;
 }
 
 /** Thesis presence for each holding of a portfolio, keyed by positionId. Matching is by subject — a thesis never references a position. */
 export async function getThesisPresenceForPositions(positions: { positionId: string; holding: { assetClass: "BOND" | "EQUITY" | "TREASURY_BILL" } & Record<string, unknown>; instrument: { kind: string; tenorDays?: number } }[]): Promise<Map<string, ThesisPresence>> {
   const prisma = getPrisma();
-  const theses = await prisma.thesis.findMany({ where: { status: { not: "DRAFT" } }, orderBy: { updatedAt: "desc" }, select: { id: true, title: true, status: true, confidence: true, horizon: true, belief: true, securityId: true, fixedIncomeSecurityId: true, treasuryInstrument: { select: { tenorDays: true } } } });
+  const theses = await prisma.thesis.findMany({ where: { status: { not: "DRAFT" } }, orderBy: { updatedAt: "desc" }, select: { id: true, title: true, status: true, confidence: true, horizon: true, belief: true, createdAt: true, securityId: true, fixedIncomeSecurityId: true, treasuryInstrument: { select: { tenorDays: true } }, ...LIGHT } });
   const out = new Map<string, ThesisPresence>();
   for (const p of positions) {
     const mine = theses.filter((t) => (p.holding.assetClass === "EQUITY" ? t.securityId === p.holding.securityId : p.holding.assetClass === "BOND" ? t.fixedIncomeSecurityId === p.holding.fixedIncomeSecurityId : t.treasuryInstrument?.tenorDays === p.instrument.tenorDays));
     const liveOnes = mine.filter((t) => t.status === "ACTIVE" || t.status === "CHALLENGED");
     const lead = liveOnes[0] ?? null;
-    out.set(p.positionId, { live: liveOnes.length, total: mine.length, lead: lead ? { id: lead.id, title: lead.title, status: lead.status, confidence: lead.confidence, horizon: lead.horizon, belief: lead.belief } : null });
+    out.set(p.positionId, { live: liveOnes.length, total: mine.length, lead: lead ? { id: lead.id, title: lead.title, status: lead.status, confidence: lead.confidence, horizon: lead.horizon, belief: lead.belief, research: researchSummaryOf(lead) } : null, reviewSuggested: liveOnes.some((t) => researchSummaryOf(t).reviewSuggested) });
   }
   return out;
 }
@@ -202,7 +353,7 @@ export async function subjectRefForPosition(row: { holding: { assetClass: "BOND"
 export const presenceOf = (list: ThesisSummary[]): ThesisPresence => {
   const live = list.filter((t) => t.status === "ACTIVE" || t.status === "CHALLENGED");
   const lead = live[0] ?? null;
-  return { live: live.length, total: list.filter((t) => t.status !== "DRAFT").length, lead: lead ? { id: lead.id, title: lead.title, status: lead.status, confidence: lead.confidence, horizon: lead.horizon, belief: lead.belief } : null };
+  return { live: live.length, total: list.filter((t) => t.status !== "DRAFT").length, lead: lead ? { id: lead.id, title: lead.title, status: lead.status, confidence: lead.confidence, horizon: lead.horizon, belief: lead.belief, research: lead.research } : null, reviewSuggested: live.some((t) => t.research.reviewSuggested) };
 };
 
 /** Thesis presence for a security page, found by ticker (equity) or instrument code (bond). Null when the subject is not found. */

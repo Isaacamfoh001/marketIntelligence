@@ -16,6 +16,8 @@ export interface ContextFact {
   sub?: string;
   /** Set when the underlying evidence is older than Korbly's recency rule — informational, never a status change. */
   stale?: boolean;
+  /** Set when this fact is an observation an analyst can promote to evidence ("Add to evidence"). The dataset is the thesis subject's own. */
+  evidenceRef?: { kind: "EQUITY_PRICE" | "BOND_OBSERVATION" | "TREASURY_RATE"; date: string };
 }
 
 export interface HeldRow {
@@ -48,7 +50,7 @@ export function equityContext(e: EquityInstrument): ContextFact[] {
   const i = e.input;
   return [
     ...facts,
-    { label: "Latest actual trade", value: `GHS ${i.priceGhs.toFixed(2)}`, sub: `GSE closing price (VWAP) on ${date(i.priceDate)} · ${ageText(i.ageDays)}`, stale: i.recency === "STALE" },
+    { label: "Latest actual trade", value: `GHS ${i.priceGhs.toFixed(2)}`, sub: `GSE closing price (VWAP) on ${date(i.priceDate)} · ${ageText(i.ageDays)}`, stale: i.recency === "STALE", evidenceRef: { kind: "EQUITY_PRICE", date: date(i.priceDate) } },
     { label: "Shares traded that day", value: i.volume.toLocaleString("en-GB") },
   ];
 }
@@ -61,7 +63,7 @@ export function bondContext(b: BondInstrument, valuationDate: Date): ContextFact
   ];
   if (!b.input.available) return [...facts, { label: "Latest reliable yield", value: "Not available", sub: b.input.reason, stale: true }];
   const i = b.input;
-  facts.push({ label: "Latest reliable yield", value: `${i.observedYtmPct.toFixed(2)}%`, sub: `${i.yieldFromSourceQuote ? "source-quoted" : "from the traded price"} · observed ${date(i.observationDate)} · ${ageText(i.ageDays)}`, stale: i.recency === "STALE" });
+  facts.push({ label: "Latest reliable yield", value: `${i.observedYtmPct.toFixed(2)}%`, sub: `${i.yieldFromSourceQuote ? "source-quoted" : "from the traded price"} · observed ${date(i.observationDate)} · ${ageText(i.ageDays)}`, stale: i.recency === "STALE", evidenceRef: { kind: "BOND_OBSERVATION", date: date(i.observationDate) } });
   const d = computeDuration(b.terms, valuationDate, i.observedYtmPct);
   if (d.ok) facts.push({ label: "Rate sensitivity", value: `${d.modifiedDurationYears.toFixed(2)} years modified duration`, sub: "Approximate value change per 1 percentage-point move in yield, at the observed yield" });
   return facts;
@@ -72,7 +74,7 @@ export function billContext(tenorDays: number, curve: { observationDate: string;
   const facts: ContextFact[] = [{ label: "Tenor", value: `${tenorDays}-day Treasury bill` }];
   if (!curve || !node) return [...facts, { label: "Latest auction rate", value: "Not available", sub: "No complete Bank of Ghana auction curve at the valuation date.", stale: true }];
   const age = Math.max(0, Math.round((valuationDate.getTime() - new Date(`${curve.observationDate}T00:00:00.000Z`).getTime()) / 86_400_000));
-  facts.push({ label: "Latest auction rate", value: `${node.interestRatePct.toFixed(2)}%`, sub: `Bank of Ghana auction · ${date(curve.observationDate)} · ${ageText(age)}` });
+  facts.push({ label: "Latest auction rate", value: `${node.interestRatePct.toFixed(2)}%`, sub: `Bank of Ghana auction · ${date(curve.observationDate)} · ${ageText(age)}`, evidenceRef: { kind: "TREASURY_RATE", date: date(curve.observationDate) } });
   const held = bills.filter((b) => b.tenorDays === tenorDays).length;
   if (held > 0) facts.push({ label: "Dated bills recorded", value: String(held), sub: "Bills of this tenor already recorded in Korbly" });
   return facts;

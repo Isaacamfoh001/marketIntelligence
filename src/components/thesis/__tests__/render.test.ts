@@ -12,9 +12,10 @@ import { StatusControls } from "../StatusControls";
 import { SubjectPicker } from "../SubjectPicker";
 import { ThesisForm } from "../ThesisForm";
 
+const EMPTY_RESEARCH = { counts: { supports: 0, challenges: 0, context: 0, total: 0, high: 0 }, newSinceReview: 0, lastReviewedAt: null, reviewSuggested: false, reasons: [], nextCatalyst: null };
 const html = (el: Parameters<typeof renderToStaticMarkup>[0]) => renderToStaticMarkup(el).replace(/<!-- -->/g, "");
 const subject = { kind: "GOVERNMENT_BOND" as const, ref: { type: "FIXED_INCOME" as const, id: "b1" }, label: "GoG 22.00% Jul-34", sublabel: "GOG34", code: "GOG34", href: "/fixed-income/GOG34" };
-const summary = (over: Partial<ThesisSummary> = {}): ThesisSummary => ({ id: "t1", title: "Disinflation supports duration", belief: "Long-duration government bonds could benefit if yields decline.", status: "ACTIVE", confidence: "MEDIUM", horizon: "MEDIUM", subject, subjectKind: "GOVERNMENT_BOND", subjectLabel: subject.label, subjectCode: "GOG34", createdAt: "2026-10-01T00:00:00.000Z", updatedAt: new Date().toISOString(), statusChangedAt: "2026-10-01T00:00:00.000Z", ...over });
+const summary = (over: Partial<ThesisSummary> = {}): ThesisSummary => ({ id: "t1", title: "Disinflation supports duration", belief: "Long-duration government bonds could benefit if yields decline.", status: "ACTIVE", confidence: "MEDIUM", horizon: "MEDIUM", subject, subjectKind: "GOVERNMENT_BOND", subjectLabel: subject.label, subjectCode: "GOG34", createdAt: "2026-10-01T00:00:00.000Z", updatedAt: new Date().toISOString(), statusChangedAt: "2026-10-01T00:00:00.000Z", research: EMPTY_RESEARCH, ...over });
 const ctx = (over: Partial<ThesisContextView> = {}): ThesisContextView => ({ valuationDate: "2026-10-05", facts: [{ label: "Latest reliable yield", value: "24.50%", sub: "observed 2026-10-01 · 4 days ago" }], held: [], scenarioLinks: [], links: [{ label: "Security page", href: "/fixed-income/GOG34" }], ...over });
 const heldBase = { portfolioId: "pf1", portfolioName: "Core Ghana", positionId: "p1", href: "/portfolios/pf1?view=holdings&position=p1#inspect", status: "VALUED" as const, inactiveAssumptionSummary: null, unvaluedReason: null };
 
@@ -45,9 +46,9 @@ describe("thesis card (library)", () => {
 });
 
 describe("thesis on a holding", () => {
-  const lead = { id: "t1", title: "Disinflation supports duration", status: "ACTIVE" as const, confidence: "MEDIUM" as const, horizon: "MEDIUM" as const, belief: "Long-duration government bonds could benefit if yields decline." };
+  const lead = { id: "t1", title: "Disinflation supports duration", status: "ACTIVE" as const, confidence: "MEDIUM" as const, horizon: "MEDIUM" as const, belief: "Long-duration government bonds could benefit if yields decline.", research: EMPTY_RESEARCH };
   it("shows a compact panel: title, confidence, horizon, core belief, link", () => {
-    const m = html(createElement(ThesisPanel, { presence: { live: 1, total: 1, lead }, createHref: "/theses/new" }));
+    const m = html(createElement(ThesisPanel, { presence: { live: 1, total: 1, lead, reviewSuggested: false }, createHref: "/theses/new" }));
     expect(m).toContain("Active thesis");
     expect(m).toContain("Medium confidence");
     expect(m).toContain("Core belief");
@@ -55,16 +56,16 @@ describe("thesis on a holding", () => {
     expect(m).not.toContain("Why we believe");
   });
   it("with no thesis invites creation", () => {
-    const m = html(createElement(ThesisPanel, { presence: { live: 0, total: 0, lead: null }, createHref: "/theses/new?subjectType=SECURITY&subjectId=e1" }));
+    const m = html(createElement(ThesisPanel, { presence: { live: 0, total: 0, lead: null, reviewSuggested: false }, createHref: "/theses/new?subjectType=SECURITY&subjectId=e1" }));
     expect(m).toContain("No active thesis");
     expect(m).toContain("Create thesis");
     expect(m).toContain("subjectType=SECURITY");
   });
   it("chip: absent without a thesis, singular or plural otherwise", () => {
     expect(html(createElement(ThesisChip, { presence: undefined }))).toBe("");
-    expect(html(createElement(ThesisChip, { presence: { live: 0, total: 1, lead: null } }))).toBe("");
-    expect(html(createElement(ThesisChip, { presence: { live: 1, total: 1, lead } }))).toContain("Active thesis");
-    const many: ThesisPresence = { live: 2, total: 2, lead };
+    expect(html(createElement(ThesisChip, { presence: { live: 0, total: 1, lead: null, reviewSuggested: false } }))).toBe("");
+    expect(html(createElement(ThesisChip, { presence: { live: 1, total: 1, lead, reviewSuggested: false } }))).toContain("Active thesis");
+    const many: ThesisPresence = { live: 2, total: 2, lead, reviewSuggested: false };
     expect(html(createElement(ThesisChip, { presence: many }))).toContain("2 active theses");
   });
 });
@@ -163,9 +164,10 @@ describe("create / edit form", () => {
     expect(order.every((i) => i >= 0)).toBe(true);
     expect([...order].sort((a, b) => a - b)).toEqual(order);
   });
-  it("makes invalidation falsifiable by prompt, and keeps catalysts and risks distinct", () => {
+  it("makes invalidation falsifiable by prompt, keeps risks distinct, and sends catalysts to the thesis page (M9.2)", () => {
     expect(m).toContain("We should reconsider if…");
-    expect(m).toMatch(/A catalyst could make the view play out\. A risk could weaken it/);
+    expect(m).toMatch(/A risk could weaken the case; it is not the same as something that would prove you wrong/);
+    expect(m).toMatch(/Catalysts .* are tracked on the thesis page once it is saved/);
   });
   it("saves a draft or activates; confidence and horizon are small scales, not numbers", () => {
     expect(m).toContain("Save as draft");
@@ -177,7 +179,7 @@ describe("create / edit form", () => {
     expect(scale).not.toMatch(/\d\s?%/);
   });
   it("every field has a label and nothing is prefilled by Korbly", () => {
-    for (const id of ["title", "belief", "rationale", "mustBeTrue", "invalidation", "catalysts", "risks", "watching"]) expect(m).toMatch(new RegExp(`<label[^>]*for="${id}"`));
+    for (const id of ["title", "belief", "rationale", "mustBeTrue", "invalidation", "risks", "watching"]) expect(m).toMatch(new RegExp(`<label[^>]*for="${id}"`));
     expect(m).toMatch(/<textarea[^>]*id="belief"[^>]*><\/textarea>/);
   });
   it("tells the analyst what is still needed to activate", () => expect(m).toContain("To activate:"));

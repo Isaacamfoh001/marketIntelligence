@@ -26,6 +26,5 @@ export const PROMPTS = {
   mustBeTrue: "One condition per line — what has to hold for the thesis to work?",
   invalidation: "One per line, completing: “We should reconsider if…”",
   risks: "One per line — what could weaken the case?",
-  catalysts: "One per line — what could make the view play out or become visible?",
   watching: "One per line — indicators, releases or events to keep an eye on.",
 } as const;

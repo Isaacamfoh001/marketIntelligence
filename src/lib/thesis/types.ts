@@ -22,7 +22,7 @@ export type ThesisSubjectKind = (typeof THESIS_SUBJECT_KINDS)[number];
 /** The row-level reference: exactly one id is set. Bonds share one column; government vs corporate comes from the instrument. */
 export type ThesisSubjectRef = { type: "SECURITY"; id: string } | { type: "FIXED_INCOME"; id: string } | { type: "TREASURY_INSTRUMENT"; id: string };
 
-export const LIST_FIELDS = ["mustBeTrue", "risks", "invalidation", "catalysts", "watching"] as const;
+export const LIST_FIELDS = ["mustBeTrue", "risks", "invalidation", "watching"] as const;
 export type ThesisListField = (typeof LIST_FIELDS)[number];
 
 /** What the analyst writes. Everything in here is judgment, never data. */
@@ -33,7 +33,6 @@ export interface ThesisContent {
   mustBeTrue: string[];
   risks: string[];
   invalidation: string[];
-  catalysts: string[];
   watching: string[];
   confidence: ThesisConfidence | null;
   horizon: ThesisHorizon | null;

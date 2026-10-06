@@ -28,7 +28,6 @@ function readContent(formData: FormData) {
     mustBeTrue: parseLines(text(formData, "mustBeTrue")),
     risks: parseLines(text(formData, "risks")),
     invalidation: parseLines(text(formData, "invalidation")),
-    catalysts: parseLines(text(formData, "catalysts")),
     watching: parseLines(text(formData, "watching")),
     confidence: text(formData, "confidence"),
     horizon: text(formData, "horizon"),

@@ -55,13 +55,12 @@ export function ThesisForm({ mode, action, options, initial, initialSubjectKey, 
   const [mustBeTrue, setMustBeTrue] = useState(linesOf(initial?.mustBeTrue ?? []));
   const [invalidation, setInvalidation] = useState(linesOf(initial?.invalidation ?? []));
   const [risks, setRisks] = useState(linesOf(initial?.risks ?? []));
-  const [catalysts, setCatalysts] = useState(linesOf(initial?.catalysts ?? []));
   const [watching, setWatching] = useState(linesOf(initial?.watching ?? []));
   const [confidence, setConfidence] = useState<ThesisConfidence | null>(initial?.confidence ?? null);
   const [horizon, setHorizon] = useState<ThesisHorizon | null>(initial?.horizon ?? null);
   const e: ThesisErrors = state.fieldErrors ?? {};
 
-  const gaps = activationGaps(normalizeContent({ title, belief, rationale, mustBeTrue: parseLines(mustBeTrue), invalidation: parseLines(invalidation), risks: parseLines(risks), catalysts: parseLines(catalysts), watching: parseLines(watching), confidence, horizon }));
+  const gaps = activationGaps(normalizeContent({ title, belief, rationale, mustBeTrue: parseLines(mustBeTrue), invalidation: parseLines(invalidation), risks: parseLines(risks), watching: parseLines(watching), confidence, horizon }));
   const live = mode === "edit" && initial !== undefined;
   const count = (n: number) => `${n} of ${LIMITS.items}`;
 
@@ -95,7 +94,7 @@ export function ThesisForm({ mode, action, options, initial, initialSubjectKey, 
       <Step n={mode === "new" ? 4 : 3} id="must" title="What must be true" hint={PROMPTS.mustBeTrue} error={e.mustBeTrue}>
         <label htmlFor="mustBeTrue" className="sr-only">What must be true</label>
         <textarea id="mustBeTrue" name="mustBeTrue" value={mustBeTrue} onChange={(ev) => setMustBeTrue(ev.target.value)} rows={4} aria-invalid={!!e.mustBeTrue} className={INPUT} />
-        <p className="mt-1 text-[11px] text-zinc-500 dark:text-zinc-400">{count(parseLines(mustBeTrue).length)} items</p>
+        <p className="mt-1 text-[11px] text-zinc-500 dark:text-zinc-400">{count(parseLines(mustBeTrue).length)} items{live ? " · Evidence and flags follow a condition while its wording is unchanged; a reworded condition that has them is kept as retired." : ""}</p>
       </Step>
 
       <div className="rounded-xl border border-red-200 bg-red-50/50 p-4 dark:border-red-500/30 dark:bg-red-500/5 sm:p-5">
@@ -108,12 +107,7 @@ export function ThesisForm({ mode, action, options, initial, initialSubjectKey, 
       </div>
 
       <Step n={mode === "new" ? 6 : 5} id="watch" title="What we’re watching" hint="Optional, but this is what you will come back to.">
-        <div className="grid gap-4 md:grid-cols-3">
-          <div>
-            <label htmlFor="catalysts" className="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-300">Catalysts</label>
-            <textarea id="catalysts" name="catalysts" value={catalysts} onChange={(ev) => setCatalysts(ev.target.value)} rows={4} placeholder={PROMPTS.catalysts} aria-invalid={!!e.catalysts} className={INPUT} />
-            {e.catalysts && <p role="alert" className="mt-1 text-xs font-medium text-red-700 dark:text-red-400">{e.catalysts}</p>}
-          </div>
+        <div className="grid gap-4 md:grid-cols-2">
           <div>
             <label htmlFor="risks" className="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-300">What could go wrong</label>
             <textarea id="risks" name="risks" value={risks} onChange={(ev) => setRisks(ev.target.value)} rows={4} placeholder={PROMPTS.risks} aria-invalid={!!e.risks} className={INPUT} />
@@ -125,7 +119,7 @@ export function ThesisForm({ mode, action, options, initial, initialSubjectKey, 
             {e.watching && <p role="alert" className="mt-1 text-xs font-medium text-red-700 dark:text-red-400">{e.watching}</p>}
           </div>
         </div>
-        <p className="mt-2 text-[11px] text-zinc-500 dark:text-zinc-400">A catalyst could make the view play out. A risk could weaken it. Neither is the same as something that would prove you wrong.</p>
+        <p className="mt-2 text-[11px] text-zinc-500 dark:text-zinc-400">A risk could weaken the case; it is not the same as something that would prove you wrong. Catalysts — what you are waiting for, and when — are tracked on the thesis page once it is saved.</p>
       </Step>
 
       <Step n={mode === "new" ? 7 : 6} id="conf" title="Confidence and horizon" hint="Your own judgment — not a probability, and not a measure of data quality.">

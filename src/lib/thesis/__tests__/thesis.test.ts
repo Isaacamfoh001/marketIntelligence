@@ -62,7 +62,7 @@ describe("validation", () => {
     expect(Object.keys(e).sort()).toEqual(["confidence", "horizon", "invalidation", "mustBeTrue", "rationale"]);
     expect(hasErrors(validateActivation(complete()))).toBe(false);
   });
-  it("risks, catalysts and watch items stay optional", () => expect(hasErrors(validateActivation(complete({ risks: [], catalysts: [], watching: [] })))).toBe(false));
+  it("risks and watch items stay optional", () => expect(hasErrors(validateActivation(complete({ risks: [], watching: [] })))).toBe(false));
   it("a thesis with no way to be wrong cannot be activated", () => expect(validateActivation(complete({ invalidation: [] })).invalidation).toMatch(/proves? ?wrong|reconsider|thesis/i));
   it("enforces length and count limits", () => {
     expect(validateDraft(complete({ title: "x".repeat(LIMITS.title + 1) })).title).toBeTruthy();

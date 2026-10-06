@@ -1272,16 +1272,13 @@ model Thesis {
   confidence      ThesisConfidence?
   horizon         ThesisHorizon?
 
-  /// WHAT MUST BE TRUE — conditions the thesis depends on.
-  mustBeTrue   String[]
   /// WHAT COULD GO WRONG — risks that weaken the case (they do not, by themselves, refute it).
   risks        String[]
-  /// WHAT COULD PROVE US WRONG — "we should reconsider if…" (required to activate).
-  invalidation String[]
-  /// CATALYSTS — developments that could make the thesis play out or become visible.
-  catalysts    String[]
-  /// WHAT WE'RE WATCHING — indicators and events to keep an eye on.
+  /// WHAT WE'RE WATCHING — indicators and events to keep an eye on. Deliberately lightweight
+  /// text: general watch items are not structured (M9.2). Trackable developments are catalysts.
   watching     String[]
+  // "What must be true" and "what could prove us wrong" are ThesisCondition rows and catalysts
+  // are ThesisCatalyst rows (M9.2): they need stable identities so evidence can point at them.
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1290,9 +1287,203 @@ model Thesis {
   fixedIncomeSecurity FixedIncomeSecurity? @relation(fields: [fixedIncomeSecurityId], references: [id], onDelete: Restrict)
   treasuryInstrument  TreasuryInstrument?  @relation(fields: [treasuryInstrumentId], references: [id], onDelete: Restrict)
 
+  conditions ThesisCondition[]
+  catalysts  ThesisCatalyst[]
+  evidence   ThesisEvidence[]
+  reviews    ThesisReview[]
+
   @@index([status])
   @@index([securityId])
   @@index([fixedIncomeSecurityId])
   @@index([treasuryInstrumentId])
   @@index([updatedAt])
+}
+
+// ---------------------------------------------------------------------------
+// Evidence & catalysts (M9.2) — "what is the world telling us about our thesis?"
+//
+// Evidence informs analyst judgment; it never replaces it. Nothing here scores a thesis,
+// changes its status or confidence, or says it is right or wrong. The review signal is
+// computed at read time from these rows (src/lib/thesis/review.ts) and never stored.
+//
+// CONDITIONS: the M9.1 text[] lists "must be true" and "could prove us wrong" as rows with a
+// stable id so evidence can point at one. An edit that rewords a condition which has evidence
+// or a flag RETIRES it (retiredAt) rather than deleting it, so history stays traceable.
+// The invalidation FLAG is the analyst's record ("I have seen this / this may be happening");
+// it never changes the thesis status. Only the current flag and its date are kept.
+//
+// EVIDENCE: either Korbly-linked (refKind/refId + an immutable `snapshot` of what was observed,
+// because source rows are upserted on republication) or manual (analyst-written, with a
+// source name/URL the analyst supplied — Korbly never fetches or verifies it). Evidence is
+// archived, never hard-deleted. `createdAt` is when it was added to the thesis; `observedAt`
+// is when the observation was made or published.
+//
+// CATALYSTS: developments the thesis is waiting for. Not tasks. Expected timing is a window
+// (exact date / month / quarter / none) so nobody has to invent precision.
+//
+// REVIEWS: "an analyst looked at the thesis and its evidence as of this moment". Not an edit
+// (does not touch Thesis.updatedAt) and not agreement. History is kept.
+// ---------------------------------------------------------------------------
+
+enum ThesisConditionKind {
+  MUST_BE_TRUE
+  INVALIDATION
+}
+
+enum InvalidationFlag {
+  NOT_OBSERVED
+  POTENTIALLY_TRIGGERED
+  TRIGGERED
+}
+
+model ThesisCondition {
+  id        String              @id @default(cuid())
+  thesisId  String
+  kind      ThesisConditionKind
+  text      String
+  position  Int                 @default(0)
+
+  /// Only meaningful for INVALIDATION (CHECK "ThesisCondition_flag_check"). Analyst-recorded.
+  flag          InvalidationFlag @default(NOT_OBSERVED)
+  flagNote      String?
+  flagChangedAt DateTime?
+  /// Set when the analyst rewords/removes a condition that has evidence or a flag.
+  retiredAt     DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  thesis   Thesis           @relation(fields: [thesisId], references: [id], onDelete: Cascade)
+  evidence ThesisEvidence[]
+
+  @@index([thesisId, kind])
+}
+
+enum CatalystStatus {
+  WATCHING
+  OCCURRED
+  MISSED
+  NO_LONGER_RELEVANT
+}
+
+enum CatalystWindowKind {
+  NONE
+  DATE
+  MONTH
+  QUARTER
+}
+
+model ThesisCatalyst {
+  id          String @id @default(cuid())
+  thesisId    String
+  description String
+  position    Int    @default(0)
+
+  /// NONE = "watching, no known date". Otherwise windowStart..windowEnd is an inclusive UTC date range
+  /// (DATE: both equal; MONTH: first–last day; QUARTER: first–last day of the quarter).
+  windowKind  CatalystWindowKind @default(NONE)
+  windowStart DateTime?          @db.Date
+  windowEnd   DateTime?          @db.Date
+
+  status          CatalystStatus @default(WATCHING)
+  /// When it actually happened (analyst-entered). Only for OCCURRED.
+  occurredOn      DateTime?      @db.Date
+  /// Analyst interpretation of the outcome. Never generated.
+  outcomeNote     String?
+  statusChangedAt DateTime       @default(now())
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  thesis   Thesis           @relation(fields: [thesisId], references: [id], onDelete: Cascade)
+  evidence ThesisEvidence[]
+
+  @@index([thesisId])
+}
+
+enum EvidenceStance {
+  SUPPORTS
+  CHALLENGES
+  CONTEXT
+}
+
+enum EvidenceRelevance {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum EvidenceSourceType {
+  KORBLY_DATA
+  OFFICIAL_SOURCE
+  COMPANY_DISCLOSURE
+  EXTERNAL_SOURCE
+  ANALYST_OBSERVATION
+}
+
+enum EvidenceRefKind {
+  MACRO_OBSERVATION
+  POLICY_DECISION
+  TREASURY_RATE
+  FX_RATE
+  EQUITY_PRICE
+  BOND_OBSERVATION
+}
+
+model ThesisEvidence {
+  id       String @id @default(cuid())
+  thesisId String
+  /// Optional single target: one condition OR one catalyst OR neither (the thesis as a whole).
+  conditionId String?
+  catalystId  String?
+
+  stance     EvidenceStance
+  relevance  EvidenceRelevance
+  sourceType EvidenceSourceType
+
+  /// Concise observation. For Korbly-linked evidence this is generated from the snapshot and not editable.
+  title      String
+  /// Longer description of what was observed (manual evidence only).
+  detail     String?
+  /// The analyst's interpretation — why it matters to the thesis. Always analyst-authored.
+  note       String?
+
+  /// When the observation was made / published (the data's own date for Korbly-linked evidence).
+  observedAt DateTime? @db.Date
+  /// Manual sources only — as supplied by the analyst; Korbly does not fetch or verify them.
+  sourceName String?
+  sourceUrl  String?
+
+  /// Korbly-linked only: a soft pointer to the observation row (no FK — source rows are upserted)
+  /// and an immutable snapshot of what it said when it was linked.
+  refKind    EvidenceRefKind?
+  refId      String?
+  snapshot   Json?
+
+  archivedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  thesis    Thesis           @relation(fields: [thesisId], references: [id], onDelete: Cascade)
+  condition ThesisCondition? @relation(fields: [conditionId], references: [id], onDelete: NoAction)
+  catalyst  ThesisCatalyst?  @relation(fields: [catalystId], references: [id], onDelete: NoAction)
+
+  @@index([thesisId, createdAt])
+  @@index([conditionId])
+  @@index([catalystId])
+  @@index([refKind, refId])
+}
+
+model ThesisReview {
+  id               String            @id @default(cuid())
+  thesisId         String
+  reviewedAt       DateTime          @default(now())
+  note             String?
+  /// What the thesis said at the time — M9.5 will ask "what did we believe when we reviewed it?".
+  statusAtReview     ThesisStatus
+  confidenceAtReview ThesisConfidence?
+
+  thesis Thesis @relation(fields: [thesisId], references: [id], onDelete: Cascade)
+
+  @@index([thesisId, reviewedAt])
 }

@@ -12,10 +12,11 @@ export function ThesisChip({ presence }: { presence?: ThesisPresence }) {
   if (!presence || presence.live === 0) return null;
   const challenged = presence.lead?.status === "CHALLENGED";
   const text = presence.live === 1 ? `${challenged ? STATUS_LABEL.CHALLENGED : STATUS_LABEL.ACTIVE} thesis` : `${presence.live} active theses`;
+  const review = presence.reviewSuggested ? " · Review suggested" : "";
   return (
     <Link href={presence.live === 1 && presence.lead ? `/theses/${presence.lead.id}` : "/theses?status=LIVE"} className={`mt-1 inline-flex items-center gap-1 rounded-full border border-zinc-300 px-2 py-0.5 text-[11px] font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800 ${FOCUS}`}>
       <span aria-hidden>{challenged ? "◐" : "●"}</span>
-      {text}
+      {text}{review}
     </Link>
   );
 }
@@ -34,6 +35,12 @@ export function ThesisPanel({ presence, createHref }: { presence: ThesisPresence
           <p className="mt-0.5 flex flex-wrap items-center gap-x-4 gap-y-1"><ConfidenceMark confidence={lead.confidence} /><HorizonText horizon={lead.horizon} /></p>
           <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">Core belief</p>
           <p className="line-clamp-3 text-sm leading-relaxed text-zinc-700 dark:text-zinc-200">{lead.belief}</p>
+          {(lead.research.counts.total > 0 || lead.research.reviewSuggested) && (
+            <p className="mt-2 text-xs text-zinc-700 dark:text-zinc-200">
+              {lead.research.counts.total > 0 && <span>{lead.research.counts.supports} supporting · {lead.research.counts.challenges} challenging</span>}
+              {presence.reviewSuggested && <span className="ml-2 rounded border border-amber-400 bg-amber-50 px-1.5 py-px font-semibold uppercase tracking-wide text-amber-950 dark:border-amber-500/50 dark:bg-amber-500/10 dark:text-amber-100">Review suggested</span>}
+            </p>
+          )}
           <p className="mt-2 flex flex-wrap gap-x-4 text-xs">
             <Link href={`/theses/${lead.id}`} className={`rounded font-medium text-blue-700 hover:underline dark:text-blue-400 ${FOCUS}`}>View thesis</Link>
             {presence.live > 1 && <Link href="/theses?status=LIVE" className={`rounded text-blue-700 hover:underline dark:text-blue-400 ${FOCUS}`}>+{presence.live - 1} more live {presence.live - 1 === 1 ? "thesis" : "theses"}</Link>}

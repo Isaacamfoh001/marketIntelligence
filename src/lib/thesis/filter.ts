@@ -10,6 +10,8 @@ export interface ThesisFilterable {
   subjectLabel: string;
   subjectCode: string;
   updatedAt: string;
+  /** Optional so callers without research data keep working. */
+  research?: { reviewSuggested: boolean };
 }
 
 export interface ThesisFilters {
@@ -19,6 +21,8 @@ export interface ThesisFilters {
   confidence?: ThesisConfidence | null;
   /** A specific subject (e.g. the instrument code) — exact match on `subjectCode`. */
   subjectCode?: string | null;
+  /** Only theses with a review suggestion. */
+  needsReview?: boolean;
 }
 
 export function filterTheses<T extends ThesisFilterable>(all: readonly T[], f: ThesisFilters): T[] {
@@ -28,6 +32,7 @@ export function filterTheses<T extends ThesisFilterable>(all: readonly T[], f: T
     if (f.subjectKind && t.subjectKind !== f.subjectKind) return false;
     if (f.confidence && t.confidence !== f.confidence) return false;
     if (f.subjectCode && t.subjectCode !== f.subjectCode) return false;
+    if (f.needsReview && !t.research?.reviewSuggested) return false;
     if (q && !`${t.title} ${t.subjectLabel} ${t.subjectCode}`.toLowerCase().includes(q)) return false;
     return true;
   });

@@ -6,7 +6,7 @@ import { BTN, BTN_PRIMARY, FIELD_FOCUS } from "@/components/thesis/ui";
 
 export const dynamic = "force-dynamic";
 
-type Query = { q?: string; status?: string; kind?: string; confidence?: string };
+type Query = { q?: string; status?: string; kind?: string; confidence?: string; review?: string };
 
 const SELECT = `rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-sm text-zinc-900 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100 ${FIELD_FOCUS}`;
 
@@ -18,17 +18,20 @@ export default async function ThesesPage({ searchParams }: { searchParams: Promi
   const kind = isSubjectKind(query.kind) ? query.kind : null;
   const confidence = isConfidence(query.confidence) ? query.confidence : null;
   const q = (query.q ?? "").slice(0, 80);
-  const shown = filterTheses(all, { q, status, subjectKind: kind, confidence });
-  const filtered = Boolean(q || status || kind || confidence);
+  const needsReview = query.review === "needed";
+  const shown = filterTheses(all, { q, status, subjectKind: kind, confidence, needsReview });
+  const filtered = Boolean(q || status || kind || confidence || needsReview);
+  const reviewCount = all.filter((t) => t.research.reviewSuggested && (t.status === "ACTIVE" || t.status === "CHALLENGED")).length;
 
   const count = (s: ThesisStatus) => all.filter((t) => t.status === s).length;
   const live = all.filter((t) => t.status === "ACTIVE" || t.status === "CHALLENGED").length;
-  const chipHref = (s: string | null) => {
+  const chipHref = (s: string | null, review: boolean = needsReview) => {
     const p = new URLSearchParams();
     if (q) p.set("q", q);
     if (s) p.set("status", s);
     if (kind) p.set("kind", kind);
     if (confidence) p.set("confidence", confidence);
+    if (review) p.set("review", "needed");
     const qs = p.toString();
     return qs ? `/theses?${qs}` : "/theses";
   };
@@ -52,8 +55,11 @@ export default async function ThesesPage({ searchParams }: { searchParams: Promi
       ) : (
         <>
           <nav aria-label="Filter by status" className="flex flex-wrap gap-1.5">
+            <Link href={chipHref(status, !needsReview)} aria-current={needsReview ? "true" : undefined} className={`rounded-full border px-3 py-1 text-xs font-medium ${needsReview ? "border-amber-600 bg-amber-100 text-amber-950 dark:border-amber-400 dark:bg-amber-500/20 dark:text-amber-100" : "border-amber-400 text-amber-900 hover:bg-amber-50 dark:border-amber-500/50 dark:text-amber-200 dark:hover:bg-amber-500/10"} ${FIELD_FOCUS}`}>
+              Needs review <span className="tabular-nums opacity-70">{reviewCount}</span>
+            </Link>
             {chips.map((c) => {
-              const on = (status ?? null) === c.id;
+              const on = !needsReview && (status ?? null) === c.id;
               return (
                 <Link key={c.label} href={chipHref(c.id)} aria-current={on ? "true" : undefined} className={`rounded-full border px-3 py-1 text-xs font-medium ${on ? "border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900" : "border-zinc-300 text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"} ${FIELD_FOCUS}`}>
                   {c.label} <span className="tabular-nums opacity-70">{c.n}</span>
@@ -64,6 +70,7 @@ export default async function ThesesPage({ searchParams }: { searchParams: Promi
 
           <form method="get" action="/theses" className="flex flex-wrap items-end gap-3" role="search" aria-label="Search and filter theses">
             {status && <input type="hidden" name="status" value={status} />}
+            {needsReview && <input type="hidden" name="review" value="needed" />}
             <div className="min-w-56 flex-1">
               <label htmlFor="q" className="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-300">Search title or subject</label>
               <input id="q" name="q" type="search" defaultValue={q} placeholder="e.g. MTN, duration" className={`w-full ${SELECT}`} />

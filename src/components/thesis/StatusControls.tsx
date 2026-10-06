@@ -9,7 +9,7 @@ export function StatusControls({ id, status }: { id: string; status: ThesisStatu
   return (
     <details className="group relative">
       <summary className={`${BTN} cursor-pointer list-none`}>Change status ▾</summary>
-      <form action={changeThesisStatusAction.bind(null, id)} className="absolute right-0 z-20 mt-2 w-[min(22rem,calc(100vw-2rem))] space-y-3 rounded-xl border border-zinc-200 bg-white p-4 shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
+      <form action={changeThesisStatusAction.bind(null, id)} className="fixed inset-x-4 bottom-4 z-30 max-h-[80vh] overflow-y-auto sm:absolute sm:inset-x-auto sm:bottom-auto sm:right-0 sm:z-20 sm:mt-2 sm:max-h-none sm:w-[22rem] sm:overflow-visible space-y-3 rounded-xl border border-zinc-200 bg-white p-4 shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
         <fieldset className="space-y-1.5">
           <legend className="mb-1 text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Move this thesis to…</legend>
           {options.map((o, i) => (

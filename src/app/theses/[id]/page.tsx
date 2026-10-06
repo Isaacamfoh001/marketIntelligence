@@ -1,14 +1,19 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getThesis, getThesisContext } from "@/lib/queries/thesis";
+import { getThesis, getThesisContext, getThesisResearch } from "@/lib/queries/thesis";
 import { activationGaps, AUTHORSHIP_NOTE, CHALLENGED_MEANING, CONFIDENCE_NOTE, HORIZON_LABEL, INVALIDATED_VS_CLOSED, isEditable, normalizeContent, STATUS_LABEL, STATUS_MEANING } from "@/lib/thesis";
 import { ConfidenceMark, HorizonText, KindChip, StatusBadge, BTN, relativeDay } from "@/components/thesis/ui";
 import { StatusControls } from "@/components/thesis/StatusControls";
 import { ContextPanel } from "@/components/thesis/ContextPanel";
+import { ReviewPanel } from "@/components/thesis/ReviewPanel";
+import { EvidenceSection } from "@/components/thesis/EvidenceSection";
+import { CatalystSection } from "@/components/thesis/CatalystSection";
+import { InvalidationList, MustBeTrueList } from "@/components/thesis/ConditionLists";
+import { Timeline } from "@/components/thesis/Timeline";
 
 export const dynamic = "force-dynamic";
 
-const SAVED: Record<string, string> = { draft: "Draft saved.", activated: "Thesis activated.", edited: "Changes saved.", active: "Thesis is active.", challenged: "Marked as challenged.", invalidated: "Marked as invalidated.", closed: "Thesis closed." };
+const SAVED: Record<string, string> = { draft: "Draft saved.", activated: "Thesis activated.", edited: "Changes saved.", evidence: "Evidence added.", "evidence-edited": "Evidence updated.", "evidence-removed": "Evidence removed from the thesis (archived).", catalyst: "Catalyst added.", "catalyst-edited": "Catalyst updated.", "catalyst-status": "Catalyst status recorded.", "catalyst-removed": "Catalyst deleted.", flag: "Invalidation condition updated. The thesis status is unchanged.", reviewed: "Review recorded.", active: "Thesis is active.", challenged: "Marked as challenged.", invalidated: "Marked as invalidated.", closed: "Thesis closed." };
 
 function Block({ id, title, kicker, children, tone = "plain" }: { id: string; title: string; kicker?: string; children: React.ReactNode; tone?: "plain" | "danger" }) {
   const cls = tone === "danger" ? "border-red-300 border-l-4 border-l-red-600 bg-red-50/60 dark:border-red-500/30 dark:border-l-red-400 dark:bg-red-500/5" : "border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900";
@@ -40,7 +45,11 @@ export default async function ThesisPage({ params, searchParams }: { params: Pro
   const q = await searchParams;
   const t = await getThesis(id);
   if (!t) notFound();
-  const context = await getThesisContext(t.subject);
+  const [context, research] = await Promise.all([getThesisContext(t.subject), getThesisResearch(id)]);
+  if (!research) notFound();
+  const editable = isEditable(t.status);
+  const must = research.conditions.filter((c) => c.kind === "MUST_BE_TRUE" && !c.retired);
+  const wrong = research.conditions.filter((c) => c.kind === "INVALIDATION" && !c.retired);
   const gaps = t.status === "DRAFT" ? activationGaps(normalizeContent(t)) : [];
   const saved = q.saved ? SAVED[q.saved] : null;
 
@@ -72,6 +81,7 @@ export default async function ThesisPage({ params, searchParams }: { params: Pro
             <span title={CONFIDENCE_NOTE}><ConfidenceMark confidence={t.confidence} /></span>
             <HorizonText horizon={t.horizon} />
             <span className="text-xs text-zinc-500 dark:text-zinc-400">Updated {relativeDay(t.updatedAt)}</span>
+            {(t.status === "ACTIVE" || t.status === "CHALLENGED") && <span className="text-xs text-zinc-500 dark:text-zinc-400">{research.state.lastReviewedAt ? `Reviewed ${relativeDay(research.state.lastReviewedAt)}` : "Not yet reviewed"}</span>}
           </div>
           <div className="flex items-center gap-2">
             {isEditable(t.status) && <Link href={`/theses/${t.id}/edit`} className={BTN}>Edit</Link>}
@@ -94,27 +104,32 @@ export default async function ThesisPage({ params, searchParams }: { params: Pro
         </p>
       )}
 
+      <ReviewPanel thesisId={t.id} status={t.status} research={research} held={context.held} />
+
       <div className="grid gap-6 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
         <div className="min-w-0 space-y-6">
           <Block id="why-h" title="Why we believe it">
             {t.rationale ? <p className="max-w-prose whitespace-pre-line text-sm leading-relaxed text-zinc-800 dark:text-zinc-100">{t.rationale}</p> : <p className="text-sm italic text-zinc-500 dark:text-zinc-400">The reasoning has not been written yet.</p>}
           </Block>
           <Block id="must-h" title="What must be true">
-            <Items items={t.mustBeTrue} empty="No conditions recorded yet." marker="✓" />
+            <MustBeTrueList thesisId={t.id} items={must} editable={editable} />
           </Block>
           <Block id="wrong-h" title="What could prove us wrong" kicker="We should reconsider if…" tone="danger">
-            <Items items={t.invalidation} empty="Nothing recorded yet — a thesis that cannot be wrong is not yet a thesis." marker="↺" />
+            <InvalidationList thesisId={t.id} items={wrong} editable={editable} />
           </Block>
-          <div className="grid gap-6 md:grid-cols-3">
-            <Block id="cat-h" title="Catalysts"><Items items={t.catalysts} empty="None recorded." marker="↗" /></Block>
+          <div className="grid gap-6 md:grid-cols-2">
             <Block id="risk-h" title="What could go wrong"><Items items={t.risks} empty="None recorded." marker="•" /></Block>
             <Block id="watch-h" title="What we’re watching"><Items items={t.watching} empty="None recorded." marker="◎" /></Block>
           </div>
         </div>
         <aside className="min-w-0 lg:sticky lg:top-4 lg:self-start">
-          <ContextPanel context={context} subject={t.subject} />
+          <ContextPanel context={context} subject={t.subject} thesisId={editable ? t.id : undefined} />
         </aside>
       </div>
+
+      <EvidenceSection thesisId={t.id} research={research} editable={editable} />
+      <CatalystSection thesisId={t.id} catalysts={research.catalysts} nextId={research.state.nextCatalystId} editable={editable} />
+      <Timeline entries={research.timeline} />
 
       <details className="rounded-xl border border-zinc-200 px-5 py-3 text-xs text-zinc-600 dark:border-zinc-800 dark:text-zinc-300">
         <summary className="cursor-pointer select-none font-medium">Record details</summary>

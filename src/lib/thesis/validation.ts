@@ -23,7 +23,7 @@ export function normalizeList(raw: readonly string[] | null | undefined): string
 /** "one item per line" textarea → list. Leading bullets/dashes are stripped. */
 export const parseLines = (text: string): string[] => normalizeList(text.split(/\r?\n/).map((l) => l.replace(/^\s*(?:[-•*–]|\d+[.)])\s+/, "")));
 
-export const emptyContent = (): ThesisContent => ({ title: "", belief: "", rationale: "", mustBeTrue: [], risks: [], invalidation: [], catalysts: [], watching: [], confidence: null, horizon: null });
+export const emptyContent = (): ThesisContent => ({ title: "", belief: "", rationale: "", mustBeTrue: [], risks: [], invalidation: [], watching: [], confidence: null, horizon: null });
 
 /** Cleans analyst input into a ThesisContent (no judgement about completeness). */
 export function normalizeContent(input: Partial<Record<keyof ThesisContent, unknown>>): ThesisContent {
@@ -36,14 +36,13 @@ export function normalizeContent(input: Partial<Record<keyof ThesisContent, unkn
     mustBeTrue: list(input.mustBeTrue),
     risks: list(input.risks),
     invalidation: list(input.invalidation),
-    catalysts: list(input.catalysts),
     watching: list(input.watching),
     confidence: isConfidence(input.confidence) ? input.confidence : null,
     horizon: isHorizon(input.horizon) ? input.horizon : null,
   };
 }
 
-const FIELD_NAME: Record<ThesisListField, string> = { mustBeTrue: "What must be true", risks: "What could go wrong", invalidation: "What could prove us wrong", catalysts: "Catalysts", watching: "What we’re watching" };
+const FIELD_NAME: Record<ThesisListField, string> = { mustBeTrue: "What must be true", risks: "What could go wrong", invalidation: "What could prove us wrong", watching: "What we’re watching" };
 
 /** Limits that apply to every save, draft or not. */
 export function validateDraft(c: ThesisContent): ThesisErrors {

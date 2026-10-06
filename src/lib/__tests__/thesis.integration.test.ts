@@ -24,7 +24,7 @@ let corpId: string; // no observation → "No reliable Reference Value", assumab
 let equityId: string;
 let instrumentId: string;
 
-const full = (over: Record<string, unknown> = {}) => ({ title: `${TAG} duration`, belief: "Hypothetical test belief.", rationale: "Hypothetical test reasoning.", mustBeTrue: ["Condition A", "Condition B"], risks: ["Risk R"], invalidation: ["Reconsider if X"], catalysts: ["Catalyst C"], watching: ["Indicator W"], confidence: "MEDIUM", horizon: "LONG", ...over });
+const full = (over: Record<string, unknown> = {}) => ({ title: `${TAG} duration`, belief: "Hypothetical test belief.", rationale: "Hypothetical test reasoning.", mustBeTrue: ["Condition A", "Condition B"], risks: ["Risk R"], invalidation: ["Reconsider if X"], watching: ["Indicator W"], confidence: "MEDIUM", horizon: "LONG", ...over });
 const sec = (id: string) => ({ type: "SECURITY", id }) as const;
 const fi = (id: string) => ({ type: "FIXED_INCOME", id }) as const;
 const ti = (id: string) => ({ type: "TREASURY_INSTRUMENT", id }) as const;
@@ -65,10 +65,10 @@ describe("creating theses", () => {
     if (!r.ok) expect(Object.keys(r.fieldErrors ?? {}).sort()).toEqual(["confidence", "horizon", "invalidation", "mustBeTrue", "rationale"]);
     expect(await db.thesis.count({ where: { title: `${TAG} thin` } })).toBe(0);
   });
-  it("persists every analyst field — confidence, horizon, must-be-true, risks, invalidation, catalysts, watching", async () => {
+  it("persists every analyst field — confidence, horizon, must-be-true, risks, invalidation, watching", async () => {
     const id = await mk(sec(equityId), {}, true);
     const t = (await getThesis(id))!;
-    expect(t).toMatchObject({ status: "ACTIVE", confidence: "MEDIUM", horizon: "LONG", mustBeTrue: ["Condition A", "Condition B"], risks: ["Risk R"], invalidation: ["Reconsider if X"], catalysts: ["Catalyst C"], watching: ["Indicator W"] });
+    expect(t).toMatchObject({ status: "ACTIVE", confidence: "MEDIUM", horizon: "LONG", mustBeTrue: ["Condition A", "Condition B"], risks: ["Risk R"], invalidation: ["Reconsider if X"], watching: ["Indicator W"] });
   });
   it.each([
     ["equity", () => sec(equityId), "EQUITY"],

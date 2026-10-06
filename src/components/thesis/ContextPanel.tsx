@@ -5,7 +5,7 @@ import Link from "next/link";
 import type { ThesisContextView } from "@/lib/queries/thesis";
 import type { ThesisSubject } from "@/lib/queries/thesis";
 import type { HeldRow } from "@/lib/thesis/context";
-import { ASSUMPTION_CONTEXT_NOTE, CONTEXT_HEADING, CONTEXT_NOTE, NOT_HELD_NOTE, SCENARIO_NOTE, STALE_CONTEXT_NOTE } from "@/lib/thesis";
+import { ADD_TO_EVIDENCE, ASSUMPTION_CONTEXT_NOTE, CONTEXT_HEADING, CONTEXT_NOTE, CONTEXT_VS_EVIDENCE, NOT_HELD_NOTE, SCENARIO_NOTE, STALE_CONTEXT_NOTE } from "@/lib/thesis";
 import { formatGhs, formatIsoDate } from "@/lib/fixed-income";
 import { BTN } from "./ui";
 
@@ -39,7 +39,7 @@ function HeldCard({ r }: { r: HeldRow }) {
   );
 }
 
-export function ContextPanel({ context, subject }: { context: ThesisContextView; subject: ThesisSubject }) {
+export function ContextPanel({ context, subject, thesisId }: { context: ThesisContextView; subject: ThesisSubject; /** When set, observations in the context can be promoted to evidence on this thesis. */ thesisId?: string }) {
   const anyStale = context.facts.some((f) => f.stale);
   return (
     <section aria-labelledby="context-h" className="rounded-xl border border-zinc-200 bg-zinc-50/60 p-5 dark:border-zinc-800 dark:bg-zinc-900/60">
@@ -59,10 +59,12 @@ export function ContextPanel({ context, subject }: { context: ThesisContextView;
                 {f.stale && <span className="ml-2 rounded border border-amber-400 px-1.5 py-px text-[10px] font-medium uppercase tracking-wide text-amber-800 dark:text-amber-300">Older evidence</span>}
               </dd>
               {f.sub && <dd className="text-xs font-normal text-zinc-500 dark:text-zinc-400">{f.sub}</dd>}
+              {thesisId && f.evidenceRef && <dd><Link href={`/theses/${thesisId}/evidence/new?kind=${f.evidenceRef.kind}&date=${f.evidenceRef.date}`} aria-label={`${ADD_TO_EVIDENCE}: ${f.label}`} className="text-xs font-medium text-blue-700 hover:underline dark:text-blue-400">{ADD_TO_EVIDENCE} →</Link></dd>}
             </div>
           ))}
         </dl>
       )}
+      {thesisId && context.facts.some((f) => f.evidenceRef) && <p className="mt-2 text-[11px] text-zinc-500 dark:text-zinc-400">{CONTEXT_VS_EVIDENCE}</p>}
       {anyStale && <p className="mt-2 text-[11px] text-zinc-500 dark:text-zinc-400">{STALE_CONTEXT_NOTE}</p>}
 
       <h3 className="mt-6 text-xs font-semibold uppercase tracking-[0.08em] text-zinc-600 dark:text-zinc-300">Held in</h3>
